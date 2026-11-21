@@ -86,6 +86,21 @@ a save state, replacing the card, entering netplay or stopping sharing invalidat
 the phone's ownership. Sync then stops instead of overwriting desktop changes.
 Read-only cards and netplay do not support automatic sync.
 
+### Experimental browser-to-browser VMU link
+
+Open a mini-game in each browser, using a different VMU card for each one.
+If the game asks you to connect VMUs, reach that prompt on both screens first.
+In the first browser, choose **Create VMU link** in Controls and share the
+invite. Open it in the second browser and choose **Join VMU link** once its
+mini-game is ready. Both browsers use the same Hollycast host and local network.
+Use a different slot for each browser if both cards sync to Hollycast.
+
+The linked VMUs advance together at normal speed. Each VMU stays in its own
+browser and continues to sync to its own slot. In Chao Adventure, wait until both
+screens say **Please Disconnect**, then choose **Disconnect VMU link** to unplug
+the cable and continue in the mini-game. Use **Return to Dreamcast** in each
+browser when you're ready to save and reinsert its card.
+
 Games opened through **Open VMU game** stay local and are never uploaded.
 **Download VMU copy** remains available to export a 128 KiB card image for local
 games or as a fallback after a sync conflict. Browser storage may be cleared by
@@ -100,6 +115,29 @@ Use **Load VMU BIOS** for a 64 KiB firmware dump. It is remembered in this
 browser's storage across page reloads and games.
 No Sega BIOS or games are bundled. Credits, complete core source and GPLv3 license
 are available through **Credits and license** on the phone.
+
+## Mate two adult Chao and bring both eggs back
+
+Use a Hollycast build that shows **Create VMU link** and **Join VMU link**.
+The PC and phone should be on the same local network.
+
+1. In *Sonic Adventure*, use the Chao Transporter to put one **adult** Chao on each
+   of two different VMUs, such as **A1** and **A2**.
+2. Open the Phone VMU address on your PC. Select the first slot and choose
+   **Play mini-game on this card**. Press **A+B** to start *Chao Adventure*.
+   Open **Mating** and stop at **Please Connect**.
+3. In the PC browser, open **Controls → Create VMU link** and open the invite on
+   your phone. Select the other VMU slot, start its mini-game, and reach
+   **Please Connect** there too. Then tap **Join VMU link**.
+4. Wait until **both** screens say **Please Disconnect**, then choose
+   **Disconnect VMU link** on either device. Let both animations finish.
+   Press **A** on each VMU to return to the menu, then press **Mode** and choose
+   **Return to Dreamcast** in each browser. Wait for both saves to finish syncing.
+5. In the garden, jump onto the Transporter's red button with empty hands.
+   Bring in the egg from the first VMU, then repeat for the second.
+   Select just the egg to leave its parent on the VMU.
+
+Each VMU gets its own egg. You can bring both eggs into the same garden.
 
 ## Ending sharing
 

@@ -4,6 +4,7 @@
 #include "phone_vmu.h"
 
 #ifdef HAVE_PHONE_VMU
+#include "phone_vmu_link.h"
 #include "phone_vmu_page.h"
 #include "phone_vmu_player.h"
 #include "phone_vmu_sync.h"
@@ -336,6 +337,69 @@ private:
 	std::string lastSyncTime;
 };
 
+struct LinkRoom
+{
+	Reply::status_type handle(const Request& req, Reply& rep, bool offerRoute,
+			const std::string& roomCode, const std::string& client)
+	{
+		const auto now = Clock::now();
+		if (!code.empty() && now >= expires)
+			*this = {};
+		if (offerRoute && req.method == "POST")
+		{
+			if (code.empty())
+			{
+				*this = { roomCode, client, {}, req.content, {}, now + std::chrono::seconds(120) };
+				return Reply::ok;
+			}
+			return code == roomCode && offerClient == client && offer == req.content ? Reply::ok : Reply::conflict;
+		}
+		if (code != roomCode)
+			return Reply::not_found;
+		if (req.method == "DELETE")
+		{
+			if (offerRoute)
+			{
+				if (client != offerClient)
+					return Reply::forbidden;
+				*this = {};
+			}
+			else
+			{
+				if (client != answerClient)
+					return Reply::forbidden;
+				answerClient.clear();
+				answer.clear();
+			}
+			return Reply::ok;
+		}
+		if (req.method == "GET")
+		{
+			if (offerRoute == (client == offerClient))
+				return Reply::forbidden;
+			const std::string& description = offerRoute ? offer : answer;
+			if (description.empty())
+				return Reply::not_found;
+			rep.setContent(description, "application/octet-stream");
+			return Reply::ok;
+		}
+		if (client == offerClient)
+			return Reply::forbidden;
+		if (!answerClient.empty())
+			return answerClient == client && answer == req.content ? Reply::ok : Reply::conflict;
+		answerClient = client;
+		answer = req.content;
+		return Reply::ok;
+	}
+
+	std::string code;
+	std::string offerClient;
+	std::string answerClient;
+	std::string offer;
+	std::string answer;
+	Clock::time_point expires;
+};
+
 class Session
 {
 public:
@@ -365,6 +429,33 @@ public:
 				}
 				return std::string();
 			};
+			const bool linkOffer = req.uri == path + "link/offer";
+			if (linkOffer || req.uri == path + "link/answer")
+			{
+				const auto validToken = [](const std::string& value) {
+					return value.size() == 32 && value.find_first_not_of("0123456789abcdef") == std::string::npos;
+				};
+				const std::string roomCode = header("x-vmu-link");
+				const std::string client = header("x-vmu-client");
+				const std::string origin = header("origin");
+				Reply::status_type result;
+				if (!validToken(roomCode) || !validToken(client) || (!origin.empty() && origin != "http://" + header("host")))
+					result = Reply::forbidden;
+				else if (req.method != "GET" && req.method != "POST" && req.method != "DELETE")
+				{
+					rep.addHeader("Allow", "GET, POST, DELETE");
+					result = Reply::method_not_allowed;
+				}
+				else if (req.method == "POST" && (header("content-type") != "application/octet-stream"
+						|| req.content.empty() || req.content.size() > 16 * 1024))
+					result = Reply::bad_request;
+				else
+					result = linkRoom.handle(req, rep, linkOffer, roomCode, client);
+				if (result != Reply::ok || req.method != "GET")
+					rep.setContent("");
+				rep.status = result;
+				return;
+			}
 			const bool checkout = req.uri.size() == path.size() + 10 && req.uri.compare(0, path.size() + 9, path + "checkout/") == 0;
 			const bool release = req.uri.size() == path.size() + 9 && req.uri.compare(0, path.size() + 8, path + "release/") == 0;
 			const bool sync = req.uri.size() == path.size() + 6 && req.uri.compare(0, path.size() + 5, path + "sync/") == 0;
@@ -413,6 +504,8 @@ public:
 				rep.setContent(standalonePlayer, "text/javascript; charset=utf-8");
 			else if (req.uri == path + "vmu-sync.js")
 				rep.setContent(cardSync, "text/javascript; charset=utf-8");
+			else if (req.uri == path + "vmu-link.js")
+				rep.setContent(vmuLink, "text/javascript; charset=utf-8");
 			else if (req.uri == path + "vmu-core.LICENSE")
 				rep.setContent(standaloneLicense, "text/plain; charset=utf-8");
 			else if (req.uri == path + "wake-media.js")
@@ -507,6 +600,8 @@ public:
 
 private:
 	CardStore& cards;
+	// Signaling state is only accessed by the server's io thread.
+	LinkRoom linkRoom;
 	// Destroy the server and all outstanding operations before the context.
 	asio::io_context io;
 	std::unique_ptr<HttpServer> server;

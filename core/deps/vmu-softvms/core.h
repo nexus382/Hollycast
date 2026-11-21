@@ -1,5 +1,6 @@
 // VMU JavaScript engine from bucanero/dcvmu-tool, GPL-3.0-only.
-// See README.md and COPYING. The engine below is unmodified.
+// Portions Copyright 2026 The Hollycast Authors
+// See README.md and COPYING.
 // Adjacent raw literals preserve the assets while staying below MSVC's size limit.
 #pragma once
 namespace phone_vmu {
@@ -19,8 +20,9 @@ inline constexpr char standaloneCore[] = R"VMUJS(
  * SoftVMS runs forever and sleeps between 10 ms slices; here run(n) runs n
  * slices and returns, and the page calls it from requestAnimationFrame.
  * onSlice is called where cpu.c polls for input, once per slice.
+ * Hollycast adaptation: createVmu() gives each virtual device its own state.
  * ===================================================================== */
-const VMS = (() => {
+function createVmu() {
   const flash = new Uint8Array(0x20000);
   /* 64 KB, padded like flash so a read just past it is defined */
   const bios = new Uint8Array(0x20000);
@@ -38,14 +40,79 @@ const VMS = (() => {
   let spd = 0, t0h = 0, t0l = 0, t0base = 0, t0scale = 0, t1h = 0, t1l = 0;
   let gamesize = 0, mcy = 0, tick = 0;
   let halted = null;
+  let serialPeer = null;
+  const serialBits = [0, 0];
+  let serialCycles = 0, serialWaiting = false;
+  let serialByteMode = false, serialOutput = 0;
+  // LCM of the four instruction rates (cycles per 10 ms). Both browsers
+  // can compare link times exactly even when a VMU changes its oscillator.
+  const linkTicksPerSlice = 246000;
+  let guestTicks = 0, probing = false;
+  let probeMemory = null;
   const hooks = { sound: null, redraw: null, error: null };
+
+  // Sega VMU Hardware Manual, Serial Interface (figure 2.56): the
+  // connector crosses SIO0's clock and data lines with the peer's SIO1.
+  function shiftSerial(channel, input) {
+    const control = channel === 0 ? 0x30 : 0x34;
+    const flags = sfr[control];
+    if (flags & 2) sfr[control] |= 0x40;
+    if (!(flags & 0x18)) return 1;
+
+    const data = sfr[control + 1];
+    const msbFirst = (flags & 4) !== 0;
+    const output = msbFirst ? data >> 7 : data & 1;
+    sfr[control + 1] = msbFirst ? (data << 1) | input : (data >> 1) | (input << 7);
+    if (++serialBits[channel] === 8) {
+      serialBits[channel] = 0;
+      sfr[control] = (sfr[control] & ~8) | 2;
+      if (flags & 1) intreq |= 1 << (6 + channel);
+    }
+    return output;
+  }
+
+  function clockSerial(cycles, instructionTime) {
+    // P12 must select and drive the internal SIO0 clock. SBR gives its
+    // period in instruction cycles, independent of the other VMU's clock.
+    if (!(sfr[0x30] & 0x18) || !(sfr[0x45] & sfr[0x46] & 4) || (sfr[0x44] & 4)) {
+      serialCycles = 0;
+      return;
+    }
+    serialCycles += cycles;
+    const period = 2 * (256 - sfr[0x32]);
+    while (serialCycles >= period && (sfr[0x30] & 0x18)) {
+      serialCycles -= period;
+      const data = sfr[0x31];
+      const output = (sfr[0x30] & 4) ? data >> 7 : data & 1;
+      if (serialByteMode) {
+        // All eight outgoing bits come from the original shift register.
+        // Send them in clock order, then insert the reply before the CPU
+        // can observe transfer completion. This takes one network round trip.
+        serialOutput |= output << serialBits[0];
+        shiftSerial(0, 1);
+        if (serialBits[0] === 0) {
+          serialPeer(serialOutput, instructionTime);
+          serialOutput = 0;
+          serialWaiting = true;
+          return;
+        }
+        continue;
+      }
+      const input = serialPeer(output);
+      if (input === undefined) {
+        serialWaiting = true;
+        return;
+      }
+      shiftSerial(0, input);
+    }
+  }
 
   /* ++ as on an unsigned char: the value stored, so 255 wraps to 0 */
   const inc = (a, o) => { a[o]++; return a[o]; };
   const SGNEXT = n => (n & 0x80 ? n - 0x100 : n);
   const tobcd = n => ((Math.floor(n / 10)) << 4) | (n % 10);
-  const error = msg => { if (hooks.error) hooks.error(msg); };
-  const sound = freq => { if (hooks.sound) hooks.sound(freq); };
+  const error = msg => { if (!probing && hooks.error) hooks.error(msg); };
+  const sound = freq => { if (!probing && hooks.sound) hooks.sound(freq); };
 
   function keypress(i) {
     sfr[0x4c] &= ~(1 << i);
@@ -239,7 +306,7 @@ const VMS = (() => {
         p -= 6;
       }
     }
-    if (hooks.redraw) hooks.redraw();
+    if (!probing && hooks.redraw) hooks.redraw();
     lcdUpdated = 0;
   }
 
@@ -320,6 +387,13 @@ const VMS = (() => {
           lcdrefresh();
         }
         break;
+      case 0x130:
+      case 0x134:
+        if ((sfr[addr & 0xff] ^ value) & 0x18) {
+          serialBits[addr === 0x130 ? 0 : 1] = 0;
+          if (addr === 0x130) serialCycles = serialOutput = 0;
+        }
+        break;
       case 0x166:
         wram[0x1ff & ((sfr[0x65] << 8) | sfr[0x64])] = value;
         /* not !++sfr[0x64]: on a typed array that yields 256, not the 0 stored */
@@ -359,7 +433,8 @@ const VMS = (() => {
       case 0x11d:
         return t1h;
       case 0x15c:
-        return 2;
+        // P73 is high when a second standalone VMU is connected (VMD-128).
+        return serialPeer ? 0x0a : 2;
       case 0x165:
         return 0xfe | (sfr[0x65] & 1);
       case 0x166:
@@ -593,9 +668,10 @@ R"VMUJS(      parity[i] = parity[i & 15] ^ parity[i >> 4];
    * for input. Returns early if the game stops: halted then says why,
    * "exit" for a return to the (absent) BIOS menu.
    */
-  function run(n, onSlice) {
+  function run(n, onSlice, until = Infinity) {
     let done = 0;
-    while (!halted) {
+    while (!halted && !serialWaiting && guestTicks < until) {
+      const cyclesPerSlice = spd;
       let r, s, v, cy = 1, boundary = false;
       const i = rom[pc];
       pc++;
@@ -880,6 +956,11 @@ R"VMUJS(              writemem(0x101, (readmem(0x101) & 0x7f) | (r < s ? 0x80 : 
           }
           break;
       }
+      if (serialPeer) {
+        const instructionTime = guestTicks + 1;
+        guestTicks += cy * (linkTicksPerSlice / cyclesPerSlice);
+        clockSerial(cy, instructionTime);
+      }
       mcy += cy;
       if (mcy >= spd) {
         if (lcdUpdated)
@@ -1010,15 +1091,84 @@ R"VMUJS(              writemem(0x101, (readmem(0x101) & 0x7f) | (r < s ? 0x80 : 
         imask++;
         pc = ((r & ~1) << 3) + ((r & 1) ? 0xb : 0x3);
       }
-      if (boundary && ++done >= n)
+      if (n === 0 || (boundary && ++done >= n))
         break;
     }
     return done;
   }
 
+  // Predict only the next serial output. Roll back before yielding to the
+  // browser so LCD rendering, input and card checkpoints see committed state.
+  function probeSerial(until) {
+    const memory = [flash, ...ram, sfr, ...xram, wram, lcd];
+    if (!probeMemory) probeMemory = memory.map(bytes => new Uint8Array(bytes.length));
+    memory.forEach((bytes, i) => probeMemory[i].set(bytes));
+    const state = [rom, pc, lcdUpdated, lcdon, imask, intreq, spd, t0h, t0l,
+      t0base, t0scale, t1h, t1l, mcy, tick, halted, serialPeer,
+      serialBits[0], serialBits[1], serialCycles, serialWaiting, serialOutput, guestTicks];
+    let result = { time: until, byte: null };
+    serialPeer = (byte, time) => { result = { time, byte }; };
+    probing = true;
+    try {
+      run(Infinity, null, until);
+      return result;
+    } finally {
+      memory.forEach((bytes, i) => bytes.set(probeMemory[i]));
+      [rom, pc, lcdUpdated, lcdon, imask, intreq, spd, t0h, t0l,
+        t0base, t0scale, t1h, t1l, mcy, tick, halted, serialPeer,
+        serialBits[0], serialBits[1], serialCycles, serialWaiting, serialOutput, guestTicks] = state;
+      probing = false;
+    }
+  }
+
   return {
     W, H, lcd, flash, hooks, load, setBios, run, dateNow,
-    reset: resetcpu,
+    reset(time) {
+      serialBits.fill(0);
+      serialCycles = 0;
+      serialWaiting = false;
+      serialOutput = 0;
+      resetcpu(time);
+    },
+    // Linked cores are stepped in guest clock order by their shared scheduler.
+    connectSerial(peer, byteMode = false) {
+      serialPeer = peer;
+      serialByteMode = byteMode;
+      serialBits.fill(0);
+      serialWaiting = false;
+      serialCycles = serialOutput = 0;
+      guestTicks = 0;
+    },
+    // A synchronized cable starts both half-second timer dividers on the
+    // same phase. Otherwise two guests can exchange the handshake but
+    // finish their interrupt-driven waits on different sides of a byte.
+    alignLinkTimer() { tick = 0; },
+    completeSerial(value) {
+      if (!serialWaiting) return;
+      serialWaiting = false;
+      if (!serialByteMode) {
+        shiftSerial(0, value);
+        return;
+      }
+      if (sfr[0x30] & 4) {
+        let reversed = 0;
+        for (let bit = 0; bit < 8; ++bit) reversed = (reversed << 1) | ((value >> bit) & 1);
+        value = reversed;
+      }
+      sfr[0x31] = value;
+    },
+    receiveSerial(bit) { return shiftSerial(1, bit); },
+    receiveSerialByte(value) {
+      let reply = 0;
+      for (let bit = 0; bit < 8; ++bit) reply |= shiftSerial(1, (value >> bit) & 1) << bit;
+      return reply;
+    },
+    probeSerial,
+    runSerialUntil: until => run(Infinity, null, until),
+    linkTicksPerSlice,
+    get linked() { return serialPeer !== null; },
+    get serialWaiting() { return serialWaiting; },
+    get guestTime() { return guestTicks / linkTicksPerSlice; },
     /* 0 up, 1 down, 2 left, 3 right, 4 A, 5 B, 6 mode, 7 sleep */
     key: (i, down) => (down ? keypress(i) : keyrelease(i)),
     get halted() { return halted; },
@@ -1026,7 +1176,8 @@ R"VMUJS(              writemem(0x101, (readmem(0x101) & 0x7f) | (r < s ? 0x80 : 
     get hasBios() { return !!hasbios; },
     get lcdOn() { return !!lcdon; }
   };
-})();
+}
+const VMS = createVmu();
 )VMUJS";
 inline constexpr char standaloneLicense[] = R"VMULICENSE(                    GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007

@@ -5,6 +5,7 @@
 #include "oslib/http_server.h"
 #include <asio.hpp>
 #include <array>
+#include <atomic>
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -131,15 +132,34 @@ int main(int argc, char **argv)
 				for (int x = 0; x < 48; ++x)
 					pixels[y * 48 + x] = (x == 0 || x == 47 || y == 0 || y == 31 || ((x / 4 + y / 4) % 2 == 0)) ? 0xff000000 : 0xffffffff;
 			phone_vmu::publishScreen(0, pixels.data(), true);
-			if (argc == 3)
+			std::array<std::vector<std::uint8_t>, 2> cards;
+			check(argc <= 4, "Preview accepts at most two VMU card images");
+			for (int arg = 2; arg < argc; ++arg)
 			{
-				std::ifstream input(argv[2], std::ios::binary);
-				const std::vector<std::uint8_t> card((std::istreambuf_iterator<char>(input)), {});
+				std::ifstream input(argv[arg], std::ios::binary);
+				auto& card = cards[arg - 2];
+				card.assign(std::istreambuf_iterator<char>(input), {});
 				check(card.size() == 131072, "Preview card must be a 128 KiB image");
-				phone_vmu::publishCard(0, card.data(), card.size());
+				phone_vmu::publishCard(arg - 2, card.data(), card.size());
 			}
+			std::atomic<bool> finished{false};
+			std::thread emulation([&] {
+				while (!finished)
+				{
+					for (int arg = 2; arg < argc; ++arg)
+					{
+						auto& card = cards[arg - 2];
+						// The preview only saves into its in-memory copies.
+						phone_vmu::syncCard(arg - 2, card.data(), card.size(), true,
+								[](const std::uint8_t *, std::size_t, bool) { return true; });
+					}
+					std::this_thread::sleep_for(std::chrono::milliseconds(10));
+				}
+			});
 			std::cout << status.urls.front() << std::endl;
 			std::cin.get();
+			finished = true;
+			emulation.join();
 			phone_vmu::stop();
 			return 0;
 		}
@@ -148,6 +168,28 @@ int main(int argc, char **argv)
 		check(html.find("Cache-Control: no-store") != std::string::npos && html.find("frame-ancestors 'none'") != std::string::npos,
 			"Pairing page missing privacy headers");
 		check(body(request(address, address.path + "vmu-core.js")).find("const VMS") != std::string::npos, "VMU CPU was not served");
+		check(body(request(address, address.path + "vmu-link.js")).find("class PhoneVmuLink") != std::string::npos, "VMU link client was not served");
+		const std::string offerPath = address.path + "link/offer";
+		const std::string answerPath = address.path + "link/answer";
+		const std::string linkHeaders = "Content-Type: application/octet-stream\r\nX-VMU-Link: " + std::string(32, 'a') + "\r\nX-VMU-Client: ";
+		const std::string firstBrowser = linkHeaders + std::string(32, 'b') + "\r\n";
+		const std::string secondBrowser = linkHeaders + std::string(32, 'c') + "\r\n";
+		const std::string thirdBrowser = linkHeaders + std::string(32, 'd') + "\r\n";
+		check(request(address, offerPath, "POST", "offer", firstBrowser + "Origin: http://unpaired.example\r\n").find("HTTP/1.1 403") == 0,
+			"Cross-origin page could create a VMU link");
+		check(request(address, offerPath, "POST", "offer", firstBrowser).find("HTTP/1.1 200") == 0, "Could not create a VMU link");
+		check(body(request(address, offerPath, "GET", "", secondBrowser)) == "offer", "Second browser did not receive the offer");
+		check(request(address, answerPath, "GET", "", firstBrowser).find("HTTP/1.1 404") == 0, "Answer was visible before joining");
+		check(request(address, answerPath, "POST", "answer", secondBrowser).find("HTTP/1.1 200") == 0, "Second browser could not join");
+		check(request(address, answerPath, "POST", "other", thirdBrowser).find("HTTP/1.1 409") == 0, "Third browser replaced the answer");
+		check(request(address, answerPath, "DELETE", "", thirdBrowser).find("HTTP/1.1 403") == 0, "Third browser cancelled the answer");
+		check(request(address, answerPath, "DELETE", "", secondBrowser).find("HTTP/1.1 200") == 0, "Second browser could not cancel joining");
+		check(request(address, answerPath, "GET", "", firstBrowser).find("HTTP/1.1 404") == 0, "Cancelled answer was still visible");
+		check(request(address, answerPath, "POST", "retry", secondBrowser).find("HTTP/1.1 200") == 0, "Second browser could not retry joining");
+		check(body(request(address, answerPath, "GET", "", firstBrowser)) == "retry", "First browser did not receive the new answer");
+		check(request(address, offerPath, "DELETE", "", thirdBrowser).find("HTTP/1.1 403") == 0, "Third browser cancelled the VMU link");
+		check(request(address, offerPath, "DELETE", "", firstBrowser).find("HTTP/1.1 200") == 0, "First browser could not close the invitation");
+		check(request(address, offerPath, "GET", "", secondBrowser).find("HTTP/1.1 404") == 0, "Closed link retained its offer");
 		check(body(request(address, address.path + "vmu-core.LICENSE")).find("GNU GENERAL PUBLIC LICENSE") != std::string::npos, "VMU license was not served");
 		const auto wakeMedia = body(request(address, address.path + "wake-media.js"));
 		check(wakeMedia.find("const PhoneVmuWakeMedia") != std::string::npos && wakeMedia.find("Copyright (c) Rich Tibbett") != std::string::npos,

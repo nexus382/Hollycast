@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {webcrypto} from 'node:crypto';
 import {readAsset} from './embedded_assets.mjs';
 
 const source=readAsset('../../core/network/phone_vmu_page.h','HTML');
@@ -38,9 +39,10 @@ function page({native=true,blockVideo=false}={}){
   load(){this.active=true;this.sleeping=false;} reset(){this.sleeping=false;} sleep(){this.sleeping=!this.sleeping;}
   setSpeed(){}
  }
- const context=vm.createContext({document,window,navigator,PhoneVmuPlayer:Player,VMS:{},Uint8Array,AbortController,
+ const context=vm.createContext({document,window,navigator,PhoneVmuPlayer:Player,VMS:{},Uint8Array,AbortController,crypto:webcrypto,
   requestAnimationFrame(){},setTimeout(){},clearTimeout(){},fetch:()=>new Promise(()=>{})});
- vm.runInContext(media,context);vm.runInContext(readAsset('../../core/network/phone_vmu_sync.h','VMUSYNC'),context);vm.runInContext(script,context);
+ vm.runInContext(media,context);vm.runInContext(readAsset('../../core/network/phone_vmu_sync.h','VMUSYNC'),context);
+ vm.runInContext(readAsset('../../core/network/phone_vmu_link.h','VMULINK'),context);vm.runInContext(script,context);
  return {elements,hardware,document,window,requests,videos,allowVideo(){blockVideo=false;},
   tap(){document.callbacks.pointerdown({target:{closest:()=>null}});},
   visible(visible){document.hidden=!visible;document.callbacks.visibilitychange();},
