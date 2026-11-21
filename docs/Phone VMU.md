@@ -11,6 +11,7 @@ app or internet connection is required.
 2. Open **Settings > On-screen display > Phone VMU** in Hollycast and enable
    **Connect Phone**.
 3. On the other device, scan the QR code or open the shown `http://` address.
+   Use **COPY URL** in Hollycast to copy the displayed address to the clipboard.
 4. Choose a slot: A1/A2 belong to controller A, B1/B2 to B, and so on.
 5. Close settings and play. The phone mirrors the selected LCD independently of
    **Show VMU In-Game** and **Move VMU**. Use your usual controller for the

@@ -8376,8 +8376,14 @@ static void renderPhoneVmuSettings()
 			}
 	ImGui::Dummy(size);
 	ImGui::TextWrapped("%s", url.c_str());
-	if (ImGui::Button(T("Copy address")))
+	if (ImGui::Button(T("COPY URL")))
+	{
+#ifdef __ANDROID__
+		os_CopySensitiveTextToClipboard(url.c_str());
+#else
 		ImGui::SetClipboardText(url.c_str());
+#endif
+	}
 	ImGui::TextWrapped("%s", T("Sharing stays on when you close settings. Turn off Connect Phone to disconnect all phones. Allow Hollycast through your firewall on private networks if needed."));
 }
 #endif
