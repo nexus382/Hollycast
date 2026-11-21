@@ -25,6 +25,7 @@
 #include <ws2tcpip.h>
 #else
 #ifdef __ANDROID__
+#include "types.h"
 #include "net_platform.h" // Uses the bundled getifaddrs fallback before Android API 24.
 #else
 #include <ifaddrs.h>
