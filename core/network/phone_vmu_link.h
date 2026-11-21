@@ -16,7 +16,7 @@ class PhoneVmuLink {
       byte => byte.toString(16).padStart(2, '0')).join('');
   }
 
-  async start(room, offerer) {
+  async start(room, offerer, slot) {
     if (this.session) this.close();
     if (!/^[0-9a-f]{32}$/.test(room)) {
       this.report('Invalid VMU link code.');
@@ -28,7 +28,8 @@ class PhoneVmuLink {
     }
     const session = {
       abort: new AbortController(),
-      headers: {'X-VMU-Link': room, 'X-VMU-Client': this.client},
+      headers: {'X-VMU-Link': room, 'X-VMU-Client': this.client,
+        ...(offerer && slot === '0' ? {'X-VMU-Slot': '0'} : {})},
       postedSignal: null, channel: null, clock: null
     };
     this.session = session;
