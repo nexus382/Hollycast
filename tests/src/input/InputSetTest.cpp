@@ -100,89 +100,19 @@ TEST_F(InputSetTest, contains)
     EXPECT_FALSE(inputSet.contains(InputMapping::InputDef{8675309, InputMapping::InputDef::InputType::BUTTON}));
 }
 
-TEST_F(InputSetTest, ends_with_sequential__true)
+TEST_F(InputSetTest, ends_with_matches_the_last_inputs)
 {
-    // Arrange
-    const InputMapping::InputSet inputSet1{
-        InputMapping::InputDef::from_button(1),
-        InputMapping::InputDef::from_button(2),
-        InputMapping::InputDef::from_axis(1, true),
-        InputMapping::InputDef::from_axis(100, false)
-    };
-    const InputMapping::InputSet inputSet2{
-        InputMapping::InputDef::from_button(2),
-        InputMapping::InputDef::from_axis(1, true),
-        InputMapping::InputDef::from_axis(100, false)
-    };
+    const auto firstButton = InputMapping::InputDef::from_button(1);
+    const auto secondButton = InputMapping::InputDef::from_button(2);
+    const auto positiveAxis = InputMapping::InputDef::from_axis(1, true);
+    const auto negativeAxis = InputMapping::InputDef::from_axis(100, false);
+    const InputMapping::InputSet inputs{firstButton, secondButton, positiveAxis, negativeAxis};
+    const InputMapping::InputSet ordered{secondButton, positiveAxis, negativeAxis};
+    const InputMapping::InputSet reordered{secondButton, negativeAxis, positiveAxis};
+    const InputMapping::InputSet withGap{secondButton, negativeAxis};
 
-    // Act
-    bool result = inputSet1.ends_with(inputSet2, true);
-
-    // Assert
-    ASSERT_TRUE(result);
-}
-
-TEST_F(InputSetTest, ends_with_sequential__false)
-{
-    // Arrange
-    const InputMapping::InputSet inputSet1{
-        InputMapping::InputDef::from_button(1),
-        InputMapping::InputDef::from_button(2),
-        InputMapping::InputDef::from_axis(1, true),
-        InputMapping::InputDef::from_axis(100, false)
-    };
-    const InputMapping::InputSet inputSet2{
-        InputMapping::InputDef::from_button(2),
-        InputMapping::InputDef::from_axis(100, false),
-        InputMapping::InputDef::from_axis(1, true)
-    };
-
-    // Act
-    bool result = inputSet1.ends_with(inputSet2, true);
-
-    // Assert
-    ASSERT_FALSE(result);
-}
-
-TEST_F(InputSetTest, ends_with_nonsequential__true)
-{
-    // Arrange
-    const InputMapping::InputSet inputSet1{
-        InputMapping::InputDef::from_button(1),
-        InputMapping::InputDef::from_button(2),
-        InputMapping::InputDef::from_axis(1, true),
-        InputMapping::InputDef::from_axis(100, false)
-    };
-    const InputMapping::InputSet inputSet2{
-        InputMapping::InputDef::from_button(2),
-        InputMapping::InputDef::from_axis(100, false),
-        InputMapping::InputDef::from_axis(1, true)
-    };
-
-    // Act
-    bool result = inputSet1.ends_with(inputSet2, false);
-
-    // Assert
-    ASSERT_TRUE(result);
-}
-
-TEST_F(InputSetTest, ends_with_nonsequential__false)
-{
-    // Arrange
-    const InputMapping::InputSet inputSet1{
-        InputMapping::InputDef::from_button(1),
-        InputMapping::InputDef::from_button(2),
-        InputMapping::InputDef::from_axis(1, true),
-        InputMapping::InputDef::from_axis(100, false)
-    };
-    const InputMapping::InputSet inputSet2{
-        InputMapping::InputDef::from_button(2),
-        InputMapping::InputDef::from_axis(100, false)
-    };
-
-    // Act
-    bool result = inputSet1.ends_with(inputSet2, false);
-
-    // Assert
-    ASSERT_FALSE(result);
+    EXPECT_TRUE(inputs.ends_with(ordered, true));
+    EXPECT_FALSE(inputs.ends_with(reordered, true));
+    EXPECT_TRUE(inputs.ends_with(reordered, false));
+    EXPECT_FALSE(inputs.ends_with(withGap, false));
 }

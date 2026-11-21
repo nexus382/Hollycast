@@ -5,7 +5,6 @@
 #include "ui/boxart/gamesdb.h"
 #include "ui/boxart/launchbox.h"
 #include "ui/game_scanner.h"
-#include "oslib/http_client.h"
 #include <stb_image_write.h>
 #include <atomic>
 #include <algorithm>
@@ -16,6 +15,7 @@
 #include <iostream>
 #include <future>
 #include <mutex>
+#include <sstream>
 #include <thread>
 
 namespace {
@@ -34,6 +34,19 @@ int reply(std::vector<u8>& bytes, const json& response)
 	const std::string body = json{{"response", response}}.dump();
 	bytes.assign(body.begin(), body.end());
 	return 200;
+}
+
+std::string encodedSearchTerm(const std::string& url)
+{
+	const auto query = url.find('?');
+	if (query == std::string::npos) return {};
+	std::istringstream fields(url.substr(query + 1));
+	std::string field;
+	const std::string prefix = "recherche=";
+	while (std::getline(fields, field, '&'))
+		if (field.compare(0, prefix.size(), prefix) == 0)
+			return field.substr(prefix.size());
+	return {};
 }
 
 Credentials credentials()
@@ -206,11 +219,11 @@ TEST_F(ScreenScraperTest, AmbiguousMatchesPreserveExistingArtworkAndDoNotRepeat)
 
 TEST_F(ScreenScraperTest, FilenamePunctuationAndWholeWordSearchRecoverPreviouslyMissedTitles)
 {
-	struct Title { const char *file; const char *header; const char *query; const char *matched; u32 id; };
+	struct Title { const char *file; const char *header; const char *encodedQuery; const char *matched; u32 id; };
 	const Title titles[] = {
-		{"90 Minutes - Sega Championship Football (Europe).chd", "90MINUTES -SEGA CHAMPIONSHIP FOOTBALL-", "90 Minutes - Sega Championship Football", "90 Minutes : Sega Championship Football", 13696},
-		{"AeroWings 2 - Airstrike (USA).chd", "AEROWINGS 2 AIR STRIKE", "AeroWings 2 - Airstrike", "AeroWings 2 : Airstrike", 13738},
-		{"Capcom vs. SNK (USA).chd", "CAPCOM VS SNK", "Capcom vs. SNK", "Capcom vs. SNK", 13565},
+		{"90 Minutes - Sega Championship Football (Europe).chd", "90MINUTES -SEGA CHAMPIONSHIP FOOTBALL-", "90%20Minutes%20-%20Sega%20Championship%20Football", "90 Minutes : Sega Championship Football", 13696},
+		{"AeroWings 2 - Airstrike (USA).chd", "AEROWINGS 2 AIR STRIKE", "AeroWings%202%20-%20Airstrike", "AeroWings 2 : Airstrike", 13738},
+		{"Capcom vs. SNK (USA).chd", "CAPCOM VS SNK", "Capcom%20vs.%20SNK", "Capcom vs. SNK", 13565},
 		{"Dragons Blood (Europe).chd", "DRAGONS_BLOOD", "blood", "Dragon's Blood", 13573},
 	};
 	for (const auto& title : titles)
@@ -221,7 +234,7 @@ TEST_F(ScreenScraperTest, FilenamePunctuationAndWholeWordSearchRecoverPreviously
 			if (url.find("ssuserInfos.php") != std::string::npos) return reply(bytes, {{"ssuser", user()}});
 			if (url.find("jeuRecherche.php") != std::string::npos)
 			{
-				if (url.find("&recherche=" + http::urlEncode(title.query)) == std::string::npos)
+				if (encodedSearchTerm(url) != title.encodedQuery)
 					return reply(bytes, {{"jeux", json::array()}});
 				auto found = game();
 				found["id"] = std::to_string(title.id);
@@ -250,23 +263,20 @@ TEST_F(ScreenScraperTest, FilenamePunctuationAndWholeWordSearchRecoverPreviously
 
 TEST_F(ScreenScraperTest, ShortSearchFallsBackToFullFilenameAndKeepsSessionHealthy)
 {
-	std::vector<std::string> queries;
+	bool searchedShortTitle = false;
 	auto session = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
 		if (url.find("ssuserInfos.php") != std::string::npos)
 			return reply(bytes, {{"ssuser", user()}});
-		const auto search = url.find("&recherche=");
-		EXPECT_NE(search, std::string::npos);
-		if (search == std::string::npos)
-			return 500;
-		const std::string query = url.substr(search + 11);
-		queries.push_back(query);
+		const auto query = encodedSearchTerm(url);
+		EXPECT_FALSE(query.empty());
 		if (query == "F1")
 		{
+			searchedShortTitle = true;
 			const std::string body = "Erreur : informations obligatoires manquantes !  \r\n";
 			bytes.assign(body.begin(), body.end());
 			return 200;
 		}
-		if (query == http::urlEncode("F1 World Grand Prix"))
+		if (query == "F1%20World%20Grand%20Prix")
 		{
 			auto found = game();
 			found["id"] = "1234";
@@ -285,8 +295,7 @@ TEST_F(ScreenScraperTest, ShortSearchFallsBackToFullFilenameAndKeepsSessionHealt
 	art.requestedMedia = artwork::metadataMedia;
 	scraper.scrape(art);
 
-	EXPECT_EQ(std::find(queries.begin(), queries.end(), "F1"), queries.end());
-	EXPECT_NE(std::find(queries.begin(), queries.end(), http::urlEncode("F1 World Grand Prix")), queries.end());
+	EXPECT_FALSE(searchedShortTitle);
 	EXPECT_EQ(art.screenScraperId, 1234u);
 	EXPECT_TRUE(session->ready());
 	EXPECT_EQ(session->status().message, "Signed in to ScreenScraper.");
@@ -320,11 +329,9 @@ TEST_F(ScreenScraperTest, SkipsAllShortSearchesAndStillSearchesThreeCharacterNam
 	auto fullSession = std::make_shared<Session>(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
 		if (url.find("ssuserInfos.php") != std::string::npos)
 			return reply(bytes, {{"ssuser", user()}});
-		const auto search = url.find("&recherche=");
-		EXPECT_NE(search, std::string::npos);
-		if (search == std::string::npos)
-			return 500;
-		queries.push_back(url.substr(search + 11));
+		const auto query = encodedSearchTerm(url);
+		EXPECT_FALSE(query.empty());
+		queries.push_back(query);
 		auto found = game();
 		found["id"] = "1234";
 		found["noms"] = json::array({{{"region", "us"}, {"text", "F16 Fighter Pilot"}}});
