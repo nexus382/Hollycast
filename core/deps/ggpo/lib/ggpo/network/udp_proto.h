@@ -18,7 +18,6 @@
 #include "ring_buffer.h"
 #include <vector>
 #include <mutex>
-#include <queue>
 
 class UdpProtocol : public IPollSink
 {
@@ -224,7 +223,7 @@ protected:
    /*
     * Event queue
     */
-   std::queue<UdpProtocol::Event> _event_queue;
+   RingBuffer<UdpProtocol::Event, 64>  _event_queue;
 };
 
 #endif

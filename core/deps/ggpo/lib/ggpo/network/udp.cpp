@@ -106,9 +106,7 @@ Udp::OnLoopPoll(void *cookie)
    sockaddr_in    recv_addr;
    socklen_t      recv_addr_len;
 
-   // Let the backend consume events between bursts of buffered datagrams.
-   constexpr int maxPacketsPerPoll = 32;
-   for (int packet = 0; packet < maxPacketsPerPoll; ++packet) {
+   for (;;) {
       recv_addr_len = sizeof(recv_addr);
       int len = recvfrom(_socket, (char *)recv_buf, MAX_UDP_PACKET_SIZE, 0, (struct sockaddr *)&recv_addr, &recv_addr_len);
 

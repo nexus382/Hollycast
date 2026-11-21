@@ -8667,26 +8667,6 @@ void renderNetworkTab()
 				));
 		}
 
-		if (config::GGPOEnable)
-		{
-			ImGui::Spacing();
-			if (RenderCollapsingHeader(Tnop("GGPOSetupSection"), ICON_FA_CIRCLE_INFO, T("GGPO Setup")))
-			{
-				ImGui::TextWrapped("%s", T("Connect both devices to the same local network (Wi-Fi or Ethernet). "
-					"Use the same Hollycast build and game on both devices."));
-				ImGui::TextWrapped("%s", T("Select GGPO under Network Type on both devices. "
-					"Turn on Play as Player 1 on the host only."));
-				ImGui::TextWrapped("%s", T("On each device, enter the other device's local IPv4 address in Peer. "
-					"Find the address in the device's Wi-Fi or Ethernet connection details. "
-					"Entering just the IP address uses port 19713 automatically."));
-				ImGui::TextWrapped("%s", T("Player 1 can enable Test Connection and Set Delay before starting. "
-					"Each device can settle on a different delay during play."));
-				ImGui::TextWrapped("%s", T("Launch the same game on both devices, with Player 1 starting first."));
-				ImGui::TextWrapped("%s", T("To resume a held match, choose Close Game and select the same game again within 60 seconds. "
-					"Choose End Session to end the match."));
-			}
-		}
-
 		// Show configuration section if any network type is enabled
 		if (config::GGPOEnable || config::NetworkEnable || config::BattleCableEnable)
 		{
