@@ -12,9 +12,10 @@ const date = '2026-10-29T12:00:00Z';
 const oldDate = '2026-10-28T12:00:00Z';
 const packages = ['Hollycast-release.apk.zip', 'Hollycast-x86_64-w64-mingw32.zip.zip',
   'Hollycast-x86_64-pc-linux-gnu.zip', 'Hollycast-apple-darwin.zip.zip',
-  'Hollycast-switch-standalone.zip', 'flycast-uwp-x64.zip'];
+  'Hollycast-switch-standalone.zip', 'flycast-uwp-x64.zip', 'Hollycast-libretro-aarch64-pc-linux-gnu.zip'];
 const filenames = ['Hollycast-android.apk.zip', 'Hollycast-windows-x64.zip', 'Hollycast-linux-x64.zip',
-  'Hollycast-macos-universal.zip', 'Hollycast-switch.zip', 'Hollycast-uwp-x64.zip', 'SHA256SUMS.txt'];
+  'Hollycast-macos-universal.zip', 'Hollycast-switch.zip', 'Hollycast-uwp-x64.zip',
+  'Hollycast-linux-libretro-arm64.zip', 'SHA256SUMS.txt'];
 const hash = text => `sha256:${createHash('sha256').update(text).digest('hex')}`;
 const notFound = () => { throw Object.assign(new Error('Not found'), { status: 404 }); };
 
@@ -81,7 +82,7 @@ function fixture(releases = builds(), current = rolling()) {
   return { state, api, upload, publish: () => publishLatestDev(repository, api, upload) };
 }
 
-test('each platform must be uploaded on dev at the same commit before rolling publication', async () => {
+test('each download must be uploaded on dev at the same commit before rolling publication', async () => {
   for (let missing = 0; missing < packages.length; missing++) {
     const incomplete = builds();
     incomplete[missing].assets[0].state = 'starter';
@@ -95,6 +96,12 @@ test('each platform must be uploaded on dev at the same commit before rolling pu
     assert.equal(f.state.releases.find(item => item.tag_name === 'latest-dev').id, 500);
   }
   const f = fixture(builds(commit, 'master'));
+  assert.equal(await f.publish(), null);
+  assert.deepEqual(f.state.events, []);
+});
+
+test('the x64 Libretro artifact cannot replace the ARM64 core', async () => {
+  const f = fixture(builds(commit, 'dev', [...packages.slice(0, -1), 'Hollycast-libretro-x86_64-pc-linux-gnu.zip']));
   assert.equal(await f.publish(), null);
   assert.deepEqual(f.state.events, []);
 });
@@ -113,8 +120,8 @@ test('a complete dev commit is staged with stable filenames and checksums before
     assert.match(result.body, /\*\*dev\*\*/);
     assert.ok(result.body.includes(commit) && result.body.includes(date));
     const checksum = f.state.uploads.at(-1).asset.text;
-    assert.equal(checksum.split('\n').filter(Boolean).length, 6);
-    for (const { asset, name } of f.state.uploads.slice(0, 6)) assert.ok(checksum.includes(`${asset.digest.slice(7)}  ${name}\n`));
+    assert.equal(checksum.split('\n').filter(Boolean).length, packages.length);
+    for (const { asset, name } of f.state.uploads.slice(0, -1)) assert.ok(checksum.includes(`${asset.digest.slice(7)}  ${name}\n`));
     const lastUpload = f.state.events.findLastIndex(event => event.upload);
     assert.ok(f.state.events.slice(0, lastUpload).every(event => !event.path?.includes('/git/')));
     if (current) {
@@ -126,7 +133,7 @@ test('a complete dev commit is staged with stable filenames and checksums before
 });
 
 test('newer incomplete commits and older completions do not displace the latest complete dev build', async () => {
-  const newer = builds('c'.repeat(40), 'dev', packages.slice(0, 5), '2026-10-30T12:00:00Z');
+  const newer = builds('c'.repeat(40), 'dev', packages.slice(0, -1), '2026-10-30T12:00:00Z');
   const f = fixture([...newer, ...builds()], rolling(commit, date));
   assert.equal((await f.publish()).id, 500);
   assert.deepEqual(f.state.events, []);
@@ -158,10 +165,10 @@ test('staged assets must match the source digests and sizes before replacing the
     asset => { asset.state = 'starter'; }]) {
     const f = fixture();
     f.state.corruptUpload = corrupt;
-    await assert.rejects(f.publish(), /six verified downloads/);
+    await assert.rejects(f.publish(), /all verified downloads/);
     assert.equal(f.state.ref.object.sha, oldCommit);
     assert.equal(f.state.releases.find(item => item.tag_name === 'latest-dev').id, 500);
-    await assert.rejects(f.publish(), /Staged asset mismatch|six verified downloads/);
+    await assert.rejects(f.publish(), /Staged asset mismatch|all verified downloads/);
   }
 });
 
@@ -179,7 +186,7 @@ test('promotion failure restores the previous rolling release and tag, then perm
     assert.equal(f.state.releases.find(item => item.tag_name === 'latest-dev').id, 500);
     await f.publish();
     assert.equal(f.state.ref.object.sha, commit);
-    assert.equal(f.state.uploads.length, 7);
+    assert.equal(f.state.uploads.length, filenames.length);
   }
 });
 
@@ -200,7 +207,7 @@ test('initial promotion failures remove only the new rolling tag and leave a res
   f.state.failMutation = null;
   await f.publish();
   assert.equal(f.state.ref.object.sha, commit);
-  assert.equal(f.state.uploads.length, 7);
+  assert.equal(f.state.uploads.length, filenames.length);
 });
 
 test('a run interrupted after archiving can finish promotion on the next workflow run', async () => {
@@ -214,7 +221,7 @@ test('a run interrupted after archiving can finish promotion on the next workflo
     const result = await f.publish();
     assert.equal(result.tag_name, 'latest-dev');
     assert.equal(f.state.ref.object.sha, commit);
-    assert.equal(f.state.uploads.length, 7);
+    assert.equal(f.state.uploads.length, filenames.length);
   }
 });
 
@@ -225,7 +232,7 @@ test('retry removes an empty starter upload from the development draft', async (
   f.state.releases.find(item => item.id === 1000).assets.push({ id: 900, name: filenames[0], state: 'starter' });
   f.state.failUpload = null;
   const result = await f.publish();
-  assert.equal(result.assets.length, 7);
+  assert.equal(result.assets.length, filenames.length);
   assert.ok(f.state.events.some(event => event.path === `${base}/releases/assets/900` && event.method === 'DELETE'));
 });
 
