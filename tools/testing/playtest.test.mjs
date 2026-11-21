@@ -387,6 +387,30 @@ test('UI text plan and step artifacts redact payloads and observed input values'
   assert.equal(savedPlan.steps[0].text, '[redacted]');
   assert.equal(savedPlan.steps[1].text, '[redacted]');
 });
+
+test('nested settings observations and failed screenshots mask the active password field', async t => {
+  const harness = await fakeHarness(t, { gameId: null, gameSha: null });
+  const secret = 'active-password-fixture';
+  const observation = { ui: { text_input: { active_item_id: 17, password: true }, items: [
+    { id: 17, value: secret, value_label: secret, draft_value: secret },
+    { id: 18, value: 'readable label' },
+  ] } };
+  harness.settings = async () => ({ observation });
+  harness.observe = async () => observation;
+  const report = await runPlaytestPlan(harness, plan([
+    { id: 'show-settings', op: 'settings', page: 'general' },
+    { id: 'capture-settings', op: 'screenshot' },
+  ], { scope: 'ui', identity: { executable_sha256: 'a'.repeat(64) } }));
+
+  assert.deepEqual(report.steps.map(step => step.status), ['pass', 'fail']);
+  for (const name of ['steps.jsonl', 'report.json']) {
+    const contents = await fs.readFile(path.join(report.report_directory, name), 'utf8');
+    assert.equal(contents.includes(secret), false);
+    assert.ok(contents.includes('readable label'));
+  }
+  assert.equal(observation.ui.items[0].value, secret);
+});
+
 test('idempotent mapping release requires and accepts only explicit release confirmation', async t => {
   const harness = await fakeHarness(t);
   const baseMapping = harness.mapping.bind(harness);

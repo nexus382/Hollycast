@@ -123,7 +123,6 @@ std::vector<std::string> localAddresses()
 	return addresses;
 }
 
-constexpr std::size_t CardSize = 128 * 1024;
 
 class CardStore
 {

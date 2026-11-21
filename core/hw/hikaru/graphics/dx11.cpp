@@ -383,33 +383,63 @@ class Dx11Backend final : public Backend, private CachedDX11Shaders {
     Image& image(unsigned id) {
         auto found=images.find(id);if(found==images.end())throw FlycastException("Unknown Hikaru DX11 image");return found->second;
     }
-    Image makeImage(unsigned id,const Texture& info) {
+    struct ImageDescription {
+        D3D11_TEXTURE2D_DESC texture{};
+        DXGI_FORMAT sampledView = DXGI_FORMAT_UNKNOWN;
+        DXGI_FORMAT depthView = DXGI_FORMAT_UNKNOWN;
+    };
+    static ImageDescription describeImage(const Texture& info) {
         if(!info.width||!info.height||info.width>D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION||info.height>D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
             throw FlycastException("Invalid Hikaru DX11 image size");
-        Image result;
-        result.depth=(id&0x80000000u)||info.format==GL_DEPTH_COMPONENT||info.format==GL_DEPTH_COMPONENT16||
-            info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8;
-        result.sampleable=!result.depth||(id&0x80000000u)==0;
-        auto& desc=result.description;desc.Width=info.width;desc.Height=info.height;desc.ArraySize=1;desc.SampleDesc.Count=1;
-        desc.MipLevels=result.depth?1:1+std::min(info.maxLevel,mipCount(info.width,info.height)-1);
-        desc.Usage=D3D11_USAGE_DEFAULT;
-        DXGI_FORMAT sampleFormat=DXGI_FORMAT_UNKNOWN,depthFormat=DXGI_FORMAT_UNKNOWN;
-        if(result.depth) {
-            desc.BindFlags=D3D11_BIND_DEPTH_STENCIL|(result.sampleable?D3D11_BIND_SHADER_RESOURCE:0);
-            if(info.format==GL_DEPTH_COMPONENT16){desc.Format=DXGI_FORMAT_R16_TYPELESS;depthFormat=DXGI_FORMAT_D16_UNORM;sampleFormat=DXGI_FORMAT_R16_UNORM;}
-            else if(info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH24_STENCIL8){desc.Format=DXGI_FORMAT_R24G8_TYPELESS;depthFormat=DXGI_FORMAT_D24_UNORM_S8_UINT;sampleFormat=DXGI_FORMAT_R24_UNORM_X8_TYPELESS;}
-            else {desc.Format=DXGI_FORMAT_R32_TYPELESS;depthFormat=DXGI_FORMAT_D32_FLOAT;sampleFormat=DXGI_FORMAT_R32_FLOAT;}
+        ImageDescription image;
+        auto& desc = image.texture;
+        desc.Width = info.width;
+        desc.Height = info.height;
+        desc.ArraySize = 1;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        if (info.isDepth()) {
+            desc.MipLevels = 1;
+            desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+            if (info.format == GL_DEPTH_COMPONENT16) {
+                desc.Format = DXGI_FORMAT_R16_TYPELESS;
+                image.depthView = DXGI_FORMAT_D16_UNORM;
+                image.sampledView = DXGI_FORMAT_R16_UNORM;
+            } else if (info.format == GL_DEPTH_COMPONENT24 || info.format == GL_DEPTH24_STENCIL8) {
+                desc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+                image.depthView = DXGI_FORMAT_D24_UNORM_S8_UINT;
+                image.sampledView = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+            } else {
+                desc.Format = DXGI_FORMAT_R32_TYPELESS;
+                image.depthView = DXGI_FORMAT_D32_FLOAT;
+                image.sampledView = DXGI_FORMAT_R32_FLOAT;
+            }
+            if (info.renderbuffer)
+                image.sampledView = DXGI_FORMAT_UNKNOWN;
         } else {
-            desc.Format=info.format==GL_RGB10_A2?DXGI_FORMAT_R10G10B10A2_UNORM:info.format==GL_RG32UI?DXGI_FORMAT_R32G32_UINT:DXGI_FORMAT_R8G8B8A8_UNORM;
-            sampleFormat=desc.Format;desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
+            desc.MipLevels = 1 + std::min(info.maxLevel, mipCount(info.width, info.height) - 1);
+            desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+            desc.Format = info.format == GL_RGB10_A2 ? DXGI_FORMAT_R10G10B10A2_UNORM
+                : info.format == GL_RG32UI ? DXGI_FORMAT_R32G32_UINT : DXGI_FORMAT_R8G8B8A8_UNORM;
+            image.sampledView = desc.Format;
         }
+        if (image.sampledView != DXGI_FORMAT_UNKNOWN)
+            desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+        return image;
+    }
+    Image makeImage(const ImageDescription& storage) {
+        Image result;
+        result.description = storage.texture;
+        result.depth = storage.depthView != DXGI_FORMAT_UNKNOWN;
+        result.sampleable = storage.sampledView != DXGI_FORMAT_UNKNOWN;
+        const auto& desc = result.description;
         checkResult(device->CreateTexture2D(&desc,nullptr,&result.texture.get()),"texture allocation");
         if(result.sampleable) {
-            D3D11_SHADER_RESOURCE_VIEW_DESC view{};view.Format=sampleFormat;view.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;view.Texture2D.MipLevels=desc.MipLevels;
+            D3D11_SHADER_RESOURCE_VIEW_DESC view{};view.Format=storage.sampledView;view.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;view.Texture2D.MipLevels=desc.MipLevels;
             checkResult(device->CreateShaderResourceView(result.texture,&view,&result.view.get()),"texture view");
         }
         if(result.depth) {
-            D3D11_DEPTH_STENCIL_VIEW_DESC view{};view.Format=depthFormat;view.ViewDimension=D3D11_DSV_DIMENSION_TEXTURE2D;
+            D3D11_DEPTH_STENCIL_VIEW_DESC view{};view.Format=storage.depthView;view.ViewDimension=D3D11_DSV_DIMENSION_TEXTURE2D;
             checkResult(device->CreateDepthStencilView(result.texture,&view,&result.depthView.get()),"depth view");
         } else checkResult(device->CreateRenderTargetView(result.texture,nullptr,&result.target.get()),"color target");
         result.initialized.resize(desc.MipLevels,false);return result;
@@ -890,7 +920,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
                 checkResult(device->CreateBuffer(&readback,nullptr,&storage->readback.get()),"fragment readback");
                 Texture info;info.width=desc.Width;info.height=desc.Height;info.maxLevel=0;
                 info.format=desc.Format==DXGI_FORMAT_R10G10B10A2_UNORM?GL_RGB10_A2:GL_RGBA;
-                storage->background=makeImage(0,info);resizeFragmentNodes(*storage,capacity);fragmentLists=std::move(storage);
+                storage->background=makeImage(describeImage(info));resizeFragmentNodes(*storage,capacity);fragmentLists=std::move(storage);
             } else if(fragmentLists->capacity!=capacity)resizeFragmentNodes(*fragmentLists,capacity);
         } catch(const std::exception& error) {
             finishFragmentBindings();fragmentLists.reset();
@@ -976,11 +1006,13 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         const bool update=uploadType==TextureUpload::FullUpdate;
         if(!info.width||!info.height||level>=mipCount(info.width,info.height))throw FlycastException("Invalid Hikaru DX11 mip definition");
         auto found=images.find(id);
-        const unsigned levels=1+std::min(info.maxLevel,mipCount(info.width,info.height)-1);
-        const bool depth=(id&0x80000000u)||info.format==GL_DEPTH_COMPONENT||info.format==GL_DEPTH_COMPONENT16||info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8;
-        const DXGI_FORMAT expected=depth?(info.format==GL_DEPTH_COMPONENT16?DXGI_FORMAT_R16_TYPELESS:info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH24_STENCIL8?DXGI_FORMAT_R24G8_TYPELESS:DXGI_FORMAT_R32_TYPELESS):
-            info.format==GL_RGB10_A2?DXGI_FORMAT_R10G10B10A2_UNORM:info.format==GL_RG32UI?DXGI_FORMAT_R32G32_UINT:DXGI_FORMAT_R8G8B8A8_UNORM;
-        const bool compatible=found!=images.end()&&found->second.description.Width==info.width&&found->second.description.Height==info.height&&found->second.description.Format==expected&&found->second.description.MipLevels==(depth?1:levels);
+        const auto storage = describeImage(info);
+        const bool depth = storage.depthView != DXGI_FORMAT_UNKNOWN;
+        const bool compatible = found != images.end()
+            && found->second.description.Width == info.width && found->second.description.Height == info.height
+            && found->second.description.Format == storage.texture.Format
+            && found->second.description.BindFlags == storage.texture.BindFlags
+            && found->second.description.MipLevels == storage.texture.MipLevels;
         const size_t pixelBytes=info.format==GL_RG32UI?8:4;
         const unsigned width=std::max(1u,info.width>>level),height=std::max(1u,info.height>>level);
         if(pixels&&bytes!=size_t(width)*height*pixelBytes)throw FlycastException("Invalid Hikaru DX11 texture byte count");
@@ -991,7 +1023,7 @@ IntegerResult clearInteger(){IntegerResult result;result.color=uint2(color.xy);r
         // UAV binding intact while unrelated texture storage changes.
         if(!fragmentCollectActive)unbindTargets();
         else bindingsDirty=true;
-        if(!compatible){images.erase(id);images.emplace(id,makeImage(id,info));}
+        if(!compatible){images.erase(id);images.emplace(id,makeImage(storage));}
         auto& target=image(id);if(level>=target.description.MipLevels)throw FlycastException("Hikaru DX11 mip exceeds texture storage");
         if(pixels) {
             if(depth)throw FlycastException("Hikaru DX11 CPU depth uploads are unsupported");

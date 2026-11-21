@@ -4,6 +4,8 @@
 #pragma once
 #include "cfg/option.h"
 #include <array>
+#include <map>
+#include <string>
 #include <string_view>
 
 namespace artwork {
@@ -35,7 +37,8 @@ inline constexpr u32 metadataMedia = 1u << 30;
 // Basic icons and hover details consume only covers, miximages, title logos and
 // metadata. Optional media browsers must not expand automatic download requirements.
 inline constexpr u32 basicMedia = coverMedia | (1u << 1) | (1u << 2) | metadataMedia;
-// The single name-to-bit mapping for requirements, provider queues and future media types.
+bool needsImages(u32 selection, u32 checked, const std::map<std::string, std::string>& cached);
+
 inline u32 mediaBit(std::string_view source)
 {
 	if (source.empty() || source == "default") return coverMedia;

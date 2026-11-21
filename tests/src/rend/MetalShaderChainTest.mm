@@ -62,6 +62,16 @@ protected:
 		requestShaderChainReload();
 		prepareShaderCompilation(); markShaderCompilationDrawn(); advanceShaderCompilationFrame();
 	}
+	id<MTLTexture> sceneDepth(float value) {
+		MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:8 height:8 mipmapped:NO];
+		desc.usage = MTLTextureUsageShaderRead;
+		desc.storageMode = metalCpuTextureStorageMode(device);
+		id<MTLTexture> depth = [device newTextureWithDescriptor:desc];
+		std::array<float,64> values;
+		values.fill(value);
+		[depth replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:values.data() bytesPerRow:32];
+		return depth;
+	}
 	id<MTLTexture> render(const ShaderFrameInfo& frame = {8,8,8,8}, id<MTLTexture> depth = nil) {
 		id<MTLTexture> output = nil;
 		if (!chain->render(input, depth, frame, output, transformed, fullPresentation))
@@ -167,18 +177,14 @@ TEST_F(MetalShaderChainTest, UsesDepthAndRecoversFromMissingSceneDepth)
 	id<MTLTexture> output = nil;
 	EXPECT_FALSE(chain->render(input, nil, {8,8,8,8}, output, transformed, fullPresentation));
 	EXPECT_TRUE(getShaderChainStatus().frameError);
-	MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:8 height:8 mipmapped:NO];
-	desc.usage = MTLTextureUsageShaderRead; desc.storageMode = metalCpuTextureStorageMode(device);
-	id<MTLTexture> depth = [device newTextureWithDescriptor:desc]; ASSERT_TRUE(depth != nil);
-	std::array<float,64> values; values.fill(0.25f);
-	[depth replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:values.data() bytesPerRow:32];
+	id<MTLTexture> depth = sceneDepth(0.25f); ASSERT_TRUE(depth != nil);
 	ShaderFrameInfo frame {8,8,8,8}; frame.presentation = {12,8,2,0,8,8,{0,0,0,1}};
 	output = render(frame,depth);
 	EXPECT_NEAR(64, pixel(output,4,4)[0], 1); EXPECT_EQ(0, pixel(output,0,4)[0]);
 	EXPECT_FALSE(getShaderChainStatus().frameError);
 
 	// The regular scene renderer stores depth independently of stencil on the same queue.
-	desc.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+	MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float_Stencil8 width:8 height:8 mipmapped:NO];
 	desc.storageMode = MTLStorageModePrivate;
 	desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
 	depth = [device newTextureWithDescriptor:desc]; ASSERT_TRUE(depth != nil);
@@ -200,13 +206,20 @@ TEST_F(MetalShaderChainTest, UsesDepthAndRecoversFromMissingSceneDepth)
 
 TEST_F(MetalShaderChainTest, ConvertsIntegerComputeOutputsWithTypedReads)
 {
-	for (bool signedValues : { false, true }) {
-		const std::string type = signedValues ? "i" : "u";
-		const auto shader = write("integer.slang", "#version 450\n#pragma stage compute\n"
-				"layout(local_size_x=4,local_size_y=4) in;\nlayout(rgba32" + type + ",binding=0) uniform " + type + "image2D Result;\n"
-				"void main() { imageStore(Result,ivec2(gl_GlobalInvocationID.xy)," + type + "vec4(1,0,1,1)); }");
+	const struct {
+		const char *filename;
+		std::string format, type, values;
+		std::array<int,4> expected;
+	} cases[] = {
+		{ "unsigned.slang", "rgba32ui", "u", "1,0,1,1", {255,0,255,255} },
+		{ "signed.slang", "rgba32i", "i", "-1,1,0,1", {0,255,0,255} },
+	};
+	for (const auto& test : cases) {
+		const auto shader = write(test.filename, "#version 450\n#pragma stage compute\n"
+				"layout(local_size_x=4,local_size_y=4) in;\nlayout(" + test.format + ",binding=0) uniform " + test.type + "image2D Result;\n"
+				"void main() { imageStore(Result,ivec2(gl_GlobalInvocationID.xy)," + test.type + "vec4(" + test.values + ")); }");
 		select({shader});
-		EXPECT_EQ((std::array<int,4>{255,0,255,255}), pixel(render(),1,1));
+		EXPECT_EQ(test.expected, pixel(render(),1,1)) << test.filename;
 	}
 }
 
@@ -223,11 +236,12 @@ TEST_F(MetalShaderChainTest, CompilesAndExecutesEveryBundledShader)
 {
 	std::string error;
 	ASSERT_TRUE(installBundledShaders(directory.string(), error)) << error;
+	id<MTLTexture> depth = sceneDepth(0.5f); ASSERT_TRUE(depth != nil);
 	for (const auto& file : std::filesystem::recursive_directory_iterator(directory)) {
 		if (!file.is_regular_file() || detectFormat(file.path().string()) == ShaderFormat::Unknown) continue;
 		SCOPED_TRACE(file.path().string());
 		select({file.path().string()});
-		const auto output = render();
+		const auto output = render({8,8,8,8}, depth);
 		EXPECT_EQ(shaderSelectionLabel({file.path().string()}), getShaderChainStatus().activePath);
 		// Readback waits behind the actual shader commands and checks their error
 		// status. Artistic effects may legitimately produce black at this size.

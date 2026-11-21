@@ -21,7 +21,7 @@ public:
 	{
 		if (wait && last_time.time_since_epoch() != the_clock::duration::zero())
 		{
-			auto fduration = std::chrono::nanoseconds(1'000'000'000LL * samples / 44100);
+			auto fduration = std::chrono::nanoseconds(1'000'000'000LL * samples / audio::OutputSampleRate);
 			auto duration = fduration - (the_clock::now() - last_time);
 			if (duration > std::chrono::nanoseconds::zero())
 				std::this_thread::sleep_for(duration);

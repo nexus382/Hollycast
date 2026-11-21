@@ -519,11 +519,13 @@ bool MetalShaderChain::Impl::update()
 			throw std::runtime_error(error);
 		applyShaderChainParameterValues(chain, config::PostProcessShaderParameters.get());
 		std::vector<Program> candidate;
+		const auto history = resolveShaderHistory(chain);
 		const auto requirements = resolveShaderPassOutputMipmaps(chain);
 		for (size_t index = 0; index < chain.passes.size(); ++index) {
 			try { candidate.push_back(compile(chain, index)); }
 			catch (const std::exception& e) { throw std::runtime_error(chain.passes[index].sourcePath + ": " + e.what()); }
 			candidate.back().mipmaps = requirements[index];
+			candidate.back().historyDepth = history.passFrames[index];
 		}
 		if (!nearest) nearest = sampler({});
 		if (!linear) { ShaderPassSampler s; s.minLinear = s.magLinear = true; linear = sampler(s); }
@@ -561,20 +563,8 @@ bool MetalShaderChain::Impl::update()
 		[upload commit]; [upload waitUntilCompleted];
 		if (upload.status != MTLCommandBufferStatusCompleted)
 			throw std::runtime_error(metalErrorMessage("Metal shader texture upload failed", upload.error));
-		uint32_t candidateHistoryDepth = 0;
-		for (const auto& pass : chain.passes) {
-			for (const auto& input : pass.inputs)
-				if (input.kind == ShaderInputKind::History || input.kind == ShaderInputKind::Feedback) {
-					const uint32_t count = input.kind == ShaderInputKind::Feedback ? 2 : input.historyOffset + 1;
-					if (input.sourcePass == InvalidShaderPass) candidateHistoryDepth = std::max(candidateHistoryDepth, count);
-					else candidate.at(input.sourcePass).historyDepth = std::max(candidate.at(input.sourcePass).historyDepth, count);
-				}
-			for (const auto& output : pass.outputs)
-				if (output.previousFrame && output.previousPass != InvalidShaderPass)
-					candidate.at(output.previousPass).historyDepth = std::max(2u, candidate.at(output.previousPass).historyDepth);
-		}
 		programs = std::move(candidate); lookups = std::move(candidateLookups); parameters = std::move(chain.parameters);
-		historyDepth = candidateHistoryDepth;
+		historyDepth = history.sourceFrames;
 		resetTargets();
 		renderedFrames = 0;
 		activePath = shaderSelectionLabel(requested);

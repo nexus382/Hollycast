@@ -94,6 +94,7 @@ endif()
 
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
+        src/oslib/VmuPathTest.cpp
         src/DcnetProbeTest.cpp
         src/network/HttpTimeoutTest.cpp
         src/ui/SetupChecklistPopupTest.cpp
@@ -114,7 +115,8 @@ endif()
 
 if(USE_METAL)
     target_sources(${PROJECT_NAME} PRIVATE src/rend/MetalShaderChainTest.mm)
-    set_source_files_properties(src/rend/MetalShaderChainTest.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(src/rend/MetalShaderChainTest.mm TARGET_DIRECTORY ${PROJECT_NAME}
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 
 # Hikaru bring-up checks also run without the rest of the emulator's dependencies.

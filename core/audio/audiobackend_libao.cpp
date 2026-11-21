@@ -17,7 +17,7 @@ public:
 		ao_sample_format aoformat {};
 		aoformat.bits = 16;
 		aoformat.channels = 2;
-		aoformat.rate = 44100;
+		aoformat.rate = audio::OutputSampleRate;
 		aoformat.byte_format = AO_FMT_LITTLE;
 
 		aodevice = ao_open_live(ao_default_driver_id(), &aoformat, NULL); // Live output

@@ -345,6 +345,9 @@ TEST(PostProcessingChainTest, ResolvesAbsolutePassHistoryAndFeedbackSamplers)
 	EXPECT_EQ(3u, chain.passes[2].inputs[2].historyOffset);
 	EXPECT_EQ(postprocess::ShaderInputKind::Feedback, chain.passes[2].inputs[3].kind);
 	EXPECT_EQ(1u, chain.passes[2].inputs[3].sourcePass);
+	const auto history = postprocess::resolveShaderHistory(chain);
+	EXPECT_EQ(4u, history.sourceFrames);
+	EXPECT_EQ((std::vector<uint32_t>{1, 2, 1}), history.passFrames);
 }
 
 TEST(PostProcessingChainTest, ParsesCrLfRetroArchPresetAndCommaSeparatedParameters)
@@ -2704,6 +2707,9 @@ TEST(PostProcessingChainTest, PreservesComputeTextureVersionsAndDispatchGroupCou
 	EXPECT_TRUE(first.outputs[0].previousFrame);
 	EXPECT_EQ(0u, second.outputs[0].previousPass);
 	EXPECT_FALSE(second.outputs[0].previousFrame);
+	const auto history = postprocess::resolveShaderHistory(chain);
+	EXPECT_EQ(0u, history.sourceFrames);
+	EXPECT_EQ((std::vector<uint32_t>{1, 2, 1}), history.passFrames);
 	ASSERT_EQ(1u, chain.passes[2].inputs.size());
 	EXPECT_EQ(1u, chain.passes[2].inputs[0].sourcePass);
 	postprocess::ShaderFrameInfo frame { 640, 480, 1280, 720, 3 };

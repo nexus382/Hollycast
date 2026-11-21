@@ -30,3 +30,4 @@ extern ImFont *settingsIconFont;
 extern ImFont *aboutAsciiFont;
 
 void gui_loadFonts();
+void gui_resetFontReferences();

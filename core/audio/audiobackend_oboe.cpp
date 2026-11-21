@@ -91,7 +91,7 @@ public:
 				->setSharingMode(oboe::SharingMode::Exclusive)
 				->setFormat(oboe::AudioFormat::I16)
 				->setChannelCount(oboe::ChannelCount::Stereo)
-				->setSampleRate(44100)
+				->setSampleRate(audio::OutputSampleRate)
 				->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::High)
 				->setFramesPerCallback(SAMPLE_COUNT)
 				->setDataCallback(&audioCallback)

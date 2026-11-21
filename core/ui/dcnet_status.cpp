@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "dcnet_status.h"
+#include "imgread/disc_image.h"
 #include "json.hpp"
 
 #include <algorithm>
@@ -97,13 +98,10 @@ std::string normalizeTitle(const std::string& title)
 	const auto dot = value.find_last_of('.');
 	if (dot != std::string::npos)
 	{
-		const std::string extension = value.substr(dot);
-		for (const char *supported : { ".chd", ".cdi", ".gdi", ".cue", ".iso", ".zip", ".7z", ".bin", ".m3u" })
-			if (extension == supported)
-			{
-				value.resize(dot);
-				break;
-			}
+		const auto extension = std::string_view(value).substr(dot + 1);
+		if (discimage::supportsExtension(extension) || extension == "iso" || extension == "zip"
+				|| extension == "7z" || extension == "bin" || extension == "m3u")
+			value.resize(dot);
 	}
 	std::string key;
 	for (size_t i = 0; i < value.size(); ++i)

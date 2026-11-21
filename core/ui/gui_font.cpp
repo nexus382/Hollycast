@@ -318,9 +318,16 @@ static void loadFonts(const std::vector<FontEntry>& entries, const ImFontConfig&
 	}
 }
 
+void gui_resetFontReferences()
+{
+	boldFont = largeFont = aboutAsciiFont = nullptr;
+	settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
+}
+
 void gui_loadFonts()
 {
 	ImGuiIO& io = ImGui::GetIO();
+	gui_resetFontReferences();
 	io.Fonts->Clear();
 	io.Fonts->SetFontLoader(ImGuiFreeType::GetFontLoader());
 

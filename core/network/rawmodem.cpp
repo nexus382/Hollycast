@@ -24,7 +24,6 @@
 #include "util/tsqueue.h"
 #include "oslib/i18n.h"
 #include "oslib/oslib.h"
-#include "cfg/cfg.h"
 
 // Inspired by serialbridge.cpp by awarmplace (https://github.com/awarmplace)
 
@@ -153,8 +152,6 @@ private:
 	std::thread thread;
 	std::unique_ptr<asio::io_context> io_context;
 	std::unique_ptr<GameSocket> gameSocket;
-
-	friend class RawModemService;
 };
 static RawModemThread thread;
 
@@ -162,11 +159,7 @@ void RawModemThread::run()
 {
 	toModem.clear();
 	try {
-#ifndef LIBRETRO
-		connect(config::loadStr("network", "DCNetServer", "dcnet.flyca.st"));
-#else
-		connect("dcnet.flyca.st");
-#endif
+		connect(dcnet::serverHostname());
 		io_context->run();
 	} catch (const FlycastException& e) {
 		ERROR_LOG(NETWORK, "RawModem connection error: %s", e.what());

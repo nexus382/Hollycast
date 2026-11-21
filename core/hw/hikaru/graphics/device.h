@@ -73,8 +73,15 @@ struct Texture {
     unsigned maxLevel = 1000;
     float lodBias = 0;
     uint64_t revision = 0;
+    bool renderbuffer = false;
+
+    bool isDepth() const {
+        return renderbuffer || format == GL_DEPTH_COMPONENT || format == GL_DEPTH_COMPONENT16
+            || format == GL_DEPTH_COMPONENT24 || format == GL_DEPTH_COMPONENT32
+            || format == GL_DEPTH_COMPONENT32F || format == GL_DEPTH24_STENCIL8;
+    }
 };
-// Distinguish TexImage storage definitions from full level-zero replacements.
+// FullUpdate replaces level zero in existing storage.
 enum class TextureUpload : uint8_t { Definition, FullUpdate };
 // Immutable converted vertices can be shared by repeated transparency passes.
 // Backends consume their bytes synchronously and retain only bounded lookups.

@@ -110,7 +110,7 @@ public:
 			return false;
 		}
 
-		FillOutASBDForLPCM(format, 44100,
+		FillOutASBDForLPCM(format, audio::OutputSampleRate,
 						   2, 16, 16, false, false, false);
 		err = AudioUnitSetProperty(audioUnit,
 								   kAudioUnitProperty_StreamFormat,

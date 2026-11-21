@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <regex>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1032,6 +1033,14 @@ bool GlShaderChain::compileCandidate(const postprocess::ShaderChain& chain,
 
 bool GlShaderChain::activate(const postprocess::ShaderChain& chain, std::string& error)
 {
+	postprocess::ShaderHistoryRequirements history;
+	try {
+		history = postprocess::resolveShaderHistory(chain);
+	} catch (const std::out_of_range&) {
+		error = "OpenGL shader history references an unavailable pass.";
+		return false;
+	}
+
 	std::vector<Program> candidate;
 	if (!compileCandidate(chain, candidate, error))
 		return false;
@@ -1045,34 +1054,15 @@ bool GlShaderChain::activate(const postprocess::ShaderChain& chain, std::string&
 		return false;
 	}
 
+	for (size_t index = 0; index < candidate.size(); ++index)
+		candidate[index].historyDepth = history.passFrames[index];
 	deletePrograms(programs);
 	deleteLookupTextures();
 	programs = std::move(candidate);
 	renderedFrames = 0;
 	hostParameters = chain.parameters;
 	lookupTextures = std::move(candidateLookupTextures);
-	sourceHistoryDepth = 1;
-	needsSourceHistory = false;
-	for (const postprocess::ShaderPass& pass : chain.passes)
-		for (const postprocess::ShaderPassInput& input : pass.inputs) {
-			if (input.kind != postprocess::ShaderInputKind::History
-					&& input.kind != postprocess::ShaderInputKind::Feedback)
-				continue;
-			const uint32_t requiredDepth = input.kind == postprocess::ShaderInputKind::Feedback
-					? 2u : input.historyOffset + 1;
-			if (input.sourcePass == postprocess::InvalidShaderPass) {
-				sourceHistoryDepth = std::max(sourceHistoryDepth, requiredDepth);
-				needsSourceHistory = true;
-			}
-			else {
-				programs[input.sourcePass].historyDepth =
-						std::max(programs[input.sourcePass].historyDepth, requiredDepth);
-			}
-		}
-	for (const auto& program : programs)
-		for (const auto& output : program.pass.outputs)
-			if (output.previousFrame && output.previousPass != postprocess::InvalidShaderPass)
-				programs[output.previousPass].historyDepth = std::max(2u, programs[output.previousPass].historyDepth);
+	sourceHistoryDepth = history.sourceFrames;
 	targets.clear();
 	stencilTargets.clear();
 	displayInput.reset();
@@ -1484,7 +1474,7 @@ GlFramebuffer *GlShaderChain::render(GLuint sourceTexture, const postprocess::Sh
 			}
 		}
 	}
-	if (needsSourceHistory) {
+	if (sourceHistoryDepth != 0) {
 		if (!postprocess::accumulateShaderTargetBytes(passFrame.sourceWidth, passFrame.sourceHeight,
 				postprocess::ShaderTargetFormat::Default, {}, false, sourceHistoryDepth,
 				targetBytes, targetBudgetError)) {
@@ -1916,7 +1906,6 @@ void GlShaderChain::term()
 	configuredGeneration = 0;
 	parameterGeneration = 0;
 	activePath.clear();
-	sourceHistoryDepth = 1;
-	needsSourceHistory = false;
+	sourceHistoryDepth = 0;
 	postprocess::reportShaderChainStatus({}, {});
 }
