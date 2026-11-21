@@ -794,6 +794,8 @@ void gui_request_exit_to_library()
 	{
 		heldNetplayPath = settings.content.path;
 		openingHeldNetplayLibrary = true;
+		// Keep pumping gameplay frames until GGPO acknowledges the hold at a frame boundary.
+		gui_setState(GuiState::Closed);
 		return;
 	}
 	if (dc_savestateAllowed() && config::AutoSaveState)
