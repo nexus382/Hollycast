@@ -18,6 +18,7 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "scraper.h"
+#include "artwork_media.h"
 #include "ui/game_scanner.h"
 #include "oslib/http_client.h"
 #include "oslib/storage.h"
@@ -34,6 +35,23 @@
 #include <mutex>
 #include <random>
 #include <memory>
+
+bool artwork::needsImages(u32 selection, u32 checked, const std::map<std::string, std::string>& cached)
+{
+	if ((checked & selection) != selection)
+		return true;
+	// A checked category without a path was unavailable. A recorded path that
+	// disappears can be downloaded again.
+	for (size_t i = 0; i < mediaTypes.size(); ++i)
+	{
+		if (!(selection & (1u << i)))
+			continue;
+		const auto image = cached.find(mediaTypes[i].name);
+		if (image != cached.end() && !file_exists(image->second))
+			return true;
+	}
+	return false;
+}
 
 void GameBoxart::applyMetadata(GameMedia& media) const
 {

@@ -18,6 +18,7 @@
     along with reicast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui_util.h"
+#include "imgread/disc_image.h"
 #include "theme_artwork.h"
 #include "types.h"
 #include "stdclass.h"
@@ -37,7 +38,6 @@
 #include "imgui_stdlib.h"
 #include "gui_font.h"
 #include "IconsFontAwesome6.h"
-#include "stdclass.h"
 #include "rend/osd.h"
 #include "stbi.h"
 #include "util/worker_thread.h"
@@ -240,8 +240,7 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 			error_message.clear();
 
 			auto isSupportedGameExtension = [](const std::string& extension) {
-				return extension == "zip" || extension == "7z" || extension == "chd"
-						|| extension == "gdi" || extension == "cdi" || extension == "cue"
+				return extension == "zip" || extension == "7z" || discimage::supportsExtension(extension)
 						|| (!config::HideLegacyNaomiRoms
 								&& (extension == "bin" || extension == "lst" || extension == "dat"));
 			};

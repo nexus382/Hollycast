@@ -13,7 +13,6 @@
 
 namespace
 {
-constexpr u32 SampleRate = 44100;
 using Clock = std::chrono::steady_clock;
 constexpr auto IdleTimeout = std::chrono::seconds(3);
 constexpr u32 LeadFrames = 2048; // Sent ahead of playback, to ride out a slow frame.
@@ -45,7 +44,7 @@ bool decodeUiSound(const u8* data, size_t size, std::vector<s16>& stereo)
 			return false;
 		if (std::memcmp(data + pos, "fmt ", 4) == 0)
 		{
-			if (chunkSize < 16 || readLe(data + body, 2) != 1 || readLe(data + body + 4, 4) != SampleRate
+			if (chunkSize < 16 || readLe(data + body, 2) != 1 || readLe(data + body + 4, 4) != audio::OutputSampleRate
 					|| readLe(data + body + 14, 2) != 16)
 				return false;
 			channels = readLe(data + body + 2, 2);
@@ -94,7 +93,7 @@ u32 UiSoundQueue::take(double elapsedSeconds, s16* stereo, u32 maxFrames)
 {
 	if (empty())
 		return 0;
-	const u64 due = static_cast<u64>(elapsedSeconds * SampleRate) + LeadFrames;
+	const u64 due = static_cast<u64>(elapsedSeconds * audio::OutputSampleRate) + LeadFrames;
 	if (framesTaken >= due)
 		return 0;
 	const u32 frames = static_cast<u32>(std::min<size_t>(maxFrames, (pending.size() - position) / 2));

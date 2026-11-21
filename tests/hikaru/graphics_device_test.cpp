@@ -410,6 +410,22 @@ void testFamilyAttachments(RecordingBackend& backend, Device& device) {
           &&backend.lastClearMask==GL_COLOR_BUFFER_BIT,"metadata clear touched the family color/depth target");
     hikaru_glDrawBuffers(1,buffers);hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();
     check(!backend.lastDraw.metadata,"single-target draw retained the family MRT attachment");
+    GLuint renderbuffer=0;
+    hikaru_glGenRenderbuffers(1,&renderbuffer);
+    hikaru_glBindRenderbuffer(GL_RENDERBUFFER,renderbuffer);
+    hikaru_glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH_COMPONENT16,8,8);
+    hikaru_glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,renderbuffer);
+    hikaru_glClear(GL_DEPTH_BUFFER_BIT);
+    device.checkError();
+    const auto depthTarget=backend.lastClear.depth;
+    check(backend.infos.at(depthTarget).renderbuffer && !backend.infos.at(images[2]).renderbuffer,
+          "backend could not distinguish the renderbuffer from the sampleable depth texture");
+    hikaru_glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_ATTACHMENT,GL_RENDERBUFFER,0);
+    hikaru_glClear(GL_DEPTH_BUFFER_BIT);
+    hikaru_glDeleteRenderbuffers(1,&renderbuffer);
+    device.checkError();
+    check(backend.lastClear.depth==0 && backend.erased.back()==depthTarget,
+          "detaching or deleting the renderbuffer used a different object name");
     hikaru_glBindFramebuffer(GL_FRAMEBUFFER,0);
     makeProgram("#define FAMILY_RESOLVE 1\n// u_front u_back u_layer1 u_layer2\n");
     hikaru_glDrawArrays(GL_TRIANGLES,0,3);device.checkError();

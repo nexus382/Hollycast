@@ -19,6 +19,7 @@
 */
 #include "cfg/cfg.h"
 #include "stdclass.h"
+#include "imgread/disc_image.h"
 #include <cstdio>
 #include <cstring>
 
@@ -208,8 +209,7 @@ void parseCommandLine(int argc, const char * const argv[])
 			continue;
 		}
 		std::string extension = get_file_extension(argv[i]);
-		if (extension == "cdi" || extension == "chd"
-				|| extension == "gdi"|| extension == "cue")
+		if (discimage::supportsExtension(extension))
 		{
 			INFO_LOG(COMMON, "Using '%s' as CD image", argv[i]);
 			settings.content.path = argv[i];

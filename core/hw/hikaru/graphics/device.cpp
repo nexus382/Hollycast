@@ -12,6 +12,12 @@
 #include <tuple>
 #include <type_traits>
 namespace hikaru::graphics {
+namespace {
+GLuint renderbufferTextureId(GLuint name) {
+    return name | 0x80000000u;
+}
+}
+
 thread_local Device* Device::active;
 Device::Device(std::unique_ptr<Backend> backend) : backend(std::move(backend)) {
     if (!this->backend) throw std::runtime_error("Hikaru graphics backend is unavailable");
@@ -417,7 +423,7 @@ void Device::CullFace(GLenum mode){state.cullFace=mode;}
 void Device::DeleteBuffers(GLsizei n,const GLuint* ids){if(n)invalidateGeometry();for(int i=0;i<n;i++)buffers.erase(ids[i]);}
 void Device::DeleteFramebuffers(GLsizei n,const GLuint* ids){for(int i=0;i<n;i++)targets.erase(ids[i]);}
 void Device::DeleteProgram(GLuint id){programs.erase(id);}
-void Device::DeleteRenderbuffers(GLsizei n,const GLuint* ids){flushDraw();for(int i=0;i<n;i++){auto id=ids[i]|0x80000000u;textures.erase(id);backend->eraseTexture(id);}}
+void Device::DeleteRenderbuffers(GLsizei n,const GLuint* ids){flushDraw();for(int i=0;i<n;i++){auto id=renderbufferTextureId(ids[i]);textures.erase(id);backend->eraseTexture(id);}}
 void Device::DeleteShader(GLuint id){shaders.erase(id);}
 void Device::DeleteTextures(GLsizei n,const GLuint* ids){flushDraw();for(int i=0;i<n;i++){if(!ids[i])continue;textures.erase(ids[i]);backend->eraseTexture(ids[i]);}}
 void Device::DeleteVertexArrays(GLsizei n,const GLuint* ids){if(n)invalidateGeometry();for(int i=0;i<n;i++)arrays.erase(ids[i]);}
@@ -616,7 +622,7 @@ void Device::ClearBufferuiv(GLenum buffer,GLint drawbuffer,const GLuint* value){
 }
 void Device::Enable(GLenum cap){enabled.insert(cap);}
 void Device::EnableVertexAttribArray(GLuint i){arrays.at(vao).at(i).enabled=true;}
-void Device::FramebufferRenderbuffer(GLenum,GLenum attachment,GLenum,GLuint id){if(attachment!=GL_DEPTH_ATTACHMENT)throw std::runtime_error("Unsupported Hikaru depth attachment");targets.at(framebuffer)[1]=id? id|0x80000000u:0;}
+void Device::FramebufferRenderbuffer(GLenum,GLenum attachment,GLenum,GLuint id){if(attachment!=GL_DEPTH_ATTACHMENT)throw std::runtime_error("Unsupported Hikaru depth attachment");targets.at(framebuffer)[1]=id ? renderbufferTextureId(id) : 0;}
 void Device::FramebufferTexture2D(GLenum,GLenum attachment,GLenum,GLuint id,GLint level){if(level)throw std::runtime_error("Unsupported Hikaru target mip level");unsigned index=attachment==GL_DEPTH_ATTACHMENT?1:attachment==GL_COLOR_ATTACHMENT0?0:attachment==GL_COLOR_ATTACHMENT1?2:3;
     if(index==3)throw std::runtime_error("Unsupported Hikaru target attachment");
     targets.at(framebuffer)[index]=id;}
@@ -724,7 +730,17 @@ void Device::LinkProgram(GLuint id) {
 void Device::PixelStorei(GLenum name,GLint v){pixelStore[name]=v;}
 void Device::PolygonOffset(GLfloat f,GLfloat u){state.biasFactor=f;state.biasUnits=u;}
 void Device::ReadPixels(GLint x,GLint y,GLsizei w,GLsizei h,GLenum format,GLenum type,void* data){flushDraw();if(format!=GL_RGBA||type!=GL_UNSIGNED_BYTE)throw std::runtime_error("Unsupported Hikaru readback format");backend->readPixels(targets.at(readFramebuffer)[0],x,y,w,h,static_cast<uint8_t*>(data));}
-void Device::RenderbufferStorage(GLenum,GLenum format,GLsizei w,GLsizei h){flushDraw();auto id=renderbuffer|0x80000000u;auto& t=textures[id];t.width=w;t.height=h;t.format=format;++t.revision;backend->texture(id,t,0,TextureUpload::Definition,nullptr,0);}
+void Device::RenderbufferStorage(GLenum,GLenum format,GLsizei w,GLsizei h) {
+    flushDraw();
+    const auto id = renderbufferTextureId(renderbuffer);
+    Texture& texture = textures[id];
+    texture.width = w;
+    texture.height = h;
+    texture.format = format;
+    texture.renderbuffer = true;
+    ++texture.revision;
+    backend->texture(id,texture,0,TextureUpload::Definition,nullptr,0);
+}
 void Device::Scissor(GLint x,GLint y,GLsizei w,GLsizei h){state.scissor={x,y,w,h};}
 void Device::ShaderSource(GLuint id,GLsizei count,const GLchar* const* strings,const GLint* lengths){auto& s=shaders.at(id);s.clear();for(int i=0;i<count;i++)s.append(strings[i],lengths&&lengths[i]>=0?size_t(lengths[i]):std::strlen(strings[i]));}
 void Device::unpack(int w,int h,GLenum format,GLenum type,const void* data,std::vector<uint8_t>& out) const {

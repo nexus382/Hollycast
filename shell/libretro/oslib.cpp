@@ -65,7 +65,7 @@ std::string getVmuPath(const std::string& port, bool save)
 		return vmuDir + std::string(content_name) + "." + port + ".bin";
 	}
 	else {
-		return std::string(game_dir_no_slash) + std::string(PATH_DEFAULT_SLASH()) + "vmu_save_" + port + ".bin";
+		return std::string(game_dir_no_slash) + std::string(PATH_DEFAULT_SLASH()) + defaultVmuFileName(port);
 	}
 }
 

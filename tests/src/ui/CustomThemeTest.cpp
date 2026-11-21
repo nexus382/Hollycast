@@ -611,13 +611,19 @@ TEST_F(ThemeFilesTest, RuntimeReloadResetsStyleBeforeScalingAndPreservesCustomIn
 		}
 	} restore;
 	ImGui::CreateContext();
-	set_user_config_dir(path);
-	ASSERT_TRUE(config::open());
 	settings.display.uiScale = 2.f;
 	config::UITheme = 0;
 	config::UICustomTheme = "";
 	// App preset inheritance is independent of the default library's palette.
 	config::CustomTheme = "";
+	const auto firstHome = root / "first-home";
+	ASSERT_TRUE(std::filesystem::create_directory(firstHome));
+	set_user_config_dir(firstHome.string());
+	ASSERT_TRUE(config::open());
+	applyCurrentTheme();
+
+	set_user_config_dir(path);
+	ASSERT_TRUE(config::open());
 	write("themes/builtin/Dark.json", R"({"colors":{"success":"#35C875"}})");
 	write("themes/builtin/Light.json", R"({"style":{"FrameRounding":9}})");
 	write("themes/.builtin-migration-pending", "malformed migration journal");

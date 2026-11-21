@@ -24,16 +24,16 @@ public final class AudioBackend {
     }
 
     // Called by native code
-    private boolean init(int bufferSize)
+    private boolean init(int bufferSize, int sampleRate)
     {
         if (bufferSize == 0)
-            bufferSize = AudioTrack.getMinBufferSize(44100, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT);
+            bufferSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT);
         else
             bufferSize *= 4;
 
         audioTrack = new AudioTrack(
                 AudioManager.STREAM_MUSIC,
-                44100,
+                sampleRate,
                 AudioFormat.CHANNEL_OUT_STEREO,
                 AudioFormat.ENCODING_PCM_16BIT,
                 bufferSize,
@@ -48,7 +48,7 @@ public final class AudioBackend {
         size = bufferSize / 4;
         writePosition = 0;
 
-        Log.i("audio", "Audio streaming: buffer size " + size + " samples / " + size * 1000.0 / 44100.0 + " ms");
+        Log.i("audio", "Audio streaming: buffer size " + size + " samples / " + size * 1000.0 / sampleRate + " ms");
         audioTrack.play();
 
         return true;

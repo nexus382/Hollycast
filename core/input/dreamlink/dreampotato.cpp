@@ -329,9 +329,7 @@ public:
 		msg.originAP = bus << 6;
 		msg.pushData(MFID_1_Storage);
 
-		std::string logical_port;
-		logical_port.push_back('A' + bus);
-		logical_port.push_back('1' + port);
+		const auto logical_port = hostfs::vmuSlotLabel(bus, port);
 
 		// Only send the file path if a preceding 'OnSetup()' has placed a 128KB VMU file on disk.
 		std::string path = hostfs::getVmuPath(logical_port, /*save*/ false);

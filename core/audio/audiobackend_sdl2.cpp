@@ -123,10 +123,9 @@ public:
 		conversionCapacity = 0;
 #endif
 
-		// Support 44.1KHz (native) but also upsampling to 48KHz
 		SDL_AudioSpec wav_spec, out_spec;
 		memset(&wav_spec, 0, sizeof(wav_spec));
-		wav_spec.freq = 44100;
+		wav_spec.freq = audio::OutputSampleRate;
 		wav_spec.format = AUDIO_S16;
 		wav_spec.channels = 2;
 		wav_spec.samples = SAMPLE_COUNT * 2;  // Must be power of two
@@ -134,7 +133,6 @@ public:
 		wav_spec.userdata = this;
 		needs_resampling = false;
 
-		// Try 44.1KHz which should be faster since it's native.
 		audiodev = SDL_OpenAudioDevice(NULL, 0, &wav_spec, &out_spec, 0);
 		if (audiodev == 0)
 		{
@@ -147,7 +145,7 @@ public:
 			else
 			{
 				INFO_LOG(AUDIO, "SDL2: Using resampling to 48 KHz");
-				int ret = SDL_BuildAudioCVT(&audioCvt, AUDIO_S16, 2, 44100, AUDIO_S16, 2, 48000);
+				int ret = SDL_BuildAudioCVT(&audioCvt, AUDIO_S16, 2, audio::OutputSampleRate, out_spec.format, out_spec.channels, out_spec.freq);
 				if (ret != 1 || audioCvt.needed == 0)
 				{
 					ERROR_LOG(AUDIO, "SDL2: can't build audio converter: %s", SDL_GetError());
@@ -170,7 +168,6 @@ public:
 
 	u32 push(const void* frame, u32 samples, bool wait) override
 	{
-		// Unpause the device shall it be paused.
 		if (SDL_GetAudioDeviceStatus(audiodev) != SDL_AUDIO_PLAYING)
 			SDL_PauseAudioDevice(audiodev, 0);
 

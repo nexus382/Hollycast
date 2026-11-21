@@ -11,6 +11,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         i18n.cpp
         i18n.h
         oslib.h
+        vmu_path.h
         resources.cpp
         resources.h
         storage.cpp
@@ -21,6 +22,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
             oslib.cpp
+            vmu_path.cpp
 			cpu_usage.cpp
 			cpu_usage.h
             gpu_memory.cpp
