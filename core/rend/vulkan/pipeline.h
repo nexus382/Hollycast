@@ -75,6 +75,7 @@ private:
 	DynamicDescSetAlloc perPolyAlloc;
 	vk::DescriptorSet perFrameDescSet = {};
 	std::unordered_map<const void *, vk::DescriptorSet> perPolyDescSets;
+	ImageDescriptorCache perImageDescSets;
 };
 
 class PipelineManager

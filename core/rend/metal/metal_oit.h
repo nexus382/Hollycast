@@ -26,7 +26,7 @@ public:
     void resolve(id<MTLCommandBuffer> command, id<MTLTexture> input, id<MTLTexture> output,
             id<MTLTexture> secondaryInput, id<MTLTexture> secondaryOutput);
     void modifiers(id<MTLCommandQueue> queue, id<MTLTexture> color, id<MTLTexture> depth,
-            const rend_context& context, TransformMatrix& matrices, const ModifierVolumeParam *params,
+            id<MTLBuffer> vertices, const rend_context& context, TransformMatrix& matrices, const ModifierVolumeParam *params,
             int first, int count, const std::function<void(id<MTLCommandBuffer>)>& track = {});
     // Call only after the command buffer that wrote the counters completes.
     bool overflowed() const;
@@ -44,6 +44,15 @@ private:
     MetalOITControl *state() const { return static_cast<MetalOITControl *>(controlBuffer.contents); }
 };
 
-// Copy one aspect of combined depth/stencil between distinct render targets.
-void metalOITCopyDepthStencilAspect(id<MTLDevice> device, id<MTLCommandBuffer> command,
-        id<MTLTexture> source, id<MTLTexture> destination, int width, int height, bool stencil);
+// Private, hazard-tracked resources used only by encoders on the renderer's queue.
+// Command buffers retain old allocations across size changes.
+class MetalOITScratch {
+public:
+    void resize(id<MTLDevice> device, int width, int height);
+    void copyDepthStencilAspect(id<MTLCommandBuffer> command, id<MTLTexture> source,
+            id<MTLTexture> destination, bool stencil);
+    id<MTLTexture> opaqueDepth = nil, resolved = nil, replayDepth = nil;
+    id<MTLTexture> secondary = nil, secondaryCopy = nil;
+private:
+    id<MTLBuffer> aspectBuffer = nil;
+};

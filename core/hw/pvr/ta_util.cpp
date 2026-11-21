@@ -57,6 +57,16 @@ static bool operator<(const IndexTrig& left, const IndexTrig& right)
 	return left.z < right.z;
 }
 
+template<typename Iterator, typename T>
+static void stableSortByDepth(Iterator first, Iterator last, float T::*depth)
+{
+	// Unordered depths also take the original sorting path.
+	if (std::adjacent_find(first, last, [depth](const T& a, const T& b) {
+		return !(a.*depth <= b.*depth);
+	}) != last)
+		std::stable_sort(first, last);
+}
+
 static float getProjectedZ(const Vertex *v, const float *mat)
 {
 	// -1 / z
@@ -130,7 +140,7 @@ void sortTriangles(rend_context& ctx, RenderPass& pass, const RenderPass& previo
 	}
 
 	//sort them
-	std::stable_sort(triangleList.begin(), triangleList.end());
+	stableSortByDepth(triangleList.begin(), triangleList.end(), &IndexTrig::z);
 
 	//Merge pids/draw cmds if two different pids are actually equal
 	for (size_t k = 1; k < triangleList.size(); k++)
@@ -254,7 +264,7 @@ void sortPolyParams(std::vector<PolyParam>& polys, int first, int end, rend_cont
 		}
 	}
 
-	std::stable_sort(&polys[first], pp_end);
+	stableSortByDepth(&polys[first], pp_end, &PolyParam::zvZ);
 }
 
 void getRegionTileAddrAndSize(u32& address, u32& size)

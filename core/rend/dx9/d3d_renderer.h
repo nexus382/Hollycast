@@ -146,6 +146,7 @@ private:
 	void setBaseScissor();
 	void prepareRttRenderTarget(u32 texAddress, int& vpWidth, int& vpHeight);
 	void readRttRenderTarget(u32 texAddress);
+	HRESULT ensureReadbackSurface(ComPtr<IDirect3DSurface9>& surface, u32 width, u32 height, D3DFORMAT format);
 	void writeFramebufferToVRAM();
 	void drawOSD();
 	TileClipping setTileClip(u32 tileclip, Rect& rect);
@@ -171,6 +172,8 @@ private:
 	ComPtr<IDirect3DSurface9> dcfbSurface;
 	ComPtr<IDirect3DTexture9> rttTexture;
 	ComPtr<IDirect3DSurface9> rttSurface;
+	ComPtr<IDirect3DSurface9> rttReadbackSurface;
+	ComPtr<IDirect3DSurface9> fbReadbackSurface;
 	ComPtr<IDirect3DSurface9> depthSurface;
 	ComPtr<IDirect3DTexture9> fbScaledTexture;
 	ComPtr<IDirect3DSurface9> fbScaledSurface;

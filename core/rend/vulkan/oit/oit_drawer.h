@@ -68,6 +68,7 @@ protected:
 		depthAttachments[0].reset();
 		depthAttachments[1].reset();
 		mainBuffers.clear();
+		scaledFB.reset();
 		descriptorSets.term();
 		maxWidth = 0;
 		maxHeight = 0;
@@ -109,7 +110,6 @@ private:
 
 	struct {
 		vk::DeviceSize indexOffset = 0;
-		vk::DeviceSize modVolOffset = 0;
 		vk::DeviceSize vertexUniformOffset = 0;
 		vk::DeviceSize fragmentUniformOffset = 0;
 		vk::DeviceSize polyParamsOffset = 0;

@@ -128,15 +128,13 @@ struct DX11OITRenderer : public DX11Renderer
 
 			createDepthTexAndView(depthTex, depthTexView, maxWidth, maxHeight, DXGI_FORMAT_R32G8X24_TYPELESS);
 		}
-		else if (!depthTex)
+		else if (!depthTex || !depthTexView)
 			createDepthTexAndView(depthTex, depthTexView, maxWidth, maxHeight, DXGI_FORMAT_R32G8X24_TYPELESS);
 	}
 
 	void resize(int width, int height) override
 	{
-		DX11Renderer::resize(width, height);
-		depthTexView.reset();
-		depthTex.reset();
+		resizeFramebuffer(width, height);
 		resizeInternal(width, height);
 	}
 
@@ -309,9 +307,14 @@ struct DX11OITRenderer : public DX11Renderer
 
 		if (!gp->isNaomi2())
 		{
-			deviceContext->Map(vtxPolyConstants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubres);
-			memcpy(mappedSubres.pData, &polyNumber, sizeof(polyNumber));
-			deviceContext->Unmap(vtxPolyConstants, 0);
+			if constexpr (pass == DX11OITShaders::OIT)
+			{
+				deviceContext->Map(vtxPolyConstants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubres);
+				memcpy(mappedSubres.pData, &polyNumber, sizeof(polyNumber));
+				deviceContext->Unmap(vtxPolyConstants, 0);
+			}
+			// The shared vertex shader declares b1 in every pass, but only OIT
+			// consumes its sequence number. Keep it bound for the debug layer.
 			deviceContext->VSSetConstantBuffers(1, 1, &vtxPolyConstants.get());
 		}
 

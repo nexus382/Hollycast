@@ -173,7 +173,7 @@ void OpenGL4Renderer::setGPState(const PolyParam *gp)
 				false,
 				false,
 				gpuPalette,
-				sampleTextureFilter,
+				Type == ListType_Punch_Through ? sampleTextureFilter : 0,
 				maxFilteredTextureSize,
 				gp->isNaomi2(),
 				pass,
@@ -632,7 +632,7 @@ void OpenGL4Renderer::drawStrips(int width, int height)
 			drawList<ListType_Punch_Through, false, Pass::Depth>(gl.rendContext->global_param_pt, previous_pass.pt_count, current_pass.pt_count - previous_pass.pt_count);
 
 			// Modifier volumes
-			if (config::ModifierVolumes)
+			if (gl.modifierVolumes)
 				drawModVols(previous_pass.mvo_count, current_pass.mvo_count - previous_pass.mvo_count);
 
 			//
@@ -684,7 +684,7 @@ void OpenGL4Renderer::drawStrips(int width, int height)
 				drawList<ListType_Translucent, true, Pass::OIT>(gl.rendContext->global_param_tr, previous_pass.tr_count, current_pass.tr_count - previous_pass.tr_count);
 
 				// Translucent modifier volumes
-				if (config::ModifierVolumes)
+				if (gl.modifierVolumes)
 				{
 					setBaseClipping();
 					if (current_pass.mv_op_tr_shared)

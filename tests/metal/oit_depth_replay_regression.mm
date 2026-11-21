@@ -25,7 +25,10 @@ fragment O fragmentMain(constant F& f [[buffer(0)]]){return {f.color,f.depth};}
  pd.colorAttachments[0].sourceAlphaBlendFactor=MTLBlendFactorOne;pd.colorAttachments[0].destinationAlphaBlendFactor=MTLBlendFactorZero;
  id<MTLRenderPipelineState>pipeline=[d newRenderPipelineStateWithDescriptor:pd error:&error];require(pipeline!=nil,"pipeline");
  MTLTextureDescriptor*td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:2 height:1 mipmapped:NO];td.usage=MTLTextureUsageRenderTarget;td.storageMode=MTLStorageModePrivate;id<MTLTexture>color=[d newTextureWithDescriptor:td];
- td.pixelFormat=MTLPixelFormatDepth32Float_Stencil8;id<MTLTexture>pre=[d newTextureWithDescriptor:td],replay=[d newTextureWithDescriptor:td],nextDepth=[d newTextureWithDescriptor:td];
+ td.pixelFormat=MTLPixelFormatDepth32Float_Stencil8;id<MTLTexture>pre=[d newTextureWithDescriptor:td],nextDepth=[d newTextureWithDescriptor:td];
+ MetalOITScratch scratch;
+ scratch.resize(d,2,1);
+ id<MTLTexture> replay=scratch.replayDepth;
  auto pass=[&](id<MTLCommandBuffer> cb,id<MTLTexture> depth,bool clearColor,bool clearDepth,bool clearStencil){MTLRenderPassDescriptor*r=[MTLRenderPassDescriptor renderPassDescriptor];
   r.colorAttachments[0].texture=color;r.colorAttachments[0].loadAction=clearColor?MTLLoadActionClear:MTLLoadActionLoad;r.colorAttachments[0].clearColor=MTLClearColorMake(0,0,0,1);r.colorAttachments[0].storeAction=MTLStoreActionStore;
   r.depthAttachment.texture=depth;r.depthAttachment.loadAction=clearDepth?MTLLoadActionClear:MTLLoadActionLoad;r.depthAttachment.clearDepth=0;r.depthAttachment.storeAction=MTLStoreActionStore;
@@ -37,14 +40,19 @@ fragment O fragmentMain(constant F& f [[buffer(0)]]){return {f.color,f.depth};}
  auto draw=[&](id<MTLRenderCommandEncoder>e,const Fragment&f,MTLScissorRect clip,id<MTLDepthStencilState>s){[e setScissorRect:clip];[e setDepthStencilState:s];[e setStencilReferenceValue:0x81];[e setFragmentBytes:&f length:sizeof(f) atIndex:0];[e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];};
  id<MTLCommandBuffer>cb=[q commandBuffer];id<MTLRenderCommandEncoder>e=pass(cb,replay,true,true,true);[e endEncoding];
  e=pass(cb,pre,true,true,true);draw(e,red,{0,0,2,1},state(true,true));draw(e,blue,{0,0,1,1},state(true,true));draw(e,green,{1,0,1,1},state(false,true));[e endEncoding];
- metalOITCopyDepthStencilAspect(d,cb,pre,replay,2,1,true);
+
+ scratch.resize(d,2,1);
+ require(scratch.replayDepth==replay,"same-size render reuses scratch textures");
+ scratch.copyDepthStencilAspect(cb,pre,replay,true);
  e=pass(cb,replay,true,false,false);draw(e,red,{0,0,2,1},state(true,false,true));draw(e,blue,{0,0,1,1},state(true,false));draw(e,green,{1,0,1,1},state(false,false));[e endEncoding];
  id<MTLBuffer> beforeNext=[d newBufferWithLength:256 options:MTLResourceStorageModeShared];
  id<MTLBlitCommandEncoder> beforeCopy=[cb blitCommandEncoder];[beforeCopy copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(2,1,1) toBuffer:beforeNext destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256];[beforeCopy endEncoding];
  // Later render passes need the prepass depth plane without its stencil bits.
- metalOITCopyDepthStencilAspect(d,cb,pre,nextDepth,2,1,false);
+ scratch.copyDepthStencilAspect(cb,pre,nextDepth,false);
  e=pass(cb,nextDepth,false,false,true); MTLDepthStencilDescriptor *nextState=[MTLDepthStencilDescriptor new];nextState.depthCompareFunction=MTLCompareFunctionGreater;nextState.depthWriteEnabled=NO;
  Fragment yellow{{1,1,0,1},.5f}; draw(e,yellow,{0,0,2,1},[d newDepthStencilStateWithDescriptor:nextState]);[e endEncoding];
+ scratch.resize(d,4,2);
+ require(scratch.replayDepth.width==4 && scratch.replayDepth!=replay,"resized render has matching scratch targets");
  id<MTLBuffer>output=[d newBufferWithLength:256 options:MTLResourceStorageModeShared];id<MTLBlitCommandEncoder>b=[cb blitCommandEncoder];[b copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(2,1,1) toBuffer:output destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256];[b endEncoding];[cb commit];[cb waitUntilCompleted];
  if(cb.status!=MTLCommandBufferStatusCompleted){std::fprintf(stderr,"GPU: %s\n",cb.error.localizedDescription.UTF8String);return 2;}
  auto*before=static_cast<const uint8_t*>(beforeNext.contents);require(before[4]==0 && before[5]==255 && before[6]==0,"visible ZWriteDis polygon keeps color");
