@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #pragma once
+#include "sample_rate.h"
 #include "types.h"
 
 #include <algorithm>

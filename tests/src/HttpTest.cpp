@@ -3,146 +3,121 @@
 #include <cstdio>
 
 #ifndef _WIN32
-#include "json.hpp"
-#include <vector>
-#include <curl/curl.h>
+#include "oslib/http_server.h"
 
-using namespace nlohmann;
+#include <optional>
+#include <strings.h>
+#include <thread>
+
+namespace
+{
+std::string header(const Request& request, const char *name)
+{
+	for (const Header& header : request.headers)
+		if (strcasecmp(header.name.c_str(), name) == 0)
+			return header.value;
+	return {};
+}
+
+class CaptureServer
+{
+	asio::io_context io;
+	HttpServer server{io, "127.0.0.1", 0};
+	std::optional<Request> received;
+	std::thread thread;
+
+public:
+	CaptureServer()
+	{
+		server.addUriHandler("/capture", [this](const Request& request, Reply& reply) {
+			received = request;
+			reply.setContent("received");
+		});
+		thread = std::thread([this] { io.run(); });
+	}
+
+	~CaptureServer() { stop(); }
+
+	std::string url() const { return "http://127.0.0.1:" + std::to_string(server.port()) + "/capture"; }
+	Request expectRequest(const char *method)
+	{
+		stop();
+		if (!received)
+		{
+			ADD_FAILURE() << "The loopback server did not receive a request";
+			return {};
+		}
+		EXPECT_EQ(method, received->method);
+		EXPECT_EQ(0u, header(*received, "User-Agent").find("Flycast/"));
+		return std::move(*received);
+	}
+
+private:
+	void stop()
+	{
+		io.stop();
+		if (thread.joinable())
+			thread.join();
+	}
+};
 
 class HttpTest : public ::testing::Test
 {
-public:
-	static void SetUpTestSuite()
-	{
-		http::init();
-		std::vector<u8> reply;
-		int rc = http::post("https://www.postb.in/api/bin", "", nullptr, reply);
-		if (rc != 201)
-			throw std::runtime_error("http bin creation failed");
-		std::string s((const char *)&reply[0], reply.size());
-		json v = json::parse(s);
-		binId = v.at("binId").get<std::string>();
-		testUrl = "https://www.postb.in/" + binId;
-		//printf("api/bin created: %s\n", binId.c_str());
-	}
-
-	static size_t nullCallback(char *ptr, size_t size, size_t nmemb, void *userdata) {
-		return size * nmemb;
-	}
-
-	static void TearDownTestSuite()
-	{
-		if (!binId.empty())
-		{
-			CURL *curl = curl_easy_init();
-			std::string url = "https://www.postb.in/api/bin/" + binId;
-			curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-			curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
-			curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
-			curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nullCallback);
-
-			CURLcode res = curl_easy_perform(curl);
-
-			long httpCode = 500;
-			if (res == CURLE_OK)
-				curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-			curl_easy_cleanup(curl);
-			//printf("api/bin deleted: status %ld\n", httpCode);
-		}
-	}
-
-	static json getLastRequest()
-	{
-		std::string url = "https://www.postb.in/api/bin/" + binId + "/req/shift";
-		std::vector<u8> content;
-		std::string contentType;
-		http::get(url, content, contentType);
-		std::string s((const char *)&content[0], content.size());
-		//printf(">>>: %s\n", s.c_str());
-		return json::parse(s);
-	}
-
 protected:
-	 static std::string binId;
-	 static std::string testUrl;
+	static void SetUpTestSuite() { http::init(); }
+	static void TearDownTestSuite() { http::term(); }
 };
-std::string HttpTest::binId;
-std::string HttpTest::testUrl;
+}
 
 TEST_F(HttpTest, get)
 {
+	CaptureServer server;
 	std::vector<u8> content;
 	std::string contentType;
-	int rc = http::get(testUrl, content, contentType);
-	ASSERT_EQ(200, rc);
-	ASSERT_FALSE(content.empty());
-	ASSERT_EQ("text/plain", contentType.substr(0, 10));
-	std::string reqId((const char *)&content[0], content.size());
-
-	json req = getLastRequest();
-	ASSERT_EQ("GET", req.at("method"));
-	std::string ua = req.at("headers").at("user-agent").get<std::string>();
-	ASSERT_EQ("Flycast/", ua.substr(0, 8));
-	ASSERT_EQ(req.at("reqId"), reqId);
+	ASSERT_EQ(200, http::get(server.url(), content, contentType));
+	EXPECT_EQ("received", std::string(content.begin(), content.end()));
+	EXPECT_EQ("text/plain", contentType);
+	server.expectRequest("GET");
 }
 
 TEST_F(HttpTest, getHeaders)
 {
+	CaptureServer server;
 	std::vector<u8> content;
-	const http::Headers reqHeaders = { { "Test-Header", "test-value" } };
-	http::Headers respHeaders;
-	int rc = http::get(testUrl, content, &reqHeaders, &respHeaders);
-	ASSERT_EQ(200, rc);
-	ASSERT_FALSE(content.empty());
-	auto it = std::find_if(respHeaders.begin(), respHeaders.end(), [](std::pair<std::string, std::string>& v) { return v.first == "content-type"; });
-	ASSERT_NE(respHeaders.end(), it);
-	ASSERT_EQ("text/plain", it->second.substr(0, 10));
-	std::string reqId((const char *)&content[0], content.size());
-
-	json req = getLastRequest();
-	ASSERT_EQ("GET", req.at("method"));
-	std::string ua = req.at("headers").at("user-agent").get<std::string>();
-	ASSERT_EQ("Flycast/", ua.substr(0, 8));
-	ASSERT_EQ(req.at("reqId"), reqId);
-	std::string v = req.at("headers").at("test-header").get<std::string>();
-	ASSERT_EQ("test-value", v);
+	const http::Headers requestHeaders = { { "Test-Header", "test-value" } };
+	http::Headers responseHeaders;
+	ASSERT_EQ(200, http::get(server.url(), content, &requestHeaders, &responseHeaders));
+	EXPECT_NE(responseHeaders.end(), std::find(responseHeaders.begin(), responseHeaders.end(),
+			std::make_pair(std::string("content-type"), std::string("text/plain"))));
+	EXPECT_EQ("test-value", header(server.expectRequest("GET"), "Test-Header"));
 }
 
 TEST_F(HttpTest, postFields)
 {
+	CaptureServer server;
 	std::vector<http::PostField> fields;
 	fields.emplace_back("field1", "value1");
 	fields.emplace_back("field2", "value2");
 	fields.emplace_back("fileField", FLYCAST_TEST_FILES "/test_cues/d/cs.cue", "text/plain");
-	int rc = http::post(testUrl, fields);
-	ASSERT_EQ(200, rc);
-
-	json req = getLastRequest();
-	ASSERT_EQ("POST", req.at("method"));
-	std::string ua = req.at("headers").at("user-agent").get<std::string>();
-	ASSERT_EQ("Flycast/", ua.substr(0, 8));
-	std::string contentType = req.at("headers").at("content-type").get<std::string>();
-	ASSERT_EQ("multipart/form-data; boundary=", contentType.substr(0, 30));
-	// postb.in doesn't seem to save the request body so we can't check the form fields? :(
+	ASSERT_EQ(200, http::post(server.url(), fields));
+	const Request request = server.expectRequest("POST");
+	EXPECT_EQ(0u, header(request, "Content-Type").find("multipart/form-data; boundary="));
+	EXPECT_NE(request.content.npos, request.content.find("name=\"field1\"\r\n\r\nvalue1\r\n"));
+	EXPECT_NE(request.content.npos, request.content.find("name=\"field2\"\r\n\r\nvalue2\r\n"));
+	EXPECT_NE(request.content.npos, request.content.find("name=\"fileField\"; filename=\"cs.cue\""));
+	EXPECT_NE(request.content.npos, request.content.find("REM SINGLE-DENSITY AREA"));
 }
 
 TEST_F(HttpTest, postContent)
 {
+	CaptureServer server;
 	std::vector<u8> content;
-	int rc = http::post(testUrl, "This is the payload", "text/plain; charset=x-sjis", content);
-	ASSERT_EQ(200, rc);
-	ASSERT_FALSE(content.empty());
-	std::string reqId((const char *)&content[0], content.size());
-
-	json req = getLastRequest();
-	ASSERT_EQ("POST", req.at("method"));
-	std::string ua = req.at("headers").at("user-agent").get<std::string>();
-	ASSERT_EQ("Flycast/", ua.substr(0, 8));
-	std::string contentType = req.at("headers").at("content-type").get<std::string>();
-	ASSERT_EQ("text/plain; charset=x-sjis", contentType);
-	// can't check the payload for the same reason
+	ASSERT_EQ(200, http::post(server.url(), "This is the payload", "text/plain; charset=x-sjis", content));
+	EXPECT_EQ("received", std::string(content.begin(), content.end()));
+	const Request request = server.expectRequest("POST");
+	EXPECT_EQ("text/plain; charset=x-sjis", header(request, "Content-Type"));
+	EXPECT_EQ("This is the payload", request.content);
 }
-
 #endif // #ifndef _WIN32
 
 TEST(UrlCodecTest, Encode)

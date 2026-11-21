@@ -280,6 +280,7 @@ bool compileStage(const std::string& body, const std::string& companion,
 			spirv_cross::CompilerMSL compiler(std::move(spirv));
 			spirv_cross::CompilerMSL::Options options;
 			options.platform = spirv_cross::CompilerMSL::Options::macOS;
+			options.pad_fragment_output_components = true;
 			options.set_msl_version(2, 1); // macOS 10.14+, within the deployment target.
 			options.texture_1D_as_2D = true;
 			compiler.set_msl_options(options);

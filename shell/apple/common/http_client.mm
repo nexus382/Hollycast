@@ -176,7 +176,7 @@ int post(const std::string& url, const std::vector<PostField>& fields)
                                          encoding:[NSString defaultCStringEncoding]]] dataUsingEncoding:NSUTF8StringEncoding]];
         if (!field.contentType.empty())
         {
-	        [body appendData:[[NSString stringWithFormat:@"; filename=\"%@\"\r\n", value] dataUsingEncoding:NSUTF8StringEncoding]];
+	        [body appendData:[[NSString stringWithFormat:@"; filename=\"%@\"\r\n", [value lastPathComponent]] dataUsingEncoding:NSUTF8StringEncoding]];
 	        [body appendData:[[NSString stringWithFormat:@"Content-Type: %@", [NSString stringWithCString:field.contentType.c_str() 
                                          encoding:[NSString defaultCStringEncoding]]] dataUsingEncoding:NSUTF8StringEncoding]];
         }

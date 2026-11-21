@@ -22,6 +22,7 @@
 #include "cfg/option.h"
 #include "json.hpp"
 #include "oslib/storage.h"
+#include "oslib/vmu_path.h"
 #include "stdclass.h"
 
 #include <stb_image.h>
@@ -162,39 +163,19 @@ std::string getVmuIconCacheDir(const std::string& library, const std::string& ke
 
 std::string findPerGameVmuPath(const GameMedia& media, const std::string& gameId)
 {
-	std::string key = sanitizeCacheKey(gameId);
-	if (key.empty())
-		key = sanitizeCacheKey(get_file_basename(media.fileName));
+	const auto key = makeCacheKey(media, gameId);
 	if (key.empty())
 		return {};
 
-	std::vector<std::string> candidates { key + "_vmu_save_A1.bin" };
+	const auto primary = key + hostfs::perGameVmuSuffix;
+	const auto path = hostfs::findVmuFile(primary);
+	if (!path.empty())
+		return path;
 	if (!media.fileName.empty())
 	{
-		const std::string legacyName = media.fileName + "_vmu_save_A1.bin";
-		if (legacyName != candidates.front())
-			candidates.push_back(legacyName);
-	}
-
-	for (const std::string& vmuName : candidates)
-	{
-		if (!config::VMUPath.get().empty())
-		{
-			try {
-				std::string fullpath = hostfs::storage().getSubPath(config::VMUPath, vmuName);
-				if (hostfs::storage().exists(fullpath))
-					return fullpath;
-			} catch (const hostfs::StorageException&) {
-			}
-		}
-
-		std::string path = get_writable_data_path(vmuName);
-		if (file_exists(path))
-			return path;
-
-		path = get_readonly_data_path(vmuName);
-		if (hostfs::storage().exists(path))
-			return path;
+		const auto legacy = media.fileName + hostfs::perGameVmuSuffix;
+		if (legacy != primary)
+			return hostfs::findVmuFile(legacy);
 	}
 	return {};
 }

@@ -1416,6 +1416,29 @@ std::vector<std::vector<bool>> resolveShaderPassOutputMipmaps(const ShaderChain&
 	return requirements;
 }
 
+ShaderHistoryRequirements resolveShaderHistory(const ShaderChain& chain)
+{
+	ShaderHistoryRequirements history;
+	history.passFrames.resize(chain.passes.size(), 1);
+	for (const ShaderPass& pass : chain.passes) {
+		for (const ShaderPassInput& input : pass.inputs) {
+			if (input.kind != ShaderInputKind::History && input.kind != ShaderInputKind::Feedback)
+				continue;
+			const uint32_t frames = input.kind == ShaderInputKind::Feedback ? 2u : input.historyOffset + 1;
+			uint32_t& retained = input.sourcePass == InvalidShaderPass
+					? history.sourceFrames : history.passFrames.at(input.sourcePass);
+			retained = std::max(retained, frames);
+		}
+		for (const ShaderPassOutput& output : pass.outputs) {
+			if (output.previousFrame && output.previousPass != InvalidShaderPass) {
+				uint32_t& retained = history.passFrames.at(output.previousPass);
+				retained = std::max(retained, 2u);
+			}
+		}
+	}
+	return history;
+}
+
 bool shaderInputNeedsMipmaps(const std::vector<ShaderPass>& passes, size_t firstPass)
 {
 	// Auxiliary writers leave Source intact. A layer's Original stays the same

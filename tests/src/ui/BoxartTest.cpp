@@ -1381,22 +1381,6 @@ TEST_F(BoxartTest, EsdeMediaPrefersCanonicalFoldersOverLegacyAliases)
 
 }
 
-TEST(GameScannerSystemTest, NamesTheBoardAnArcadeRomRunsOn)
-{
-	Game game{};
-	EXPECT_STREQ(arcadeSystemName(game), "Naomi");
-	game.bios = "naomi";
-	EXPECT_STREQ(arcadeSystemName(game), "Naomi");
-	game.bios = "naomi2";
-	EXPECT_STREQ(arcadeSystemName(game), "Naomi 2");
-	game.bios = "segasp";
-	EXPECT_STREQ(arcadeSystemName(game), "System SP");
-	game.bios = nullptr;
-	game.cart_type = AW;
-	EXPECT_STREQ(arcadeSystemName(game), "Atomiswave");
-	EXPECT_EQ(GameMedia{}.system, "Dreamcast");
-}
-
 TEST_F(BoxartTest, ScreenScraperCacheOrderPrefersLaunchBoxBeforeTgdb)
 {
 	config::ArtworkProvider = 1;

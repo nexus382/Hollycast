@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "library.h"
+#include "imgread/disc_image.h"
 #include "boxart/boxart.h"
 #include "boxart/vmu_icon.h"
 #include "game_scanner.h"
@@ -12,6 +13,21 @@
 #include <utility>
 
 namespace library {
+
+bool matchesView(const Entry& entry, View view, const std::vector<std::string>& favourites)
+{
+	if (view == View::All)
+		return true;
+	if (entry.path.empty())
+		return false;
+	if (view == View::Discs)
+	{
+		if (entry.device)
+			return true;
+		return discimage::supportsExtension(get_file_extension(entry.path));
+	}
+	return !entry.device && (view == View::ContinuePlaying ? entry.latestStateDate > 0 : isFavourite(entry.path, favourites));
+}
 
 std::string regionLabel(uint32_t region)
 {

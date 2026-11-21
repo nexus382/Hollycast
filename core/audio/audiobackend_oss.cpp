@@ -86,7 +86,7 @@ public:
 	{
 		audioFD = openDevice(O_WRONLY);
 
-		if (audioFD < 0 || !setRate(audioFD, 44100) || !setChannels(audioFD, 2) || !setFormat(audioFD, AFMT_S16_LE))
+		if (audioFD < 0 || !setRate(audioFD, audio::OutputSampleRate) || !setChannels(audioFD, 2) || !setFormat(audioFD, AFMT_S16_LE))
 		{
 			term();
 			return false;

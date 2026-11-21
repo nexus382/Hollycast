@@ -19,6 +19,8 @@
 namespace phone_vmu
 {
 #ifdef HAVE_PHONE_VMU
+constexpr std::size_t CardSize = 128 * 1024;
+
 struct Status
 {
 	bool running = false;

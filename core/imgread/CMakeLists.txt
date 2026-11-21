@@ -4,6 +4,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         chd.cpp
         common.cpp
         common.h
+        disc_image.h
         cue.cpp
         gdi.cpp
         ImgReader.cpp
