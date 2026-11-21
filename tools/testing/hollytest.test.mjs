@@ -809,8 +809,9 @@ test('agent play-test jobs contain identities and native commands without dispat
 
 test('agent CLI exposes analog holds, controller snapshots and native UI actions', async t => {
   const { harness } = await fixture(t);
+  // The bridge's wall clock can read ahead of the CLI's on Windows.
   const requests = await fakeBridge(t, harness, async request => request.op === 'inspect'
-    ? { observation_id: request.id, wall_ms: Date.now(), screenshot: null, ui: { items: [] } } : {});
+    ? { observation_id: request.id, wall_ms: Date.now() + 1000, screenshot: null, ui: { items: [] } } : {});
   const invoke = (command, args) => promisify(execFile)(process.execPath,
     [fileURLToPath(new URL('./hollytest.mjs', import.meta.url)), command, '--run', harness.directory, ...args]);
   await invoke('controller', ['--state', JSON.stringify({ port: 1, axes: [12000, -8000, 100, -100], triggers: [0, 45000] })]);

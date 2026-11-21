@@ -17,6 +17,7 @@ const UI_EXPECTABLE_FIELDS = new Set(['semantic_id', 'semantic_label', 'kind', '
   'checkable', 'inputable', 'requires_apply', 'draft_value', 'active', 'text_input_focused', 'password', 'disabled', 'visible']);
 
 const UI_OBSERVATION_MAX_AGE_MS = 4000;
+const uiInspectionStarts = new WeakMap();
 
 export function agentInvocation(nodeExecutable, cli, directory, command, args = [], wsl = false) {
   check([nodeExecutable, cli, directory, command, ...args].every(value => typeof value === 'string' && !/[\r\n\0]/.test(value)),
@@ -158,9 +159,13 @@ function uiRequestOptions(context = {}) {
   return { timeoutMs: Math.max(1, Math.min(10000, remaining)), signal: context.signal, deadline: context.deadline };
 }
 
+function isFreshUiObservation(observation) {
+  const started = uiInspectionStarts.get(observation);
+  return started !== undefined && performance.now() - started <= UI_OBSERVATION_MAX_AGE_MS;
+}
+
 function freshUiObservation(observation) {
-  const age = Date.now() - observation?.wall_ms;
-  check(Number.isFinite(age) && age >= 0 && age <= UI_OBSERVATION_MAX_AGE_MS, 'Native UI inspection is stale; inspect again');
+  check(isFreshUiObservation(observation), 'Native UI inspection is stale; inspect again');
   check(Array.isArray(observation.ui?.items), 'Native UI inspection has no item list');
 }
 
@@ -564,6 +569,8 @@ export class HollycastHarness {
   async observe({ screenshot = false, signal, deadline, redactTextItemId } = {}) {
     check(typeof screenshot === 'boolean', 'Screenshot option must be boolean');
     const context = { signal, deadline };
+    // Use the client clock and count time spent waiting for the bridge response.
+    const started = performance.now();
     const result = await this.request('inspect', { screenshot }, uiRequestOptions(context));
     checkUiContext(context);
     check(ID.test(result.observation_id) && Array.isArray(result.ui?.items) && Number.isFinite(result.wall_ms), 'Invalid native UI inspection');
@@ -576,6 +583,7 @@ export class HollycastHarness {
     }
     const evidence = redactTextInputValues(result, [redactTextItemId]);
     await fs.appendFile(path.join(this.directory, 'observations.jsonl'), `${JSON.stringify(evidence)}\n`);
+    uiInspectionStarts.set(result, started);
     this.observation = result;
     return result;
   }
@@ -599,7 +607,7 @@ export class HollycastHarness {
     const selector = validateUiTarget(target);
     const clickOptions = validateUiClickOptions(options);
     checkUiContext(context);
-    if (!this.observation || Date.now() - this.observation.wall_ms < 0 || Date.now() - this.observation.wall_ms > UI_OBSERVATION_MAX_AGE_MS)
+    if (!isFreshUiObservation(this.observation))
       await this.observe(context);
     const { item } = findUiItem(this.observation, selector);
     return this.ui('click', { item_id: item.id, ...clickOptions,
