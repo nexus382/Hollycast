@@ -2,19 +2,22 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 # Use your phone as a VMU
 
-Standalone Hollycast on Windows, macOS and Linux can show the Dreamcast VMU LCD
-and play standalone VMU mini-games in a phone browser. No phone app or internet
-connection is required.
+Standalone Hollycast on Windows, macOS, Linux and Android can share the Dreamcast
+VMU LCD and standalone VMU mini-games with another device's browser. No client
+app or internet connection is required.
 
-1. Connect your computer and phone to the same local network. Ethernet on the
-   computer and Wi-Fi on the phone work together.
+1. Connect the device running Hollycast and the device running the browser to
+   the same local network. Ethernet and Wi-Fi work together.
 2. Open **Settings > On-screen display > Phone VMU** in Hollycast and enable
    **Connect Phone**.
-3. Scan the QR code with the phone camera, or open the shown `http://` address.
+3. On the other device, scan the QR code or open the shown `http://` address.
 4. Choose a slot: A1/A2 belong to controller A, B1/B2 to B, and so on.
 5. Close settings and play. The phone mirrors the selected LCD independently of
    **Show VMU In-Game** and **Move VMU**. Use your usual controller for the
    Dreamcast game.
+
+When hosting on Android, keep Hollycast in the foreground and open the pairing
+page on another device, such as a PC on the same Wi-Fi network.
 
 The page itself is the VMU: LCD, D-pad, A/B, Mode and Sleep. Tap the LCD to reveal
 settings. **LCD only** fills the whole page with just the LCD; **Show buttons**
@@ -190,5 +193,5 @@ HTTP on a fixed TCP port (28743 by default); do not forward that port to the int
   was lost, turn **Connect Phone** off and on, then reload the saved pairing page.
   Its address remains valid; choose a copy if Hollycast reports a card conflict.
 
-Hosting is not offered by the libretro core, mobile, Switch or UWP builds. Phones
-with a browser can still connect to supported desktop hosts.
+Hosting is not offered by the libretro core or by iOS, Switch or UWP builds.
+Devices with a browser can still connect to a supported host.

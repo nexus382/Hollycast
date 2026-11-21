@@ -24,7 +24,11 @@
 #ifdef _WIN32
 #include <ws2tcpip.h>
 #else
+#ifdef __ANDROID__
+#include "net_platform.h" // Uses the bundled getifaddrs fallback before Android API 24.
+#else
 #include <ifaddrs.h>
+#endif
 #include <net/if.h>
 #endif
 
@@ -438,7 +442,7 @@ public:
 		for (const std::string& address : localAddresses())
 			urls.push_back("http://" + address + ":" + std::to_string(server->port()) + path);
 		if (urls.empty())
-			throw std::runtime_error("No local network address found. Connect this computer to Wi-Fi or Ethernet and try again.");
+			throw std::runtime_error("No local network address found. Connect this device to Wi-Fi or Ethernet and try again.");
 		server->addUriHandler("/", [this, &frames, &cards, path, qrPrefix = path + "link/qr/"](const Request& req, Reply& rep) {
 			rep.addHeader("Cache-Control", "no-store");
 			rep.addHeader("X-Content-Type-Options", "nosniff");
