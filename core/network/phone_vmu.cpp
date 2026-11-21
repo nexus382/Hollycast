@@ -12,6 +12,7 @@
 #include "rend/vmu_frame_store.h"
 #include "deps/vmu-softvms/core.h"
 #include "deps/nosleep/media.h"
+#include "deps/qrcodegen/qrcodegen.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -36,6 +37,11 @@ using Clock = std::chrono::steady_clock;
 std::int64_t nowMs()
 {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
+}
+
+bool validToken(const std::string& value)
+{
+	return value.size() == 32 && value.find_first_not_of("0123456789abcdef") == std::string::npos;
 }
 
 std::string sessionToken()
@@ -150,12 +156,22 @@ public:
 		return { lastSyncSlot, lastSyncTime };
 	}
 
-	Reply::status_type checkout(int index, const std::string& revision, const std::string& lease, bool force = false)
+	Reply::status_type checkout(int index, const std::string& revision, const std::string& lease,
+			bool force, const std::string& previousLease)
 	{
 		std::lock_guard<std::mutex> lock(mutex);
 		auto& card = cards[index];
 		if (!card.writable || card.data.empty())
 			return Reply::forbidden;
+		if (!previousLease.empty())
+		{
+			// A tab recovering ownership rotates only the lease. Keep the
+			// queued operation or a completed return available for replay.
+			if (card.lease != previousLease && card.lease != lease)
+				return Reply::conflict;
+			card.lease = lease;
+			return Reply::ok;
+		}
 		if (card.detached && card.lease == lease)
 			return Reply::ok; // Retrying a lost checkout response must not strand the VMU.
 		// Force is the user's explicit conflict resolution: it may replace the
@@ -345,9 +361,15 @@ struct LinkRoom
 		const auto now = Clock::now();
 		if (!code.empty() && now >= expires)
 			*this = {};
+		// After the host has read the answer, only a fresh invitation can
+		// negotiate another connection. Keep the old code long enough to
+		// distinguish cancellation from an answer that has not arrived yet.
+		const bool cancelled = answerRead && answer.empty();
+		if (cancelled && code == roomCode)
+			return Reply::conflict;
 		if (offerRoute && req.method == "POST")
 		{
-			if (code.empty())
+			if (code.empty() || cancelled)
 			{
 				*this = { roomCode, client, {}, req.content, {}, now + std::chrono::seconds(120) };
 				return Reply::ok;
@@ -381,6 +403,8 @@ struct LinkRoom
 			if (description.empty())
 				return Reply::not_found;
 			rep.setContent(description, "application/octet-stream");
+			if (!offerRoute)
+				answerRead = true;
 			return Reply::ok;
 		}
 		if (client == offerClient)
@@ -398,6 +422,7 @@ struct LinkRoom
 	std::string offer;
 	std::string answer;
 	Clock::time_point expires;
+	bool answerRead = false;
 };
 
 class Session
@@ -414,27 +439,30 @@ public:
 			urls.push_back("http://" + address + ":" + std::to_string(server->port()) + path);
 		if (urls.empty())
 			throw std::runtime_error("No local network address found. Connect this computer to Wi-Fi or Ethernet and try again.");
-		server->addUriHandler("/", [this, &frames, &cards, path](const Request& req, Reply& rep) {
+		server->addUriHandler("/", [this, &frames, &cards, path, qrPrefix = path + "link/qr/"](const Request& req, Reply& rep) {
 			rep.addHeader("Cache-Control", "no-store");
 			rep.addHeader("X-Content-Type-Options", "nosniff");
 			rep.addHeader("Referrer-Policy", "no-referrer");
 			rep.addHeader("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; media-src data:; frame-ancestors 'none'; base-uri 'none'");
-			const auto header = [&](const std::string& name) {
+			const auto header = [&](const std::string& name, bool *present = nullptr) {
+				if (present != nullptr)
+					*present = false;
 				for (const auto& h : req.headers)
 				{
 					std::string lower = h.name;
 					std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
 					if (lower == name)
+					{
+						if (present != nullptr)
+							*present = true;
 						return h.value;
+					}
 				}
 				return std::string();
 			};
 			const bool linkOffer = req.uri == path + "link/offer";
 			if (linkOffer || req.uri == path + "link/answer")
 			{
-				const auto validToken = [](const std::string& value) {
-					return value.size() == 32 && value.find_first_not_of("0123456789abcdef") == std::string::npos;
-				};
 				const std::string roomCode = header("x-vmu-link");
 				const std::string client = header("x-vmu-client");
 				const std::string origin = header("origin");
@@ -464,13 +492,14 @@ public:
 				// A non-simple content type plus a private lease header prevents a
 				// third-party webpage from submitting writes through a paired browser.
 				const std::string lease = header("x-vmu-lease");
-				const bool validLease = lease.size() == 32 && lease.find_first_not_of("0123456789abcdef") == std::string::npos;
 				const std::string operation = header("x-vmu-operation");
-				const bool validOperation = operation.size() == 32 && operation.find_first_not_of("0123456789abcdef") == std::string::npos;
+				bool hasPreviousLease = false;
+				const std::string previousLease = checkout ? header("x-vmu-previous-lease", &hasPreviousLease) : std::string();
 				const std::string origin = header("origin");
 				const bool sameOrigin = origin.empty() || origin == "http://" + header("host");
 				Reply::status_type result;
-				if (!validLease || !sameOrigin || (sync && !validOperation))
+				if (!validToken(lease) || !sameOrigin || (sync && !validToken(operation))
+						|| (hasPreviousLease && !validToken(previousLease)))
 					result = Reply::forbidden;
 				else if (sync && req.method == "GET")
 					result = cards.syncStatus(req.uri.back() - '0', lease, operation);
@@ -480,7 +509,8 @@ public:
 						|| req.content.size() != (sync ? CardSize : 1))
 					result = Reply::bad_request;
 				else if (checkout)
-					result = cards.checkout(req.uri.back() - '0', header("if-match"), lease, header("x-vmu-force") == "1");
+					result = cards.checkout(req.uri.back() - '0', header("if-match"), lease,
+							header("x-vmu-force") == "1", previousLease);
 				else if (release)
 					result = cards.release(req.uri.back() - '0', lease);
 				else
@@ -506,6 +536,24 @@ public:
 				rep.setContent(cardSync, "text/javascript; charset=utf-8");
 			else if (req.uri == path + "vmu-link.js")
 				rep.setContent(vmuLink, "text/javascript; charset=utf-8");
+			else if (req.uri.size() == qrPrefix.size() + 32 && req.uri.compare(0, qrPrefix.size(), qrPrefix) == 0
+					&& validToken(req.uri.substr(qrPrefix.size())))
+			{
+				// A PC can open the page on loopback. Encode a published LAN
+				// address so the same invitation also works on a second device.
+				const std::string requestedUrl = "http://" + header("host") + path;
+				const auto advertised = std::find(urls.begin(), urls.end(), requestedUrl);
+				const std::string url = (advertised == urls.end() ? urls.front() : *advertised)
+						+ "#vmu-link=" + req.uri.substr(qrPrefix.size());
+				const auto qr = qrcodegen::QrCode::encodeText(url.c_str(), qrcodegen::QrCode::Ecc::MEDIUM);
+				std::string modules;
+				for (int y = 0; y < qr.getSize(); ++y)
+					for (int x = 0; x < qr.getSize(); ++x)
+						if (qr.getModule(x, y))
+							modules += "M" + std::to_string(x) + " " + std::to_string(y) + "h1v1h-1z";
+				rep.setContent("{\"url\":\"" + url + "\",\"size\":" + std::to_string(qr.getSize())
+						+ ",\"path\":\"" + modules + "\"}", "application/json");
+			}
 			else if (req.uri == path + "vmu-core.LICENSE")
 				rep.setContent(standaloneLicense, "text/plain; charset=utf-8");
 			else if (req.uri == path + "wake-media.js")
@@ -632,7 +680,7 @@ Service& service()
 
 void setPairing(const std::string& token, int port)
 {
-	if (token.size() == 32 && token.find_first_not_of("0123456789abcdef") == std::string::npos)
+	if (validToken(token))
 		service().pairingToken = token;
 	if (port == 0 || (port >= 1024 && port <= 65535))
 		service().pairingPort = port;

@@ -16,6 +16,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         net_platform.h
         phone_vmu.cpp
         phone_vmu.h
+        phone_vmu_link.h
         phone_vmu_page.h
         phone_vmu_player.h
         phone_vmu_sync.h

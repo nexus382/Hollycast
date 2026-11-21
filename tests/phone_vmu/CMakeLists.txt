@@ -8,7 +8,8 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(core "${CMAKE_CURRENT_SOURCE_DIR}/../../core")
 find_path(ASIO_INCLUDE_DIR asio.hpp HINTS "${core}/deps/asio/asio/include" REQUIRED)
 
-add_executable(phone_vmu_server server.cpp "${core}/network/phone_vmu.cpp" "${core}/oslib/http_server.cpp")
+add_executable(phone_vmu_server server.cpp "${core}/network/phone_vmu.cpp" "${core}/oslib/http_server.cpp"
+    "${core}/deps/qrcodegen/qrcodegen.cpp")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/maple_sync.inc"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_maple_sync_test.py" "${CMAKE_CURRENT_BINARY_DIR}/maple_sync.inc"
     DEPENDS generate_maple_sync_test.py "${core}/hw/maple/maple_devs.cpp" "${core}/hw/maple/maple_devs.h"

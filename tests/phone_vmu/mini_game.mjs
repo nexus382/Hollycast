@@ -76,6 +76,48 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     assert.deepEqual(left.flash.slice(0x3000,0x3004),Uint8Array.of(0x39,2,2,10));
     assert.deepEqual(right.flash.slice(0x3000,0x3004),Uint8Array.of(0xa6,2,2,10));
   }
+  function serialProgram(internalClock) {
+    const bytes=inputProgram();
+    const code=[
+      0x23,0x08,0x00, // Observe the completion flag with interrupts disabled.
+      0x23,0x05,0x30,
+      0x23,0x44,0x00, 0x23,0x46,0x04, 0x23,0x45,internalClock?0x04:0x00,
+      0x23,0x32,0xe0, 0x23,0x31,0x00, 0x23,0x30,0x08,
+    ];
+    const loop=0x200+code.length;
+    code.push(
+      0x23,0x04,0x00, 0x03,0x31, 0x51,0x13,0x80, // SBUF0 -> flash[0x3000]
+      0x23,0x04,0x01, 0x03,0x30, 0x51,0x13,0x80, // SCON0 -> flash[0x3001]
+      0x21,loop>>8,loop&255,
+    );
+    bytes.set(code,0x200);
+    return bytes;
+  }
+  for (const [scenario,internalClock,edgesBeforeDisconnect,byteMode,waiting,data,flags] of [
+    ['solo',true,0,false,false,0xff,2],
+    ['external clock',false,0,false,false,0x00,8],
+    ['mid-byte',true,2,false,false,0xfc,2],
+    ['pending bit',true,3,false,true,0xfc,2],
+    ['pending byte',true,1,true,true,0xff,2],
+  ]) {
+    const serial=vm.runInContext('createVmu()',context);
+    new Player(serial,()=>{},()=>{},()=>{}).load(serialProgram(internalClock),'serial.vms');
+    if (edgesBeforeDisconnect) {
+      let edges=0;
+      serial.connectSerial(()=>{
+        ++edges;
+        return !byteMode && edges<=2?0:undefined;
+      },byteMode);
+      for (let steps=0;steps<1200 && edges<edgesBeforeDisconnect;++steps)
+        serial.run(0);
+      assert.equal(edges,edgesBeforeDisconnect,scenario);
+      assert.equal(serial.serialWaiting,waiting,scenario);
+      serial.connectSerial(null);
+      serial.completeSerial(0); // A reply from the closed link must be ignored.
+    }
+    serial.run(2);
+    assert.deepEqual(serial.flash.slice(0x3000,0x3002),Uint8Array.of(data,flags),scenario);
+  }
   // Alternate delivery delays and rendering rates. Neither browser can run
   // past the other VMU's next serial byte, even when messages arrive late.
   const first=vm.runInContext('createVmu()',context),second=vm.runInContext('createVmu()',context);

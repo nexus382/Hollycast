@@ -240,12 +240,8 @@ class PhoneVmuPlayer {
     // Accelerate guest time only; network checkpoints continue on their real-time schedule.
     this.acc = Math.min(this.acc + Math.min(Math.max(time - this.last, 0), 100) * this.speed, 100 * this.speed);
     this.last = time;
-    this.advance();
-  }
-  advance() {
-    if (!this.active || this.sleeping || this.core.halted || this.core.serialWaiting) return;
     const slices = Math.floor(this.acc / 10);
-    if (!slices) return;
+    if (!slices || this.core.serialWaiting) return;
     const completed = this.core.run(slices, () => this.applyInput());
     this.acc -= completed * 10;
     this.finishIfHalted();

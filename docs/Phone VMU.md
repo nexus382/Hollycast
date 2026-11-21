@@ -90,16 +90,25 @@ Read-only cards and netplay do not support automatic sync.
 
 Open a mini-game in each browser, using a different VMU card for each one.
 If the game asks you to connect VMUs, reach that prompt on both screens first.
-In the first browser, choose **Create VMU link** in Controls and share the
-invite. Open it in the second browser and choose **Join VMU link** once its
-mini-game is ready. Both browsers use the same Hollycast host and local network.
-Use a different slot for each browser if both cards sync to Hollycast.
+In the first browser, choose **Controls → Create VMU link**. Scan the QR code
+with the other device, or copy the invite into a second browser or tab on the
+same device. The invite hides after 10 seconds. Tap or click the LCD to see the
+same code again, or press **Tab** on a keyboard. The invite stays valid for up to
+two minutes while the first browser waits.
+
+Open the other card's mini-game, then choose **Join VMU link**. Both browsers
+use the same Hollycast host and local network. Choose a different slot for each
+browser if you're playing from Hollycast cards. Once the VMUs link, the QR code
+goes away. The connection notice hides after four seconds. Tap the LCD to see
+the link status or disconnect.
 
 The linked VMUs advance together at normal speed. Each VMU stays in its own
 browser and continues to sync to its own slot. In Chao Adventure, wait until both
 screens say **Please Disconnect**, then choose **Disconnect VMU link** to unplug
-the cable and continue in the mini-game. Use **Return to Dreamcast** in each
-browser when you're ready to save and reinsert its card.
+the cable and continue in the mini-game. For a Hollycast card, choose
+**Return to Dreamcast** in its browser to save and reinsert it. For a game you
+opened from a file, choose **Download VMU copy** before **Close local game** to
+keep the result. Create a fresh invite for the next link.
 
 Games opened through **Open VMU game** stay local and are never uploaded.
 **Download VMU copy** remains available to export a 128 KiB card image for local
@@ -126,8 +135,9 @@ The PC and phone should be on the same local network.
 2. Open the Phone VMU address on your PC. Select the first slot and choose
    **Play mini-game on this card**. Press **A+B** to start *Chao Adventure*.
    Open **Mating** and stop at **Please Connect**.
-3. In the PC browser, open **Controls → Create VMU link** and open the invite on
-   your phone. Select the other VMU slot, start its mini-game, and reach
+3. In the PC browser, open **Controls → Create VMU link** and scan that code
+   with your phone. If the code hides, click the PC's VMU screen to bring it
+   back. Select the other VMU slot on the phone, start its mini-game, and reach
    **Please Connect** there too. Then tap **Join VMU link**.
 4. Wait until **both** screens say **Please Disconnect**, then choose
    **Disconnect VMU link** on either device. Let both animations finish.
@@ -141,7 +151,9 @@ Each VMU gets its own egg. You can bring both eggs into the same garden.
 
 ## Ending sharing
 
-Turn off **Connect Phone** or exit Hollycast to end live network access. Sharing
+Choose **Disconnect VMU link** in either browser to unplug two linked VMUs.
+An established browser link can keep running after Hollycast closes. Turn off
+**Connect Phone** or exit Hollycast to stop serving LCD frames and cards. Sharing
 starts disabled each time Hollycast launches, but the pairing address stays the
 same across restarts: reopen the saved page to reconnect. Its QR code remains
 valid if you need it again. Use **New pairing address** in Phone VMU settings to disconnect
@@ -167,8 +179,10 @@ HTTP on a fixed TCP port (28743 by default); do not forward that port to the int
 - Allow Hollycast through the firewall on private networks and allow local
   network access on macOS when prompted.
 - Guest Wi-Fi, client isolation and some VPNs prevent local device connections.
-- Background tabs stop LCD requests and pause mini-game execution. Lost touches
-  or keyboard focus release held buttons. A lost LCD connection retries automatically.
+- Background tabs stop LCD requests and pause solo mini-games. A linked tab
+  keeps its VMU clock running while the browser allows it. If your phone
+  suspends a tab and the link drops, bring both tabs back and create a fresh
+  invite. Lost touches or keyboard focus release held buttons.
 - After changing networks, turn sharing off and back on to refresh the local
   addresses. Use the updated address shown in Hollycast; scan its QR code if the
   saved URL points to the previous network.

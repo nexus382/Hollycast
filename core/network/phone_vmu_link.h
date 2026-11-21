@@ -33,7 +33,7 @@ class PhoneVmuLink {
     };
     this.session = session;
     this.state = 'waiting';
-    session.timeout = setTimeout(() => this.fail(session, 'VMU link timed out.'), 120000);
+    session.timeout = setTimeout(() => this.fail(session, 'VMU link timed out. Create a fresh invite and try again.'), 120000);
     this.report('Waiting for the other VMU…');
     try {
       // Let an earlier session release its signaling claim before retrying.
@@ -112,6 +112,11 @@ class PhoneVmuLink {
       signal: session.abort.signal
     });
     if (sdp === undefined && response.status === 404) return null;
+    if (response.status === 409) {
+      throw new Error(path === 'offer' && sdp !== undefined
+        ? 'Another VMU invite is open. Disconnect that link before creating a new one.'
+        : 'This VMU invite is already in use or has closed. Ask for a fresh invite.');
+    }
     if (!response.ok) throw new Error('VMU link signaling failed (HTTP ' + response.status + ').');
     if (sdp === undefined) return response.text();
   }

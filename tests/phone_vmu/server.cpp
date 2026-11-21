@@ -37,12 +37,13 @@ Address parse(const std::string& url)
 }
 
 std::string request(Address address, const std::string& path, const std::string& method = "GET",
-		const std::string& data = "x", const std::string& headers = "", std::size_t declaredLength = std::string::npos)
+		const std::string& data = "x", const std::string& headers = "", std::size_t declaredLength = std::string::npos,
+		const std::string& host = "127.0.0.1")
 {
 	asio::io_context io;
 	asio::ip::tcp::socket socket(io);
 	socket.connect({asio::ip::address_v4::loopback(), address.port});
-	const auto text = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
+	const auto text = method + " " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n"
 		+ headers + (method == "POST" ? "Content-Length: " + std::to_string(declaredLength == std::string::npos ? data.size() : declaredLength) + "\r\n\r\n" + data : "\r\n");
 	asio::write(socket, asio::buffer(text));
 	std::string response;
@@ -171,7 +172,32 @@ int main(int argc, char **argv)
 		check(body(request(address, address.path + "vmu-link.js")).find("class PhoneVmuLink") != std::string::npos, "VMU link client was not served");
 		const std::string offerPath = address.path + "link/offer";
 		const std::string answerPath = address.path + "link/answer";
-		const std::string linkHeaders = "Content-Type: application/octet-stream\r\nX-VMU-Link: " + std::string(32, 'a') + "\r\nX-VMU-Client: ";
+		const std::string room(32, 'a');
+		const std::string qrPath = address.path + "link/qr/";
+		const auto qrResponse = request(address, qrPath + room);
+		check(qrResponse.find("HTTP/1.1 200") == 0 && header(qrResponse, "Content-Type") == "application/json",
+			"Invitation QR endpoint did not return JSON");
+		const auto qrBody = body(qrResponse);
+		const std::string qrUrl = "{\"url\":\"" + status.urls.front() + "#vmu-link=" + room + "\",\"size\":";
+		check(qrBody.find(qrUrl) == 0, "Invitation QR did not use the first advertised LAN URL for loopback");
+		const auto qrSize = std::stoul(qrBody.substr(qrUrl.size()));
+		check(qrSize >= 21 && qrSize <= 177 && (qrSize - 21) % 4 == 0
+				&& qrBody.find(",\"path\":\"M0 0h1v1h-1z", qrUrl.size()) != std::string::npos,
+			"Invitation QR had invalid dimensions or dark-module path");
+		check(body(request(address, qrPath + room, "GET", "", "", std::string::npos, "unpaired.example")) == qrBody,
+			"Invitation QR encoded an unadvertised Host");
+		const std::string& advertisedUrl = status.urls.back();
+		const auto advertisedHost = advertisedUrl.substr(7, advertisedUrl.find('/', 7) - 7);
+		check(body(request(address, qrPath + room, "GET", "", "", std::string::npos, advertisedHost))
+				.find("{\"url\":\"" + advertisedUrl + "#vmu-link=" + room + "\"") == 0,
+			"Invitation QR did not select the advertised Host");
+		check(request(address, qrPath + std::string(32, 'A')).find("HTTP/1.1 404") == 0
+				&& request(address, qrPath + room + "a").find("HTTP/1.1 404") == 0
+				&& request(address, qrPath).find("HTTP/1.1 404") == 0,
+			"Invitation QR accepted an invalid room code");
+		const auto qrPost = request(address, qrPath + room, "POST");
+		check(qrPost.find("HTTP/1.1 405") == 0 && header(qrPost, "Allow") == "GET", "Invitation QR accepted POST");
+		const std::string linkHeaders = "Content-Type: application/octet-stream\r\nX-VMU-Link: " + room + "\r\nX-VMU-Client: ";
 		const std::string firstBrowser = linkHeaders + std::string(32, 'b') + "\r\n";
 		const std::string secondBrowser = linkHeaders + std::string(32, 'c') + "\r\n";
 		const std::string thirdBrowser = linkHeaders + std::string(32, 'd') + "\r\n";
@@ -188,8 +214,23 @@ int main(int argc, char **argv)
 		check(request(address, answerPath, "POST", "retry", secondBrowser).find("HTTP/1.1 200") == 0, "Second browser could not retry joining");
 		check(body(request(address, answerPath, "GET", "", firstBrowser)) == "retry", "First browser did not receive the new answer");
 		check(request(address, offerPath, "DELETE", "", thirdBrowser).find("HTTP/1.1 403") == 0, "Third browser cancelled the VMU link");
-		check(request(address, offerPath, "DELETE", "", firstBrowser).find("HTTP/1.1 200") == 0, "First browser could not close the invitation");
-		check(request(address, offerPath, "GET", "", secondBrowser).find("HTTP/1.1 404") == 0, "Closed link retained its offer");
+		check(request(address, answerPath, "POST", "retry", secondBrowser).find("HTTP/1.1 200") == 0
+				&& body(request(address, answerPath, "GET", "", firstBrowser)) == "retry",
+			"Reading the answer broke idempotent signaling");
+		check(request(address, answerPath, "DELETE", "", secondBrowser).find("HTTP/1.1 200") == 0,
+			"Second browser could not cancel after the host read its answer");
+		check(request(address, answerPath, "GET", "", firstBrowser).find("HTTP/1.1 409") == 0
+				&& request(address, offerPath, "GET", "", thirdBrowser).find("HTTP/1.1 409") == 0
+				&& request(address, answerPath, "POST", "other", thirdBrowser).find("HTTP/1.1 409") == 0,
+			"Cancelled link allowed another answer after the host had read the first one");
+		std::string newFirstBrowser = firstBrowser;
+		newFirstBrowser.replace(newFirstBrowser.find(room), room.size(), std::string(32, 'e'));
+		std::string newSecondBrowser = secondBrowser;
+		newSecondBrowser.replace(newSecondBrowser.find(room), room.size(), std::string(32, 'e'));
+		check(request(address, offerPath, "POST", "offer", newFirstBrowser).find("HTTP/1.1 200") == 0,
+			"Cancelled link blocked a fresh invitation");
+		check(request(address, offerPath, "DELETE", "", newFirstBrowser).find("HTTP/1.1 200") == 0, "First browser could not close the invitation");
+		check(request(address, offerPath, "GET", "", newSecondBrowser).find("HTTP/1.1 404") == 0, "Closed link retained its offer");
 		check(body(request(address, address.path + "vmu-core.LICENSE")).find("GNU GENERAL PUBLIC LICENSE") != std::string::npos, "VMU license was not served");
 		const auto wakeMedia = body(request(address, address.path + "wake-media.js"));
 		check(wakeMedia.find("const PhoneVmuWakeMedia") != std::string::npos && wakeMedia.find("Copyright (c) Rich Tibbett") != std::string::npos,
@@ -263,6 +304,57 @@ int main(int argc, char **argv)
 				"Released desktop card could not be opened again");
 		check(request(address, releasePath, "POST", "x", "Content-Type: application/octet-stream\r\nX-VMU-Lease: " + reopenLease + "\r\n").find("HTTP/1.1 200") == 0,
 				"Reopened card could not release cleanly");
+
+		std::vector<std::uint8_t> rotationCard(131072, 0x55);
+		phone_vmu::publishCard(6, rotationCard.data(), rotationCard.size());
+		const std::string rotationCheckout = address.path + "checkout/6", rotationSync = address.path + "sync/6";
+		const auto rotationRevision = header(request(address, address.path + "card/6"), "ETag");
+		const auto leaseHeaders = [](const std::string& lease) {
+			return "Content-Type: application/octet-stream\r\nX-VMU-Lease: " + lease + "\r\n";
+		};
+		const auto rotationHeaders = [&](const std::string& lease, const std::string& previous) {
+			return leaseHeaders(lease) + "X-VMU-Previous-Lease: " + previous + "\r\n";
+		};
+		const std::string operationHeaders = "X-VMU-Operation: " + operation + "\r\nX-VMU-Return: 1\r\n";
+		check(request(address, rotationCheckout, "POST", "x", rotationHeaders(forceLease, otherLease)
+				+ "X-VMU-Force: 1\r\n").find("HTTP/1.1 409") == 0, "Lease rotation claimed an unowned card");
+		check(request(address, rotationCheckout, "POST", "x", rotationHeaders(forceLease, "")
+				+ "If-Match: " + rotationRevision + "\r\n").find("HTTP/1.1 403") == 0, "Checkout accepted an empty previous lease");
+		check(request(address, rotationCheckout, "POST", "x", leaseHeaders(forceLease)
+				+ "If-Match: " + rotationRevision + "\r\n").find("HTTP/1.1 200") == 0, "Lease rotation fixture could not check out");
+		check(request(address, rotationSync, "POST", pendingCard, leaseHeaders(forceLease) + operationHeaders)
+				.find("HTTP/1.1 202") == 0, "Lease rotation fixture could not queue a return");
+		const auto rotatePending = rotationHeaders(otherLease, forceLease);
+		check(request(address, rotationCheckout, "POST", "x", rotatePending).find("HTTP/1.1 200") == 0
+				&& request(address, rotationCheckout, "POST", "x", rotatePending).find("HTTP/1.1 200") == 0,
+			"Pending return lease could not rotate or retry after a lost response");
+		check(request(address, rotationCheckout, "POST", "x", rotationHeaders(reopenLease, forceLease))
+				.find("HTTP/1.1 409") == 0, "A competing rotation succeeded with the stale lease");
+		check(request(address, rotationSync, "POST", pendingCard, leaseHeaders(forceLease) + operationHeaders)
+				.find("HTTP/1.1 409") == 0, "The old lease could still write after rotation");
+		check(request(address, rotationSync, "GET", "", leaseHeaders(otherLease) + operationHeaders)
+				.find("HTTP/1.1 202") == 0, "Lease rotation lost the pending operation");
+		check(header(request(address, address.path + "card/6"), "ETag") == rotationRevision,
+			"Lease rotation changed the desktop revision");
+		int writes = 0;
+		const auto persistRotation = [&](const std::uint8_t *bytes, std::size_t size, bool backup) {
+			++writes;
+			check(backup && size == pendingCard.size() && std::memcmp(bytes, pendingCard.data(), size) == 0,
+				"Lease rotation changed the pending bytes or first-write backup");
+			return true;
+		};
+		check(phone_vmu::syncCard(6, rotationCard.data(), rotationCard.size(), true, persistRotation)
+				&& !phone_vmu::syncCard(6, rotationCard.data(), rotationCard.size(), true, persistRotation) && writes == 1,
+			"Rotated lease did not save its queued return and reattach the card exactly once");
+		check(request(address, rotationCheckout, "POST", "x", rotationHeaders(reopenLease, otherLease))
+				.find("HTTP/1.1 200") == 0, "A completed return could not rotate its lease");
+		check(request(address, rotationSync, "GET", "", leaseHeaders(reopenLease) + operationHeaders).find("HTTP/1.1 200") == 0
+				&& request(address, rotationSync, "POST", pendingCard, leaseHeaders(reopenLease) + operationHeaders)
+						.find("HTTP/1.1 200") == 0
+				&& !phone_vmu::syncCard(6, rotationCard.data(), rotationCard.size(), true, persistRotation) && writes == 1,
+			"Rotated lease could not replay its completed return without another write");
+		phone_vmu::unpublishCard(6, rotationCard.data());
+
 		check(request(address, address.path, "POST").find("HTTP/1.1 405") == 0, "Write request was accepted");
 		check(request(address, address.path + "%2e%2e/").find("HTTP/1.1 400") == 0, "Traversal was accepted");
 		testMapleSync(address);

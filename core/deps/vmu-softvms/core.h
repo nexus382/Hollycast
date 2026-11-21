@@ -82,6 +82,11 @@ function createVmu() {
     const period = 2 * (256 - sfr[0x32]);
     while (serialCycles >= period && (sfr[0x30] & 0x18)) {
       serialCycles -= period;
+      if (!serialPeer) {
+        // An unplugged data line reads high while the internal clock runs.
+        shiftSerial(0, 1);
+        continue;
+      }
       const data = sfr[0x31];
       const output = (sfr[0x30] & 4) ? data >> 7 : data & 1;
       if (serialByteMode) {
@@ -960,6 +965,8 @@ R"VMUJS(              writemem(0x101, (readmem(0x101) & 0x7f) | (r < s ? 0x80 : 
         const instructionTime = guestTicks + 1;
         guestTicks += cy * (linkTicksPerSlice / cyclesPerSlice);
         clockSerial(cy, instructionTime);
+      } else if (sfr[0x30] & 0x18) {
+        clockSerial(cy);
       }
       mcy += cy;
       if (mcy >= spd) {
@@ -1132,11 +1139,18 @@ R"VMUJS(              writemem(0x101, (readmem(0x101) & 0x7f) | (r < s ? 0x80 : 
     },
     // Linked cores are stepped in guest clock order by their shared scheduler.
     connectSerial(peer, byteMode = false) {
+      if (peer) {
+        serialBits.fill(0);
+        serialCycles = 0;
+      } else if (serialWaiting && !serialByteMode) {
+        // A pending bit already consumed its clock edge. Byte mode has
+        // already shifted in eight idle-high bits while awaiting the reply.
+        shiftSerial(0, 1);
+      }
       serialPeer = peer;
       serialByteMode = byteMode;
-      serialBits.fill(0);
       serialWaiting = false;
-      serialCycles = serialOutput = 0;
+      serialOutput = 0;
       guestTicks = 0;
     },
     // A synchronized cable starts both half-second timer dividers on the
