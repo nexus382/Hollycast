@@ -210,7 +210,17 @@ class PhoneVmuPlayer {
   key(key, pressed) { if (this.active && !this.sleeping && !this.core.halted) this.queue.push([key, pressed]); }
   releaseAll() {
     this.queue = [];
+    // The link scheduler applies input between agreed clock rounds.
+    if (this.core.linked) this.queue.push(null);
+    else this.releaseKeys();
+  }
+  releaseKeys() {
     for (let key = 0; key < 8; ++key) this.core.key(key, false);
+  }
+  applyInput() {
+    const event = this.queue.shift();
+    if (event === null) this.releaseKeys();
+    else if (event) this.core.key(...event);
   }
   sleep() {
     this.releaseAll(); this.sleeping = !this.sleeping; this.last = 0; this.acc = 0;
@@ -228,11 +238,15 @@ class PhoneVmuPlayer {
     if (!this.active || this.sleeping || hidden || this.core.halted) { this.last = 0; return; }
     if (!this.last) this.last = time;
     // Accelerate guest time only; network checkpoints continue on their real-time schedule.
-    this.acc += Math.min(Math.max(time - this.last, 0), 100) * this.speed; this.last = time;
+    this.acc = Math.min(this.acc + Math.min(Math.max(time - this.last, 0), 100) * this.speed, 100 * this.speed);
+    this.last = time;
     const slices = Math.floor(this.acc / 10);
-    if (!slices) return;
-    this.acc -= slices * 10;
-    this.core.run(slices, () => { const event = this.queue.shift(); if (event) this.core.key(...event); });
+    if (!slices || this.core.serialWaiting) return;
+    const completed = this.core.run(slices, () => this.applyInput());
+    this.acc -= completed * 10;
+    this.finishIfHalted();
+  }
+  finishIfHalted() {
     if (this.core.halted) {
       this.releaseAll(); this.tone(-1);
       this.describe(this.core.halted === 'exit'

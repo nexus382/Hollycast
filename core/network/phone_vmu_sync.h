@@ -10,6 +10,7 @@ class PhoneVmuSync {
  constructor(core,report,storage,key){
   this.core=core;this.report=report;this.storage=storage;this.key=key;
   this.owner=null;this.pending=null;this.saved=null;this.inFlight=null;this.resolution=null;this.returning=false;this.returned=false;this.blocked=false;
+  this.needsRecoveryLease=false;
  }
  static token(){return Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');}
  static encode(bytes){let text='';for(const b of bytes)text+=String.fromCharCode(b);return btoa(text);}
@@ -26,13 +27,14 @@ class PhoneVmuSync {
    const saved=JSON.parse(this.storage?.getItem(this.key)||'null');if(!saved)return null;
    const bytes=PhoneVmuSync.decode(saved.card);
    if(bytes.length!==131072||!saved.owner||!/^[0-7]$/.test(saved.owner.slot)||!/^[0-9a-f]{32}$/.test(saved.owner.lease)||typeof saved.owner.revision!=='string'||!Number.isSafeInteger(saved.owner.sequence)||saved.owner.sequence<0)return null;
+   if(saved.owner.previousLease!==undefined&&(!/^[0-9a-f]{32}$/.test(saved.owner.previousLease)||saved.owner.previousLease===saved.owner.lease||saved.owner.ready))return null;
    if(saved.pending){
     const data=PhoneVmuSync.decode(saved.pending.data);
     if(data.length!==131072||!/^[0-9a-f]{32}$/.test(saved.pending.operation))return null;
     this.pending={...saved.pending,data};
     this.returning=!!this.pending.returning;
    }
-   this.owner=saved.owner;return bytes;
+   this.owner=saved.owner;this.needsRecoveryLease=true;return bytes;
   }catch(_){return null;}
  }
  async request(path,options={}){
@@ -41,7 +43,7 @@ class PhoneVmuSync {
   finally{clearTimeout(timeout);}
  }
  async checkout(slot,revision,lease){
-  this.owner={slot,revision,lease,ready:false,sequence:0};this.saved=null;this.pending=null;this.returned=false;this.blocked=false;this.remember();
+  this.owner={slot,revision,lease,ready:false,sequence:0};this.saved=null;this.pending=null;this.returned=false;this.blocked=false;this.needsRecoveryLease=false;this.remember();
   try{await this.claim();}catch(error){
    if(error.conflict){this.owner=null;try{this.storage?.removeItem(this.key);}catch(_){}this.report('Automatic sync unavailable. Download this local copy to keep its progress.');}
    throw error;
@@ -57,6 +59,17 @@ class PhoneVmuSync {
   const operation=(async()=>{
    if(previous)await previous;
    if(!this.owner)throw new Error('No phone session to keep.');
+   if(this.needsRecoveryLease||this.owner.previousLease){
+    try{await this.ensureLease();}
+    catch(error){
+     if(error.status!==409)throw error;
+     // An explicit forced checkout with a fresh token can claim a free
+     // card after sharing restarts. It cannot replace another phone.
+     this.needsRecoveryLease=false;
+     delete this.owner.previousLease;
+     this.owner.lease=PhoneVmuSync.token();
+    }
+   }
    this.blocked=false;this.returning=false;this.owner.ready=false;
    this.pending=null;this.saved=null;this.remember();
    await this.claim(true);
@@ -84,13 +97,22 @@ class PhoneVmuSync {
    if(previous)await previous;
    const owner=this.owner;
    if(owner){
-    const response=await this.request('release/'+owner.slot,{method:'POST',headers:{'Content-Type':'application/octet-stream','X-VMU-Lease':owner.lease},body:new Uint8Array([0])});
+    let lease;
+    try{
+     if(this.needsRecoveryLease||owner.previousLease)await this.ensureLease();
+     lease=owner.lease;
+    }catch(error){
+     if(error.status!==409)throw error;
+     // A fresh token can acknowledge an already-free slot without releasing another tab's card.
+     lease=PhoneVmuSync.token();
+    }
+    const response=await this.request('release/'+owner.slot,{method:'POST',headers:{'Content-Type':'application/octet-stream','X-VMU-Lease':lease},body:new Uint8Array([0])});
     if(!response.ok&&response.status!==403&&response.status!==404){
      const error=new Error(response.status===409?'This VMU is now in use by another phone. Your phone copy is preserved.':'Hollycast could not reconnect the VMU. Your phone copy is preserved.');
      error.conflict=response.status===409;throw error;
     }
    }
-   this.owner=null;this.pending=null;this.saved=null;this.blocked=false;this.returning=false;this.returned=false;
+   this.owner=null;this.pending=null;this.saved=null;this.blocked=false;this.returning=false;this.returned=false;this.needsRecoveryLease=false;
    try{this.storage?.removeItem(this.key);}catch(_){}
    return true;
   })();
@@ -100,10 +122,25 @@ class PhoneVmuSync {
   finally{this.resolution=null;}
  }
  async claim(force=false){
-  const {slot,revision,lease}=this.owner;
-  const response=await this.request('checkout/'+slot,{method:'POST',headers:{'Content-Type':'application/octet-stream','If-Match':revision,'X-VMU-Lease':lease,...(force?{'X-VMU-Force':'1'}:{})},body:new Uint8Array([0])});
-  if(!response.ok){const error=new Error(response.status===409?'This VMU changed or is already in use. Try again after the Dreamcast finishes saving. If its phone session was lost, turn Connect Phone off and on in Hollycast, then reload the saved pairing page.':'This VMU cannot sync. Use a writable card outside netplay.');error.conflict=response.status===403||response.status===409;throw error;}
-  this.owner.ready=true;this.remember();
+  const {slot,revision,lease,previousLease}=this.owner;
+  const headers={'Content-Type':'application/octet-stream','If-Match':revision,'X-VMU-Lease':lease};
+  if(previousLease)headers['X-VMU-Previous-Lease']=previousLease;
+  if(force)headers['X-VMU-Force']='1';
+  const response=await this.request('checkout/'+slot,{method:'POST',headers,body:new Uint8Array([0])});
+  if(!response.ok){const error=new Error(response.status===409?'This VMU changed or is already in use. Try again after the Dreamcast finishes saving. If its phone session was lost, turn Connect Phone off and on in Hollycast, then reload the saved pairing page.':'This VMU cannot sync. Use a writable card outside netplay.');error.status=response.status;error.conflict=response.status===403||response.status===409;throw error;}
+  delete this.owner.previousLease;this.owner.ready=true;this.remember();
+ }
+ async ensureLease(){
+  // Finish a saved checkout or rotation before establishing this page's
+  // identity. Persist the pair before sending so losing the reply is safe.
+  if(!this.owner.ready)await this.claim();
+  if(!this.needsRecoveryLease)return;
+  this.needsRecoveryLease=false;
+  this.owner.previousLease=this.owner.lease;
+  this.owner.lease=PhoneVmuSync.token();
+  this.owner.ready=false;
+  this.remember();
+  await this.claim();
  }
  checkpoint(returning=false){
   if(this.resolution)return returning?this.resolution.then(ok=>ok?this.checkpoint(true):false):this.resolution;
@@ -116,7 +153,7 @@ class PhoneVmuSync {
  }
  async transfer(returning){
   try{
-   if(!this.owner.ready)await this.claim();
+   if(!this.owner.ready||this.needsRecoveryLease)await this.ensureLease();
    // Finish the previous operation before creating another. Its result may
    // have reached disk even when the phone lost the response or reloaded.
    if(this.pending){this.remember();await this.sendPending();}

@@ -10,6 +10,7 @@ const assets=[
  ['../../core/deps/vmu-softvms/core.h','VMUJS'],
  ['../../core/deps/vmu-softvms/core.h','VMULICENSE'],
  ['../../core/network/phone_vmu_player.h','VMUPLAYER'],
+ ['../../core/network/phone_vmu_link.h','VMULINK'],
  ['../../core/network/phone_vmu_sync.h','VMUSYNC'],
  ['../../core/deps/nosleep/media.h','WAKEJS'],
 ];

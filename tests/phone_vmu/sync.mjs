@@ -8,7 +8,7 @@ import {engine,inputProgram} from './mini_game.mjs';
 
 function setup(){
  const values=new Map(),storage={setItem:(k,v)=>values.set(k,v),getItem:k=>values.get(k),removeItem:k=>values.delete(k)};
- const server={owner:null,operations:new Map(),requests:0,writes:0,uploads:[],paused:false,failBefore:false,loseReply:false,disk:false,conflict:false,card:new Uint8Array(131072).fill(0x55),checkoutPending:false,settleCheckout:null};
+ const server={owner:null,lease:null,revision:'"1"',operations:new Map(),requests:0,writes:0,uploads:[],rotations:[],paused:false,failBefore:false,loseReply:false,disk:false,conflict:false,card:new Uint8Array(131072).fill(0x55),checkoutPending:false,settleCheckout:null};
  const fetch=async(path,options={})=>{
   ++server.requests;
   if(server.failBefore){server.failBefore=false;throw new Error('offline');}
@@ -16,15 +16,30 @@ function setup(){
   let status;
   if(server.conflict)status=409;
   else if(path.startsWith('checkout/')){
-   if(server.checkoutPending)return new Promise(resolve=>{server.settleCheckout=()=>{server.owner=lease;resolve({status:200,ok:true});};});
-   status=server.owner&&server.owner!==lease?409:200;if(status===200)server.owner=lease;
+   const previousLease=headers['X-VMU-Previous-Lease'];
+   if(previousLease){
+    status=server.lease===previousLease||server.lease===lease?200:409;
+    server.rotations.push({previousLease,lease,status});
+    if(status===200){
+     server.lease=lease;
+     if(server.owner)server.owner=lease;
+    }
+   }else if(server.owner===lease&&!server.checkoutPending)status=200;
+   else if(server.owner&&server.owner!==lease)status=409;
+   else if(headers['X-VMU-Force']!=='1'&&headers['If-Match']!==server.revision)status=409;
+   else{
+    if(server.checkoutPending)return new Promise(resolve=>{server.settleCheckout=()=>{server.owner=server.lease=lease;resolve({status:200,ok:true});};});
+    server.owner=server.lease=lease;server.operations.clear();status=200;
+   }
   }else if(path.startsWith('release/')){
    status=server.owner&&server.owner!==lease?409:200;
-   if(status===200&&server.owner===lease){server.owner=null;server.operations.clear();}
-  }else{
-   assert.equal(path,'sync/0');assert.equal(server.owner,lease);
+   if(status===200&&server.owner===lease){server.owner=server.lease=null;server.operations.clear();}
+  }else if(server.lease!==lease)status=409;
+  else{
+   assert.equal(path,'sync/0');
    let entry=server.operations.get(operation);
    if(!entry&&options.method==='POST'){
+    if(!server.owner)return {status:409,ok:false};
     entry={data:new Uint8Array(options.body),returning:headers['X-VMU-Return']==='1',status:202};server.operations.set(operation,entry);
     server.uploads.push({returning:entry.returning,data:new Uint8Array(entry.data)});
    }
@@ -43,7 +58,15 @@ function setup(){
  vm.runInContext(readAsset('../../core/network/phone_vmu_sync.h','VMUSYNC'),context);
  const Sync=vm.runInContext('PhoneVmuSync',context),messages=[];
  const sync=new Sync(core,message=>messages.push(message),storage,'test');
- return {sync,Sync,core,storage,server,messages,lease:Sync.token()};
+ function fork(record=storage.getItem('test')){
+  const values=new Map([['test',record]]);
+  const browserStorage={setItem:(k,v)=>values.set(k,v),getItem:k=>values.get(k),removeItem:k=>values.delete(k)};
+  const vmCore={flash:new Uint8Array(131072)};
+  const tab=new Sync(vmCore,()=>{},browserStorage,'test');
+  const bytes=tab.restore();assert.ok(bytes);vmCore.flash.set(bytes);
+  return {tab,flash:vmCore.flash,storage:browserStorage};
+ }
+ return {sync,Sync,core,storage,server,messages,fork,lease:Sync.token()};
 }
 
 const normal=setup();
@@ -131,7 +154,67 @@ assert.equal(discarded.sync.owner,null);assert.equal(discarded.storage.getItem('
 const checkout=setup();checkout.server.loseReply=true;
 await assert.rejects(checkout.sync.checkout('0','"1"',checkout.lease));
 const reloaded=new checkout.Sync(checkout.core,()=>{},checkout.storage,'test');
-assert.ok(reloaded.restore());assert.equal(await reloaded.checkpoint(true),true,'Recover ownership after losing the checkout reply');
+checkout.core.flash.set(reloaded.restore());
+assert.equal(await reloaded.checkpoint(true),true,'Recover ownership after losing the checkout reply');
+assert.equal(checkout.server.rotations.length,1);
+assert.equal(checkout.server.rotations[0].previousLease,checkout.lease);
+assert.notEqual(checkout.server.rotations[0].lease,checkout.lease);
+
+const copied=setup();await copied.sync.checkout('0','"1"',copied.lease);
+const winner=copied.fork(),staleTab=copied.fork(),staleDiscard=copied.fork();
+winner.flash[123]=81;
+assert.equal(await winner.tab.checkpoint(),true);
+assert.notEqual(copied.server.owner,copied.lease,'A recovered document must use a fresh lease');
+copied.core.flash[123]=82;
+assert.equal(await copied.sync.checkpoint(),false,'The original tab must lose write access after rotation');
+staleTab.flash[123]=83;
+assert.equal(await staleTab.tab.checkpoint(),false,'A copied tab cannot rotate a lease already replaced by another document');
+await assert.rejects(staleTab.tab.forceTakeover(),/already in use/);
+await assert.rejects(staleDiscard.tab.discard(),/in use/);
+assert.ok(staleDiscard.storage.getItem('test'),'Discard must preserve local recovery if another document owns the card');
+assert.equal(copied.server.card[123],81);
+assert.equal(copied.server.writes,1);
+
+const restoredForce=setup();await restoredForce.sync.checkout('0','"1"',restoredForce.lease);
+const freeCard=restoredForce.fork();freeCard.flash[123]=84;
+restoredForce.server.owner=restoredForce.server.lease=null;restoredForce.server.revision='"2"';
+assert.equal(await freeCard.tab.checkpoint(),false);
+assert.equal(await freeCard.tab.forceTakeover(),true,'Explicit Keep my phone copy may claim a free card after sharing restarts');
+assert.equal(restoredForce.server.card[123],84);
+
+const restoredDiscard=setup();await restoredDiscard.sync.checkout('0','"1"',restoredDiscard.lease);
+const freeDesktop=restoredDiscard.fork();
+restoredDiscard.server.owner=restoredDiscard.server.lease=null;restoredDiscard.server.revision='"2"';
+assert.equal(await freeDesktop.tab.discard(),true,'Use Hollycast copy must still work when the slot is already free');
+assert.equal(freeDesktop.storage.getItem('test'),undefined);
+
+const rotation=setup();await rotation.sync.checkout('0','"1"',rotation.lease);
+const rotating=rotation.fork();rotating.flash[123]=85;rotation.server.loseReply=true;
+assert.equal(await rotating.tab.checkpoint(),false);
+const firstRotation=rotation.server.rotations[0],pendingRotation=JSON.parse(rotating.storage.getItem('test')).owner;
+assert.equal(pendingRotation.previousLease,rotation.lease);
+assert.equal(pendingRotation.lease,firstRotation.lease);
+assert.equal(pendingRotation.ready,false);
+const resumed=rotation.fork(rotating.storage.getItem('test'));
+assert.equal(resumed.flash[123],85,'The in-flight rotation must retain the recovered card bytes');
+assert.equal(await resumed.tab.checkpoint(),true);
+assert.deepEqual(rotation.server.rotations[1],firstRotation,'Reload must retry the same old/new lease pair');
+assert.equal(rotation.server.rotations[2].previousLease,firstRotation.lease);
+assert.notEqual(rotation.server.rotations[2].lease,firstRotation.lease,'Reload must then establish its own lease');
+assert.equal(rotation.server.card[123],85);
+assert.equal(rotation.server.writes,1);
+assert.equal(JSON.parse(resumed.storage.getItem('test')).owner.previousLease,undefined);
+assert.equal(await rotating.tab.checkpoint(),false,'The interrupted document cannot reclaim the completed rotation');
+
+const lostReturn=setup();await lostReturn.sync.checkout('0','"1"',lostReturn.lease);
+lostReturn.core.flash[123]=86;lostReturn.server.loseReply=true;
+assert.equal(await lostReturn.sync.checkpoint(true),false);
+assert.equal(lostReturn.server.owner,null,'The desktop already reconnected the card before its reply was lost');
+const returningTab=lostReturn.fork();
+assert.equal(await returningTab.tab.checkpoint(),true);
+assert.equal(returningTab.tab.returned,true);
+assert.equal(lostReturn.server.writes,1,'Rotating a completed return must preserve its idempotent result');
+assert.equal(lostReturn.server.card[123],86);
 
 const local=setup();assert.equal(await local.sync.checkpoint(),true);assert.equal(local.server.requests,0,'Local files must never be uploaded');
 console.log('Phone progress sync, VMU execution, retries, reload recovery, disk failures, and conflict checks passed');
