@@ -7,7 +7,7 @@ root = Path(__file__).resolve().parents[2]
 source = (root / "core/hw/maple/maple_devs.cpp").read_text(encoding="utf-8")
 header = (root / "core/hw/maple/maple_devs.h").read_text(encoding="utf-8")
 link = source[source.index("bool maple_sega_vmu::linkStatus()"):source.index("u32 maple_sega_vmu::dma(u32 cmd)")].replace("std::time(", "testTime(")
-save = source[source.index("bool maple_sega_vmu::fullSave()"):source.index("void maple_sega_vmu::initializeVmu()")]
+save = source[source.index("bool maple_sega_vmu::fullSave()"):source.index("void maple_sega_vmu::detachSaveFile()")]
 base_link = header[header.index("\tvirtual bool linkStatus()"):header.index("\tvirtual void requestReconnect()")]
 
 prefix = r'''
@@ -37,6 +37,7 @@ struct maple_sega_vmu : maple_base {
  int bus_id = 1, bus_port = 0;
  char logical_port[3] = "B1";
  bool fullSaveNeeded = false, accessed_blocks_valid = false;
+ bool fileDetached = false;
  u64 last_write_tick = 0;
  bool fullSave();
  bool linkStatus() override;
