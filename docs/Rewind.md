@@ -19,15 +19,26 @@ settings below are locked, because changing them clears recorded history.
 
 | Setting | Default | Options | Meaning |
 | --- | --- | --- | --- |
-| Snapshot Interval | 0.25 s | 0.1 / 0.25 / 0.5 / 1 s | Guest time between snapshots |
-| History Duration | 30 s | 5–120 s | How far back rewind can go |
-| Compression | Fast | Fast / Balanced / Maximum | Trade capture CPU for memory use |
+| Enable Rewind | Off | Off / On | Records gameplay history when you start a supported game. |
+| Snapshot Interval | 0.25 s | 0.1 / 0.25 / 0.5 / 1 s | Time inside the game between captures. Shorter intervals give more precise steps and increase CPU and memory use. |
+| History Duration | 30 s | 5–120 s | Target amount of gameplay to keep. Shorten it to use less memory. |
+| Compression | Fast | Fast / Balanced / Maximum | Fast spends the least CPU time. Balanced and Maximum spend more CPU time to try to keep snapshots smaller. |
 
-History Duration sets the target window. Recorded history can be shorter
-when compression cannot keep up or the internal memory ceiling is reached.
+Start with the defaults. If gameplay slows down, keep **Fast** compression
+and try **0.5 s** or **1 s** between snapshots. If memory use is the issue,
+shorten **History Duration** first. Use **0.1 s** when you want finer steps
+and your device has room for the extra work.
+
+## How history works
+
+Hollycast periodically captures the emulated machine's state and compresses
+it on a background worker. If the worker is busy, Hollycast skips that
+capture. When history reaches the configured duration or memory ceiling,
+the oldest snapshots are discarded. The available history can also be
+shorter after a save or other event that clears it.
+
 Memory use grows with longer duration, shorter intervals, and larger game
-states. Fast compression favors gameplay speed. Balanced and Maximum spend
-more CPU time compressing each snapshot. Hollycast retains up to 256 MiB of
+states. Hollycast retains up to 256 MiB of
 compressed history on 32-bit, Android, iOS, Switch and UWP builds, and up to
 2 GiB on other 64-bit builds. Capture and playback also use temporary memory.
 Each raw snapshot is limited to 128 MiB. Allocation, serialization, or
@@ -40,10 +51,13 @@ compression failures stop rewind and report an error.
   there. A new keyboard mapping binds it to Backspace. A saved mapping from
   an older install has no binding until you assign one.
 - **Step Back.** The in-game Commands menu has a **Step Back** button. It
-  restores the previous snapshot and resumes gameplay.
+  restores the most recent snapshot earlier than the current position and
+  resumes gameplay. It becomes available once there is an earlier snapshot.
 
-Moving backwards discards the abandoned future for good. At the oldest
-snapshot, holding simply waits; it never wraps or advances the game.
+Holding Rewind plays back older snapshots one by one and discards the newer
+snapshots along the way. Audio is muted while snapshots play back. At the
+oldest snapshot, emulation waits. Release the button to continue playing from
+the restored point.
 
 History lives in memory only. Stopping the game, loading a state, resetting,
 changing discs, reconnecting controller devices, or changing Rewind settings
@@ -83,7 +97,8 @@ does not run:
 
 - on Hikaru or System SP;
 - in RetroAchievements hardcore mode;
-- during online, rollback (GGPO), Battle Cable, or linked-cabinet play;
+- during online play, Capcom Direct matchmaking, rollback (GGPO), Battle
+  Cable, or linked-cabinet play;
 - with a NetDIMM cartridge, arcade card reader, or medal hopper;
 - with host serial output enabled;
 - in Fish Life or Alien Front, which use serial devices whose state cannot be rewound;
@@ -96,6 +111,16 @@ rendering, which can reduce performance. Your stored multi-threading
 preference is not changed; it applies again to sessions without Rewind. The
 on-screen touch controls have no Rewind button in this version; use Step
 Back or a mapped physical/keyboard button.
+
+## If Rewind is missing or history is short
+
+- **Step Back is gray.** Check the reason shown in Commands. If Rewind is
+  enabled and available, play a little longer to record an earlier snapshot.
+- **The keyboard or controller doesn't rewind.** Open **Settings > Controls**,
+  edit the device's mapping, and assign **Rewind (hold)**.
+- **Rewind stops at a recent point.** An in-game save, reset, or other history
+  boundary may have cleared older snapshots. The configured duration is the
+  target for uninterrupted gameplay.
 
 ## For testers
 
