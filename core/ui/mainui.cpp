@@ -32,6 +32,7 @@
 #include "wsi/context.h"
 #include "cfg/option.h"
 #include "emulator.h"
+#include "network/ggpo.h"
 #include "rend/CustomTexture.h"
 #include "imgui_driver.h"
 #include "rend/vmu_window.h"
@@ -122,13 +123,17 @@ bool mainui_rend_frame()
 			// turn that timeout into an extra swap of an incomplete backbuffer.
 			// Hikaru presents its completed image and OSD together, so a wait
 			// without a frame must not request the shared PVR fallback below.
-			// The running debugger still needs controls for programs with no video.
-			if (!frameRendered && (!emu.running() || settings.platform.isHikaru() || !assembly_debugger::active()))
+			// The debugger and GGPO recovery need UI updates even while the
+			// guest is stopped at a frame boundary and produces no new image.
+			const bool redrawOverlay = !settings.platform.isHikaru()
+					&& (assembly_debugger::active()
+						|| ggpo::reconnectSecondsRemaining() >= 0
+						|| ggpo::reconnectUnpauseSecondsRemaining() >= 0);
+			if (!frameRendered && (!emu.running() || !redrawOverlay))
 				return false;
-			// Fresh game frames already draw their overlay. A shared-thread CPU
-			// slice can also finish without an image, so only the active debugger
-			// may request a redraw here, over a completed game background.
-			if (ImGui::GetFrameCount() == uiFrame && assembly_debugger::active() && !settings.platform.isHikaru())
+			// Fresh game frames already draw their overlay. Reuse the last
+			// completed game image when no overlay was drawn this frame.
+			if (ImGui::GetFrameCount() == uiFrame && redrawOverlay)
 			{
 				gui_display_osd(true);
 				// DX/OpenGL drivers normally receive this signal from a game
