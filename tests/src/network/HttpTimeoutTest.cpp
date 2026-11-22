@@ -131,6 +131,16 @@ TEST_F(HttpTimeoutTest, RejectsChunkedResponseLargerThanByteLimit)
 	EXPECT_TRUE(content.empty());
 }
 
+TEST_F(HttpTimeoutTest, RejectsOversizedResponseWithCancellationEnabled)
+{
+	const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabcdef";
+	StalledServer server(response, true);
+	std::atomic_bool cancelled{false};
+	std::vector<u8> content;
+	EXPECT_EQ(http::get(server.url(), content, nullptr, nullptr, 500, 4, &cancelled), 413);
+	EXPECT_TRUE(content.empty());
+}
+
 TEST_F(HttpTimeoutTest, CancelsBeforeMakingTheRequest)
 {
 	const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nabcd";

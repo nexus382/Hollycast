@@ -18,6 +18,9 @@
 	along with Hollycast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui_menu.h"
+#include "gui_debugger.h"
+#include "debug/assembly_debugger.h"
+#include "app_updater.h"
 #include "gui.h"
 #include "gui_util.h"
 #include "theme.h"
@@ -582,6 +585,11 @@ void renderToolsMenu()
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("%s", T("CHD conversion is not available yet."));
 
+		if (ImGui::MenuItem(T("Assembly Debugger"), nullptr, assembly_debugger::active(), assembly_debugger::available()))
+			gui_open_debugger();
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !assembly_debugger::available())
+			ImGui::SetTooltip("%s", T("Load an offline game with hardcore mode and the GDB server disabled."));
+
 		// Custom Boxart
 		if (ImGui::MenuItem(T("Custom Boxart"), nullptr, false, true))
 		{
@@ -672,13 +680,8 @@ void renderHelpMenu()
 
 		ImGui::Separator();
 
-		if (ImGui::MenuItem(T("Check for Updates"), nullptr, false, canOpenLinks))
-		{
-			if (!openUrlInShell("https://nexus382.github.io/Hollycast/"))
-				WARN_LOG(COMMON, "Unable to open updates page from Help menu");
-		}
-		if (!canOpenLinks && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip("%s", T("Opening links is not supported on this platform."));
+		if (ImGui::MenuItem(T("Check for Updates")))
+			app_updates::open();
 
 		ImGui::Separator();
 

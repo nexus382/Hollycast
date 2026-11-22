@@ -20,8 +20,11 @@
 
 #include "audio/ui_sound.h"
 #include "mainui.h"
+#include "test_harness.h"
 #include "hw/pvr/Renderer_if.h"
+#include "hw/sh4/sh4_core.h"
 #include "gui.h"
+#include "gui_debugger.h"
 #include "gui_menu.h"
 #include "oslib/oslib.h"
 #include "wsi/context.h"
@@ -55,6 +58,8 @@ bool mainui_rend_frame()
 
 	os_DoEvents();
 	os_UpdateInputState();
+	test_harness::poll();
+	gui_poll_debugger();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::update(!gui_is_open());
 #endif
@@ -75,8 +80,24 @@ bool mainui_rend_frame()
 	else
 	{
 		try {
-			if (!emu.render())
+			const int uiFrame = ImGui::GetFrameCount();
+			const bool frameRendered = emu.render();
+			// Shared-thread execution leaves the guest's rounding mode active,
+			// including when a breakpoint or no-video program ends the slice.
+			if (!config::ThreadedRendering)
+				setDefaultRoundingMode();
+			if (!frameRendered && !emu.running())
 				return false;
+			// A boot loop or hung game may never submit a frame. In either
+			// rendering mode, keep menus and Pause responsive without drawing
+			// the overlay twice when a game frame already drew it.
+			if (ImGui::GetFrameCount() == uiFrame)
+			{
+				gui_display_osd();
+				// DX/OpenGL drivers normally receive this signal from a game
+				// frame. An overlay drawn on its own must also be presented.
+				imguiDriver->setFrameRendered();
+			}
 			if (config::ProfilerEnabled && config::ProfilerDrawToGUI)
 				gui_display_profiler();
 		} catch (const RendererException& e) {
@@ -107,6 +128,7 @@ void mainui_init()
 
 void mainui_term()
 {
+	test_harness::releaseInputs();
 #if defined(__ANDROID__) && defined(HAVE_MOVABLE_VMUS)
 	vmu_window::shutdown();
 #endif
@@ -129,7 +151,9 @@ void mainui_loop(bool forceStart)
 		if (mainui_rend_frame() && imguiDriver != nullptr)
 		{
 			try {
+				test_harness::beforePresent();
 				imguiDriver->present();
+				test_harness::presented();
 			} catch (const FlycastException& e) {
 				forceReinit = true;
 			}

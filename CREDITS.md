@@ -60,6 +60,12 @@ Having that work available, and people willing to help explain it, has saved us 
 
 Thank you to the MAME developers and contributors, including **MetalliC**, credited on the [Hikaru driver](https://github.com/mamedev/mame/blob/master/src/mame/sega/hikaru.cpp), and everyone who helped investigate and document the system. That knowledge has been a real help to us.
 
+## Phone VMU contributors
+
+Phone VMU mini-games use **Bucanero**'s JavaScript port of **Marcus Comstedt**'s SoftVMS 1.10, from [dcvmu-tool](https://github.com/bucanero/dcvmu-tool). The browser engine and its GPLv3 license are included with the source. Pairing codes use **Project Nayuki**'s [QR Code generator](https://github.com/nayuki/QR-Code-generator), under the MIT license.
+
+The phone screen's keep-awake fallback uses the silent video assets from **Rich Tibbett**'s [NoSleep.js](https://github.com/richtr/NoSleep.js), under the MIT license. The media and license are included with the source.
+
 ## To everyone playing Hollycast
 
 You are a big part of what makes this community great. So many of you are already enjoying Hollycast, and just about everything we've heard back has been positive. People have been encouraging, patient, and willing to help. With the way things often go on the internet these days, that's been a welcome change of pace. It makes me want to keep working on this.

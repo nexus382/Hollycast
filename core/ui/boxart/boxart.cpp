@@ -650,31 +650,38 @@ void Boxart::invalidateOfflineArtwork()
 	markDatabaseDirty();
 }
 
-GameBoxart Boxart::getCachedBoxart(const GameMedia& media)
+GameBoxart Boxart::getCachedBoxart(const GameMedia& media, BoxartSourceMode mode)
 {
-	if (cacheRefreshPending.load())
-	{
-		const GameBoxart source = makeMediaBoxart(media);
-		std::lock_guard<std::mutex> guard(mutex);
-		const auto current = games.find(source.sourceKey());
-		if (current != games.end())
-		{
-			GameBoxart cached = current->second;
-			cached.busy = false;
-			return cached;
-		}
-		const auto legacy = games.find("legacy:" + media.fileName);
-		if (legacy == games.end())
-			return source;
-		GameBoxart cached = legacy->second;
-		cached.busy = false;
-		return cached;
-	}
-	loadDatabase();
-	const GameBoxart source = makeMediaBoxart(media);
+	const bool refreshing = cacheRefreshPending.load();
+	if (!refreshing)
+		loadDatabase();
+	GameBoxart source = makeMediaBoxart(media);
+	const std::string key = source.sourceKey();
 	std::lock_guard<std::mutex> guard(mutex);
-	const auto it = games.find(source.sourceKey());
-	return it == games.end() ? source : it->second;
+	if (!refreshing && mode == BoxartSourceMode::PhysicalMediaOnly)
+	{
+		const auto physical = physicalCache.find(key);
+		if (physical != physicalCache.end())
+			return physical->second;
+	}
+	auto it = games.find(key);
+	if (it == games.end())
+	{
+		// Older databases used filenames. A read must not migrate or claim the record.
+		it = games.find("legacy:" + media.fileName);
+		if (it == games.end() || it->second.arcade != media.arcade)
+			return source;
+	}
+	GameBoxart cached = it->second;
+	if (refreshing)
+		cached.busy = false;
+	return cached;
+}
+
+Boxart::MetadataRevision Boxart::metadataRevision()
+{
+	std::lock_guard<std::mutex> guard(mutex);
+	return {databaseGeneration, playtimeGeneration};
 }
 
 GameBoxart Boxart::getBoxart(const GameMedia& media)
@@ -682,7 +689,11 @@ GameBoxart Boxart::getBoxart(const GameMedia& media)
 	if (media.path.empty() && media.fileName.empty() && !media.arcade && !media.device)
 		return getBiosBoxart(media);
 	if (cacheRefreshPending.load())
-		return getCachedBoxart(media);
+	{
+		GameBoxart cached = getCachedBoxart(media);
+		cached.playTimeSeconds = getLibraryPlaytime(cached);
+		return cached;
+	}
 	loadDatabase();
 	const int sourceMode = config::BoxartSourceMode.get();
 	if (sourceMode == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
@@ -701,10 +712,7 @@ GameBoxart Boxart::getBoxart(const GameMedia& media)
 		boxart.boxartPath.clear();
 	}
 
-	{
-		std::lock_guard<std::mutex> guard(playtimeMutex);
-		applyLibraryPlaytimeUnlocked(boxart);
-	}
+	boxart.playTimeSeconds = getLibraryPlaytime(boxart);
 
 	selectProviderCover(boxart);
 	if (sourceMode == static_cast<int>(BoxartSourceMode::CustomThenScraped))
@@ -884,7 +892,7 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 	if (media.path.empty() && media.fileName.empty() && !media.arcade && !media.device)
 		return getBiosBoxart(media);
 	if (cacheRefreshPending.load())
-		return getCachedBoxart(media);
+		return getBoxart(media);
 	loadDatabase();
 	const int sourceMode = config::BoxartSourceMode.get();
 	if (sourceMode == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
@@ -953,10 +961,7 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 		}
 	}
 
-	{
-		std::lock_guard<std::mutex> guard(playtimeMutex);
-		applyLibraryPlaytimeUnlocked(boxart);
-	}
+	boxart.playTimeSeconds = getLibraryPlaytime(boxart);
 
 	selectProviderCover(boxart);
 	if (useCustomBoxart)
@@ -1095,10 +1100,7 @@ GameBoxart Boxart::getPhysicalBoxart(const GameMedia& media)
 		}
 		saveDatabase();
 	}
-	{
-		std::lock_guard<std::mutex> guard(playtimeMutex);
-		applyLibraryPlaytimeUnlocked(boxart);
-	}
+	boxart.playTimeSeconds = getLibraryPlaytime(boxart);
 	return boxart;
 }
 
@@ -1766,6 +1768,9 @@ void Boxart::loadDatabase()
 			game.workRevision = ++nextWorkRevision;
 			games[game.sourceKey()] = std::move(game);
 		}
+		// Another reader may have observed the empty cache while the JSON was loading.
+		if (!loadedGames.empty())
+			++databaseGeneration;
 		if (loadedLegacyDatabase)
 			markDatabaseDirty();
 	} catch (const json::exception& e) {
@@ -1775,22 +1780,15 @@ void Boxart::loadDatabase()
 	refreshCustomBoxartIndex(false);
 }
 
-void Boxart::applyLibraryPlaytimeUnlocked(GameBoxart& boxart) const
+std::optional<u64> Boxart::getLibraryPlaytime(const GameBoxart& game)
 {
-	boxart.playTimeSeconds.reset();
-
-	const std::string gameId = (
-		(!boxart.arcade && !boxart.uniqueId.empty())
-			? normalizeLibraryGameId(boxart.uniqueId)
-			: gameIdFromFilename(boxart.fileName)
-	);
-
+	const std::string gameId = !game.arcade && !game.uniqueId.empty()
+			? normalizeLibraryGameId(game.uniqueId) : gameIdFromFilename(game.fileName);
 	if (gameId.empty())
-		return;
-
+		return std::nullopt;
+	std::lock_guard<std::mutex> guard(playtimeMutex);
 	const auto it = libraryPlaytimeByGameId.find(gameId);
-	if (it != libraryPlaytimeByGameId.end())
-		boxart.playTimeSeconds = it->second;
+	return it == libraryPlaytimeByGameId.end() ? std::nullopt : std::optional<u64>(it->second);
 }
 
 void Boxart::loadLibraryPlaytimeDatabase()
@@ -1853,8 +1851,8 @@ void Boxart::loadLibraryPlaytimeDatabase()
 			const json& entry = it.value();
 			auto seconds = entry.is_object() ? entry.find("seconds") : entry.end();
 			if (gameId.empty() || gameId.size() > 1024 || seconds == entry.end()
-					|| (!seconds->is_number_unsigned() && !seconds->is_number_integer())
-					|| (seconds->is_number_integer() && seconds->get<s64>() < 0))
+					|| (!seconds->is_number_unsigned()
+							&& (!seconds->is_number_integer() || seconds->get<s64>() < 0)))
 			{
 				++invalidEntries;
 				continue;
@@ -1872,6 +1870,7 @@ void Boxart::loadLibraryPlaytimeDatabase()
 
 	std::lock_guard<std::mutex> guard(mutex);
 	libraryPlaytimeByGameId = std::move(loadedPlaytimes);
+	++playtimeGeneration;
 }
 
 void Boxart::refreshLibraryPlaytimeDatabase()
@@ -1937,6 +1936,7 @@ void Boxart::checkpointPlaytime(bool isPaused)
 		std::lock_guard<std::mutex> guard(mutex);
 		u64& total = libraryPlaytimeByGameId[playtimeGameId];
 		total += std::min<u64>(seconds.count(), std::numeric_limits<u64>::max() - total);
+		++playtimeGeneration;
 		playtimeDirty = true;
 	}
 	if (isPaused)

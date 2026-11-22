@@ -33,6 +33,7 @@
 #include <jni.h>
 #include <unistd.h>
 #include <exception>
+#include <stdexcept>
 
 JavaVM* g_jvm;
 namespace jni
@@ -472,6 +473,52 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_AudioBackend_s
 
     // Attach debugger here to figure out what went wrong
     for(;;) ;
+}
+
+// Java publishes immutable snapshots; no Play API objects cross into the rendering thread.
+std::string androidAppUpdates(const std::string& action)
+{
+    if (g_activity == nullptr) throw std::runtime_error("The Android activity is not available.");
+    JNIEnv* env = jni::env();
+    jclass cls = env->GetObjectClass(g_activity);
+    if (cls == nullptr) { env->ExceptionClear(); throw std::runtime_error("Cannot access Android updates."); }
+    jmethodID method = env->GetMethodID(cls, "appUpdates", "(Ljava/lang/String;)Ljava/lang/String;");
+    env->DeleteLocalRef(cls);
+    if (method == nullptr) { env->ExceptionClear(); throw std::runtime_error("Android update support is unavailable."); }
+    jni::String command(action);
+    jstring result = static_cast<jstring>(env->CallObjectMethod(g_activity, method, (jstring)command));
+    if (env->ExceptionCheck()) { env->ExceptionClear(); throw std::runtime_error("Cannot query Android updates."); }
+    if (result == nullptr) throw std::runtime_error("Android returned no update information.");
+    const char* bytes = env->GetStringUTFChars(result, nullptr);
+    if (bytes == nullptr) { env->DeleteLocalRef(result); env->ExceptionClear(); throw std::runtime_error("Cannot read Android update information."); }
+    std::string snapshot(bytes);
+    env->ReleaseStringUTFChars(result, bytes);
+    env->DeleteLocalRef(result);
+    return snapshot;
+}
+
+void installAndroidUpdate(const std::string& url, const std::string& checksum,
+        const std::string& directory, uint64_t size)
+{
+    if (g_activity == nullptr) throw std::runtime_error("The Android activity is not available.");
+    JNIEnv* env = jni::env();
+    jclass activityClass = env->GetObjectClass(g_activity);
+    if (activityClass == nullptr) {
+        env->ExceptionClear();
+        throw std::runtime_error("Cannot access the Android update installer.");
+    }
+    const auto method = env->GetMethodID(activityClass, "installUpdate", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V");
+    env->DeleteLocalRef(activityClass);
+    if (method == nullptr) {
+        env->ExceptionClear();
+        throw std::runtime_error("The Android update installer is not available in this build.");
+    }
+    jni::String jurl(url), jchecksum(checksum), jdirectory(directory);
+    env->CallVoidMethod(g_activity, method, (jstring)jurl, (jstring)jchecksum, (jstring)jdirectory, static_cast<jlong>(size));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        throw std::runtime_error("Android could not start the update installer.");
+    }
 }
 
 void SaveAndroidSettings()

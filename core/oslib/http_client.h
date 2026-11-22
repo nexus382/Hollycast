@@ -22,12 +22,12 @@
 #include "version.h"
 
 #include <string>
+#include <atomic>
 #include <vector>
 #include <cctype>
 #include <iomanip>
 #include <sstream>
 #include <locale>
-#include <atomic>
 #include <limits>
 
 namespace http {
