@@ -71,6 +71,19 @@ protected:
 };
 #define ASSERT_NZCV_EQ(expected) ASSERT_EQ(arm_Reg[RN_PSR_FLAGS].I & NZCV_MASK, (expected));
 
+TEST_F(AicaArmTest, ZeroCycleBudgetDoesNotDispatch)
+{
+	PrepareOp(0xe2800001);	// add r0, r0, #1
+	arm_Reg[0].I = 0;
+	arm_Reg[R15_ARM_NEXT].I = 0x1000;
+	arm_Reg[CYCL_CNT].I = 0;
+
+	arm_mainloop(arm_Reg, EntryPoints);
+
+	EXPECT_EQ(arm_Reg[0].I, 0u);
+	EXPECT_EQ(arm_Reg[R15_ARM_NEXT].I, 0x1000u);
+}
+
 TEST_F(AicaArmTest, InterpreterExecutionStateIsIndependent)
 {
 	// Two independent RAM views and programs exercise switching without copying RAM.

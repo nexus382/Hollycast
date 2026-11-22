@@ -692,7 +692,8 @@ public:
 		arm_dispatch = GetCursorAddress<void (*)()>();
 		Ldr(w3, arm_reg_operand(CYCL_CNT));			// load cycle counter
 		Ldp(w0, w1, arm_reg_operand(R15_ARM_NEXT));	// load Next PC, interrupt
-		Tbnz(w3, 31, &arm_exit);					// exit if cycle counter negative
+		Cmp(w3, 0);
+		B(&arm_exit, le);					// zero also exhausts the sample's cycle budget
 		Ubfx(w2, w0, 2, 21);						// w2 = pc >> 2. Note: assuming address space == 8 MB (23 bits)
 		Cbnz(w1, &arm_dofiq);						// if interrupt pending, handle it
 
