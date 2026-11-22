@@ -184,7 +184,7 @@ UdpProtocol::SendInputAck()
 bool
 UdpProtocol::GetEvent(UdpProtocol::Event &e)
 {
-   if (_event_queue.size() == 0) {
+   if (_event_queue.empty()) {
       return false;
    }
    e = _event_queue.front();

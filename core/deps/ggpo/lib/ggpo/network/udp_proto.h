@@ -18,6 +18,7 @@
 #include "ring_buffer.h"
 #include <vector>
 #include <mutex>
+#include <queue>
 
 class UdpProtocol : public IPollSink
 {
@@ -221,9 +222,10 @@ protected:
    TimeSync                   _timesync;
 
    /*
-    * Event queue
+    * A poll can receive multiple datagrams before the backend drains events.
+    * Keep the entire batch in order, including input frames and resume events.
     */
-   RingBuffer<UdpProtocol::Event, 64>  _event_queue;
+   std::queue<UdpProtocol::Event> _event_queue;
 };
 
 #endif

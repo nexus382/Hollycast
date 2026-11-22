@@ -38,9 +38,11 @@ u32 readBios(u32 addr, u32 sz);
 void writeAWBios(u32 addr, u32 data, u32 sz);
 u8 *getBiosData();
 
+//! Temporarily install a console flash image of settings.platform.flash_size bytes.
+void adoptSessionFlash(const u8 *data);
+void restoreSessionFlash();
+
 bool loadFiles();
-//! Recompute the GGPO flash digest after the flash contents were replaced in memory
-void refreshFlashDigest();
 void saveFiles();
 bool loadHle();
 

@@ -699,9 +699,13 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 		*len = 0;
 		return false;
 	}
-	const u64 fullChecksum = XXH3_64bits(*buffer, *len);
-	*checksum = (int)fullChecksum;
 	const bool exchangeChecksum = frame > 0 && frame % CHECKSUM_INTERVAL == 0;
+#ifdef SYNC_TEST
+	const u64 fullChecksum = XXH3_64bits(*buffer, *len);
+#else
+	const u64 fullChecksum = exchangeChecksum ? XXH3_64bits(*buffer, *len) : 0;
+#endif
+	*checksum = (int)fullChecksum;
 	bool hashRam = exchangeChecksum;
 #ifdef HOLLYCAST_GGPO_FRAME_TRACE
 	hashRam = hashRam || frameTrace != nullptr;
@@ -884,11 +888,9 @@ static void on_message(u8 *msg, int len)
 
 // --- Host-to-guest session state (memory cards + console flash) ---
 // The guest adopts the host's images in memory so both sides verify and
-// emulate from the same initial state. The guest's own files are never
-// overwritten: VMU save files are detached for the session, and the guest's
-// original images are restored when the session stops.
+// emulate from the same initial state. The guest uses in-memory VMUs and
+// restores its original images in memory when the session stops.
 static bool sessionStateAdopted;
-static std::vector<u8> guestFlashBackup;
 static std::vector<std::pair<int, int>> guestAdoptedVmus;
 static std::vector<std::vector<u8>> guestVmuBackups;
 
@@ -926,7 +928,7 @@ static std::vector<sessionstate::Item> collectSessionState()
 static std::atomic<bool> sessionStateServeStop{ true };
 static std::thread sessionStateThread;
 
-static void serveSessionState(int statePort)
+static void serveSessionState(int statePort, in_addr guestAddress, const std::vector<sessionstate::Item>& items)
 {
 	sock_t listener = socket(AF_INET, SOCK_STREAM, 0);
 	if (!VALID(listener))
@@ -946,8 +948,7 @@ static void serveSessionState(int statePort)
 		closesocket(listener);
 		return;
 	}
-	// Serve for the whole session, not a single attempt: the guest may
-	// load minutes after the host, and may need more than one try.
+	// Allow the configured guest to retry while the GGPO handshake is pending.
 	while (!sessionStateServeStop)
 	{
 		fd_set readFds;
@@ -956,15 +957,21 @@ static void serveSessionState(int statePort)
 		timeval timeout{ 0, 500000 };
 		if (select((int)listener + 1, &readFds, nullptr, nullptr, &timeout) <= 0)
 			continue;
-		sock_t conn = accept(listener, nullptr, nullptr);
+		sockaddr_in peer{};
+		socklen_t peerSize = sizeof(peer);
+		sock_t conn = accept(listener, (sockaddr*)&peer, &peerSize);
 		if (!VALID(conn))
 			continue;
+		if (sessionStateServeStop || peer.sin_addr.s_addr != guestAddress.s_addr)
+		{
+			closesocket(conn);
+			continue;
+		}
 		set_recv_timeout(conn, 10000);
 		set_send_timeout(conn, 10000);
 		u32 protocol = 0;
-		if (sessionstate::receiveRequest(conn, protocol) && protocol == GGPO_PROTOCOL_VERSION)
+		if (sessionstate::receiveRequest(conn, protocol) && protocol == GGPO_PROTOCOL_VERSION && !sessionStateServeStop)
 		{
-			const auto items = collectSessionState();
 			if (sessionstate::sendItems(conn, items))
 				NOTICE_LOG(NETWORK, "Served session state to guest (%d items)", (int)items.size());
 			else
@@ -984,11 +991,13 @@ static void stopSessionStateServer()
 		sessionStateThread.join();
 }
 
-static void startSessionStateServer(int statePort)
+static void startSessionStateServer(int statePort, in_addr guestAddress)
 {
 	stopSessionStateServer();
+	// Capture the same initial state for every guest attempt while emulation is stopped.
+	auto items = collectSessionState();
 	sessionStateServeStop = false;
-	sessionStateThread = std::thread(serveSessionState, statePort);
+	sessionStateThread = std::thread(serveSessionState, statePort, guestAddress, std::move(items));
 }
 
 static std::vector<sessionstate::Item> fetchSessionState(const std::string& hostIp, int statePort)
@@ -1034,8 +1043,10 @@ static maple_sega_vmu* getSessionVmu(int bus, int port)
 
 static void applySessionState(const std::vector<sessionstate::Item>& items)
 {
-	// Validate everything first so a bad bundle changes nothing.
+	// Validate the bundle and allocate backups before changing the guest's data.
 	const sessionstate::Item* flashItem = nullptr;
+	std::vector<std::pair<int, int>> adoptedVmus;
+	std::vector<std::vector<u8>> vmuBackups;
 	for (const sessionstate::Item& item : items)
 	{
 		if (item.kind == sessionstate::KIND_FLASH)
@@ -1051,58 +1062,46 @@ static void applySessionState(const std::vector<sessionstate::Item>& items)
 				throw FlycastException("The host uses a memory card in a slot that is empty on this device. Match the host's controller setup and try again.");
 			if (item.data.size() != sizeof(vmu->flash_data))
 				throw FlycastException("The host's memory card has an unexpected size");
+			adoptedVmus.emplace_back(item.bus, item.port);
+			vmuBackups.emplace_back(vmu->flash_data, vmu->flash_data + sizeof(vmu->flash_data));
 		}
 	}
 	if (flashItem == nullptr)
 		throw FlycastException("The host did not send its console settings");
 
-	u8* flash = nvmem::getFlashData();
-	guestFlashBackup.assign(flash, flash + settings.platform.flash_size);
-	std::memcpy(flash, flashItem->data.data(), flashItem->data.size());
-	nvmem::refreshFlashDigest();
-
+	nvmem::adoptSessionFlash(flashItem->data.data());
+	guestAdoptedVmus.swap(adoptedVmus);
+	guestVmuBackups.swap(vmuBackups);
+	sessionStateAdopted = true;
 	for (const sessionstate::Item& item : items)
 	{
 		if (item.kind != sessionstate::KIND_VMU)
 			continue;
 		maple_sega_vmu* vmu = getSessionVmu(item.bus, item.port);
-		guestAdoptedVmus.emplace_back(item.bus, item.port);
-		guestVmuBackups.emplace_back(vmu->flash_data, vmu->flash_data + sizeof(vmu->flash_data));
 		std::memcpy(vmu->flash_data, item.data.data(), item.data.size());
-		vmu->detachSaveFile();
 	}
 	mcfg_UpdateVmuDigest();
-	sessionStateAdopted = true;
 	NOTICE_LOG(NETWORK, "Adopted the host's memory card and console settings for this session");
 }
 
 static void restoreSessionState()
 {
 	sessionStateAdopted = false;
-	if (!guestFlashBackup.empty())
-	{
-		std::memcpy(nvmem::getFlashData(), guestFlashBackup.data(), guestFlashBackup.size());
-		guestFlashBackup.clear();
-	}
+	nvmem::restoreSessionFlash();
 	for (size_t i = 0; i < guestAdoptedVmus.size(); i++)
 	{
 		if (maple_sega_vmu* vmu = getSessionVmu(guestAdoptedVmus[i].first, guestAdoptedVmus[i].second))
-		{
 			std::memcpy(vmu->flash_data, guestVmuBackups[i].data(), guestVmuBackups[i].size());
-			vmu->restoreSaveFile();
-		}
 	}
 	guestAdoptedVmus.clear();
 	guestVmuBackups.clear();
 }
 
-static void syncSessionState(int localPort, int playerNum, const std::string& peerIp, u32 peerPort)
+static void syncSessionState(int localPort, int playerNum, const std::string& peerIp, u32 peerPort, in_addr peerAddress)
 {
 	if (playerNum == 0)
 	{
-		// Host: serve for the whole session so session start is never
-		// blocked and the guest can join (or retry) at any time.
-		startSessionStateServer(localPort + 1);
+		startSessionStateServer(localPort + 1, peerAddress);
 	}
 	else
 	{
@@ -1218,6 +1217,24 @@ void startSession(int localPort, int localPlayerNum)
 		peerPort = atoi(config::NetworkServer.get().substr(colon + 1).c_str());
 	}
 
+	// Resolve once so the save transfer and GGPO use the same peer address.
+	in_addr peerAddr{};
+	if (inet_pton(AF_INET, peerIp.c_str(), &peerAddr) != 1)
+	{
+		addrinfo hints {};
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_DGRAM;
+		addrinfo *result = nullptr;
+		if (getaddrinfo(peerIp.c_str(), nullptr, &hints, &result) != 0 || result == nullptr)
+			throw FlycastException(strprintf(i18n::T("GGPO: unknown peer address %s"), peerIp.c_str()));
+		peerAddr = ((sockaddr_in *)result->ai_addr)->sin_addr;
+		freeaddrinfo(result);
+		char address[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &peerAddr, address, sizeof(address));
+		NOTICE_LOG(NETWORK, "GGPO: peer %s resolved to %s", peerIp.c_str(), address);
+		peerIp = address;
+	}
+
 	// The guest adopts the host's memory card and console flash before
 	// verification, so both sides start from the same saved state.
 	if (settings.platform.isConsole()
@@ -1225,7 +1242,7 @@ void startSession(int localPort, int localPlayerNum)
 			&& !replayInput
 #endif
 		)
-		syncSessionState(localPort, localPlayerNum, peerIp, peerPort);
+		syncSessionState(localPort, localPlayerNum, peerIp, peerPort, peerAddr);
 
 	VerificationData verif;
 	verif.inputSize = static_cast<u16>(inputSize);
@@ -1296,25 +1313,6 @@ void startSession(int localPort, int localPlayerNum)
 	ggpo_set_frame_delay(ggpoSession, localPlayer, sessionFrameDelay.load());
 
 	player.type = GGPO_PLAYERTYPE_REMOTE;
-	// GGPO expects a numeric IPv4 address, so resolve configured host names first.
-	in_addr peerAddr;
-	if (inet_pton(AF_INET, peerIp.c_str(), &peerAddr) != 1)
-	{
-		addrinfo hints {};
-		hints.ai_family = AF_INET;
-		hints.ai_socktype = SOCK_DGRAM;
-		addrinfo *result = nullptr;
-		if (getaddrinfo(peerIp.c_str(), nullptr, &hints, &result) != 0 || result == nullptr)
-		{
-			stopSession();
-			throw FlycastException(strprintf(i18n::T("GGPO: unknown peer address %s"), peerIp.c_str()));
-		}
-		char address[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &((sockaddr_in *)result->ai_addr)->sin_addr, address, sizeof(address));
-		freeaddrinfo(result);
-		NOTICE_LOG(NETWORK, "GGPO: peer %s resolved to %s", peerIp.c_str(), address);
-		peerIp = address;
-	}
 	strcpy(player.u.remote.ip_address, peerIp.c_str());
 	player.u.remote.port = peerPort;
 	player.player_num = (1 - localPlayerNum) + 1;
@@ -1794,7 +1792,9 @@ std::future<bool> startNetwork()
 			}
 
 			try {
-				if (config::ActAsServer)
+				// The Dreamcast role must match the save ownership chosen at load.
+				const bool host = settings.platform.isConsole() ? !emu.isGgpoGuestGame() : config::ActAsServer.get();
+				if (host)
 					startSession(SERVER_PORT, 0);
 				else
 					// Use SERVER_PORT-1 as local port if connecting to ourselves
@@ -1826,6 +1826,8 @@ std::future<bool> startNetwork()
 			if (!synchronized)
 				std::this_thread::sleep_for(std::chrono::milliseconds(startupProbeActive ? 2 : 20));
 		}
+		// Rejoins reuse the live session and never fetch another starting image.
+		sessionStateServeStop = true;
 #ifndef SYNC_TEST
 		{
 			std::lock_guard<std::recursive_mutex> lock(ggpoMutex);

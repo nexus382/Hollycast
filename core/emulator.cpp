@@ -696,6 +696,7 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 			memset(&settings.network.md5, 0, sizeof(settings.network.md5));
 			NaomiGameInputs = nullptr;
 			config::GGPOEnable.override(false);
+			ggpoGuestGame = false;
 #ifdef USE_RACHIEVEMENTS
 			config::EnableAchievements.override(false);
 #endif
@@ -773,6 +774,11 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 			// Reload the BIOS in case a game-specific region is set
 			naomi_cart_LoadBios(path);
 		}
+#ifdef USE_GGPO
+		// Latch save ownership before opening VMUs and keep it until the next
+		// load, including Android's deferred flash save after a stop.
+		ggpoGuestGame = settings.platform.isConsole() && config::GGPOEnable && !config::ActAsServer;
+#endif
 		mcfg_DestroyDevices();
 		mcfg_CreateDevices();
 		if (settings.platform.isNaomi())
@@ -899,7 +905,7 @@ void Emulator::unloadGame(bool allowAutoSave)
 #endif
 #ifndef LIBRETRO
 		if (allowAutoSave && state == Loaded && config::AutoSaveState && !skipAutoSaveThisUnload && !settings.content.path.empty()
-				&& !settings.naomi.multiboard && !config::GGPOEnable && !naomiNetworkSupported())
+				&& !settings.naomi.multiboard && !config::GGPOEnable && !isGgpoGuestGame() && !naomiNetworkSupported())
 			gui_saveState(dc_getAutoSaveSlot(), false);
 #endif
 		try {

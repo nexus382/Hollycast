@@ -20,10 +20,14 @@
 #include "nvmem.h"
 #include "flashrom.h"
 #include "cfg/option.h"
+#include "emulator.h"
 #include "hw/aica/aica_if.h"
 #include "reios/reios.h"
 #include "oslib/oslib.h"
 #include "oslib/resources.h"
+#include <cstring>
+#include <mutex>
+#include <vector>
 
 extern bool bios_loaded;
 
@@ -32,6 +36,8 @@ namespace nvmem
 
 static MemChip *sys_rom;
 static WritableChip *sys_nvmem;
+static std::mutex flashSaveMutex;
+static std::vector<u8> sessionFlashBackup;
 
 static std::string getRomPrefix()
 {
@@ -317,7 +323,10 @@ bool loadFiles()
 
 void saveFiles()
 {
-	if (settings.naomi.slave || settings.naomi.drivingSimSlave)
+	std::lock_guard<std::mutex> lock(flashSaveMutex);
+	// Only the host saves Dreamcast flash in GGPO, including during teardown.
+	if (emu.isGgpoGuestGame() || !sessionFlashBackup.empty()
+			|| settings.naomi.slave || settings.naomi.drivingSimSlave)
 		return;
 	if (settings.platform.isConsole())
 		sys_nvmem->Save(getRomPrefix(), "nvmem.bin", "nvmem");
@@ -350,10 +359,25 @@ u8 *getFlashData()
 	return sys_nvmem->data;
 }
 
-void refreshFlashDigest()
+void adoptSessionFlash(const u8 *data)
 {
-	if (sys_nvmem != nullptr)
-		sys_nvmem->digest(settings.network.md5.nvmem);
+	std::lock_guard<std::mutex> lock(flashSaveMutex);
+	verify(sessionFlashBackup.empty());
+	u8 *flash = sys_nvmem->data;
+	const size_t size = settings.platform.flash_size;
+	sessionFlashBackup.assign(flash, flash + size);
+	std::memcpy(flash, data, size);
+	sys_nvmem->digest(settings.network.md5.nvmem);
+}
+
+void restoreSessionFlash()
+{
+	std::lock_guard<std::mutex> lock(flashSaveMutex);
+	if (sessionFlashBackup.empty())
+		return;
+	std::memcpy(sys_nvmem->data, sessionFlashBackup.data(), sessionFlashBackup.size());
+	sys_nvmem->digest(settings.network.md5.nvmem);
+	sessionFlashBackup.clear();
 }
 
 u32 readBios(u32 addr, u32 sz)
