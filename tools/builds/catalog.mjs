@@ -86,7 +86,7 @@ export async function listReleases(repository, api) {
   return releases;
 }
 
-export function completeBuilds(releases, repository) {
+export function completeBuilds(releases, repository, { requireDevLinuxArm64 = false } = {}) {
   const builds = [];
   const commits = new Map();
   for (const release of releases) {
@@ -111,6 +111,11 @@ export function completeBuilds(releases, repository) {
     const downloads = standaloneDownloads(build.files);
     // Wait for all six platforms after grouping runs from the same branch and commit.
     if (downloads.length !== 6) return false;
+    if (build.channel === 'ci') {
+      const core = build.files.find(file => /^\d+-Hollycast-libretro-aarch64-pc-linux-gnu\.zip$/.test(file.name));
+      if (core) downloads.push({ ...core, platform: 'Linux ARM64 Libretro' });
+      else if (requireDevLinuxArm64 && build.branch === 'dev') return false;
+    }
     build.files = [...downloads, ...build.files.filter(file => file.support)];
     return true;
   });

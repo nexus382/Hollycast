@@ -74,6 +74,18 @@ test('every platform must be uploaded for the same branch and commit before a bu
   }
 });
 
+test('the CI catalog adds the ARM64 core only to its matching build', async () => {
+  const core = 'Hollycast-libretro-aarch64-pc-linux-gnu.zip';
+  const releases = [automaticRelease(1), automaticRelease(2, 'dev', 'a'.repeat(40), [core]),
+    automaticRelease(3, 'master'), automaticRelease(4, 'dev', 'b'.repeat(40))];
+  const { builds } = await buildCatalog('nexus382/Hollycast', async () => releases);
+  assert.equal(builds.length, 3);
+  const arm64 = builds[0].files.at(-1);
+  assert.equal(arm64.platform, 'Linux ARM64 Libretro');
+  assert.equal(arm64.name, `2-${core}`);
+  assert.ok(builds.slice(1).every(build => build.files.length === packages.length));
+});
+
 test('incomplete builds do not displace complete branch history', async () => {
   const releases = Array.from({ length: 20 }, (_, index) =>
     automaticRelease(index + 1, 'dev', index.toString(16).padStart(40, '0'), packages.slice(0, 5)));

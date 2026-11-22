@@ -9,6 +9,7 @@ const filenames = {
   macOS: 'Hollycast-macos-universal.zip',
   Switch: 'Hollycast-switch.zip',
   UWP: 'Hollycast-uwp-x64.zip',
+  'Linux ARM64 Libretro': 'Hollycast-linux-libretro-arm64.zip',
 };
 const archiveTag = commit => `latest-dev-${commit}`;
 const digest = text => `sha256:${createHash('sha256').update(text).digest('hex')}`;
@@ -34,7 +35,8 @@ async function optional(api, path) {
 export async function publishLatestDev(repository, api, upload) {
   const base = `repos/${repository}`;
   const releases = await listReleases(repository, api);
-  const build = completeBuilds(releases, repository).find(build => build.channel === 'ci' && build.branch === 'dev');
+  const build = completeBuilds(releases, repository, { requireDevLinuxArm64: true })
+    .find(build => build.channel === 'ci' && build.branch === 'dev');
   if (!build) return null;
   const current = await optional(api, `${base}/releases/tags/latest-dev`);
   const previous = metadata(current);
@@ -57,9 +59,10 @@ export async function publishLatestDev(repository, api, upload) {
   const data = { commit: build.commit, date: build.date };
   const source = `https://github.com/${repository}`;
   const body = `<!-- hollycast-latest-dev: ${JSON.stringify(data)} -->\n\n` +
-    `Development build from the **dev** branch. All six platforms were built from the same commit.\n\n` +
+    `Development build from the **dev** branch. All downloads were built from the same commit.\n\n` +
     `[Source commit](${source}/commit/${build.commit}) · Build date: ${build.date}\n\n` +
-    'These builds may be unstable. Extract ZIP downloads before use; some contain another ZIP archive. ' +
+    'These builds may be unstable. The Linux ARM64 Libretro download is a core for 64-bit RetroArch. ' +
+    'Extract ZIP downloads before use; some contain another ZIP archive. ' +
     'SHA256SUMS.txt checks the downloaded ZIP files.\n\n' + build.notes;
   const tag = archiveTag(build.commit);
   let draft = releases.find(release => release.tag_name === tag) || await optional(api, `${base}/releases/tags/${tag}`);
@@ -83,7 +86,7 @@ export async function publishLatestDev(repository, api, upload) {
   draft = await api(`${base}/releases/${draft.id}`);
   if (draft.assets.length !== expected.length || expected.some(asset => !draft.assets.some(item =>
     item.name === asset.name && item.state === 'uploaded' && item.digest === asset.digest && item.size === asset.size))) {
-    throw new Error('Development draft does not contain all six verified downloads and checksums');
+    throw new Error('Development draft does not contain all verified downloads and checksums');
   }
 
   const refPath = `${base}/git/refs/tags/latest-dev`;
