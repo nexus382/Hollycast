@@ -255,6 +255,7 @@ Option<bool> EmulateBBA("EmulateBBA", false, "network");
 Option<bool> EnableUPnP("EnableUPnP", true, "network");
 Option<bool> GGPOEnable("GGPO", false, "network");
 Option<int> GGPODelay("GGPODelay", 0, "network");
+Option<bool> GGPOAutoDelay("GGPOAutoDelay", false, "network");
 Option<bool> NetworkStats("Stats", true, "network");
 Option<int> GGPOAnalogAxes("GGPOAnalogAxes", 0, "network");
 Option<bool> GGPOChat("GGPOChat", true, "network");

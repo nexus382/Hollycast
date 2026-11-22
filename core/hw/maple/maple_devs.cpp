@@ -5,6 +5,7 @@
 #include "maple_cfg.h"
 #include "maple_helper.h"
 #include "maple_if.h"
+#include "emulator.h"
 #include "hw/pvr/spg.h"
 #include "audio/audiostream.h"
 #include "oslib/oslib.h"
@@ -413,6 +414,11 @@ void maple_sega_vmu::deserialize(Deserializer& deser)
 
 bool maple_sega_vmu::fullSave()
 {
+	if (memoryOnly)
+	{
+		fullSaveNeeded = false;
+		return true;
+	}
 	if (file == nullptr)
 		return false;
 	if (std::fseek(file, 0, SEEK_SET) != 0) {
@@ -444,13 +450,15 @@ void maple_sega_vmu::OnSetup()
 	memset(accessed_blocks, 0, sizeof(accessed_blocks));
 	last_write_tick = 0;
 	loaded_us_since_write = std::numeric_limits<u64>::max();
+	memoryOnly = emu.isGgpoGuestGame();
 
 	// Load existing vmu file if found
 	std::string rpath = hostfs::getVmuPath(logical_port, false);
 	// this might be a storage url
 	hostfs::File *rfile = hostfs::storage().openFile(rpath, "rb");
+	const bool hasExistingImage = rfile != nullptr;
 	if (rfile == nullptr) {
-		INFO_LOG(MAPLE, "Unable to open VMU file \"%s\", creating new file", rpath.c_str());
+		INFO_LOG(MAPLE, "Unable to open VMU file \"%s\"", rpath.c_str());
 	}
 	else
 	{
@@ -458,21 +466,24 @@ void maple_sega_vmu::OnSetup()
 			WARN_LOG(MAPLE, "Failed to read the VMU file \"%s\" from disk", rpath.c_str());
 		delete rfile;
 	}
-	// Open or create the vmu file to save to
-	std::string wpath = hostfs::getVmuPath(logical_port, true);
-	file = nowide::fopen(wpath.c_str(), "rb+");
-	if (file == nullptr)
+	// GGPO guests use the same initial image without creating or migrating a save.
+	if (!memoryOnly)
 	{
-		file = nowide::fopen(wpath.c_str(), "wb+");
-		if (file == nullptr) {
-			ERROR_LOG(MAPLE, "Failed to create VMU save file \"%s\"", wpath.c_str());
-		}
-		else if (rfile != nullptr)
+		std::string wpath = hostfs::getVmuPath(logical_port, true);
+		file = nowide::fopen(wpath.c_str(), "rb+");
+		if (file == nullptr)
 		{
-			// VMU file is being renamed so save it fully now
-			// and delete the old file
-			if (fullSave())
-				nowide::remove(rpath.c_str());
+			file = nowide::fopen(wpath.c_str(), "wb+");
+			if (file == nullptr) {
+				ERROR_LOG(MAPLE, "Failed to create VMU save file \"%s\"", wpath.c_str());
+			}
+			else if (hasExistingImage)
+			{
+				// VMU file is being renamed so save it fully now
+				// and delete the old file
+				if (fullSave())
+					nowide::remove(rpath.c_str());
+			}
 		}
 	}
 
