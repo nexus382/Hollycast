@@ -1,0 +1,40 @@
+{
+  "schema": "hollytest.playtest-plan.v1",
+  "id": "planet-harriers-stage-smoke",
+  "identity": {
+    "game_id": "pharrier",
+    "profile_id": "planet-harriers-live-state-v1",
+    "game_sha256": "eb390ab90d80f4e48f2059e4441a5f834343a4d9d1d5725b9c7907e2873f93b7"
+  },
+  "timeout_ms": 45000,
+  "steps": [
+    {
+      "id": "wait-for-active-stage",
+      "op": "wait_for",
+      "timeout_ms": 30000,
+      "interval_ms": 250,
+      "assertions": [
+        { "path": ["state", "game_id"], "op": "eq", "value": "pharrier" },
+        { "path": ["telemetry", "game_state", "values", "main_mode", "value"], "op": "eq", "value": 3 },
+        { "path": ["telemetry", "game_state", "values", "sub_mode_raw", "value"], "op": "eq", "value": 4 },
+        { "path": ["telemetry", "game_state", "values", "player_energy", "value"], "op": "gt", "value": 0 }
+      ]
+    },
+    {
+      "id": "short-fire-input",
+      "op": "hold",
+      "state": { "port": 0, "buttons": ["A"] },
+      "duration_ms": 250
+    },
+    {
+      "id": "confirm-stage-remains-active",
+      "op": "wait_for",
+      "timeout_ms": 10000,
+      "interval_ms": 250,
+      "assertions": [
+        { "path": ["telemetry", "game_state", "values", "main_mode", "value"], "op": "eq", "value": 3 },
+        { "path": ["telemetry", "game_state", "values", "player_energy", "value"], "op": "gt", "value": 0 }
+      ]
+    }
+  ]
+}

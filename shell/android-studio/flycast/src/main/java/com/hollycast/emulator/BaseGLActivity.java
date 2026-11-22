@@ -220,6 +220,8 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     @Override
     protected void onPause() {
         super.onPause();
+        AppUpdateInstaller.pause(this);
+        PlayAppUpdater.pause(this);
         resumedCalled = false;
         handleStateChange(true);
     }
@@ -227,6 +229,8 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     @Override
     protected void onResume() {
         super.onResume();
+        AppUpdateInstaller.resume(this);
+        PlayAppUpdater.resume(this);
         resumedCalled = true;
         handleStateChange(false);
     }
@@ -476,6 +480,8 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (PlayAppUpdater.result(requestCode, resultCode)) return;
+        if (AppUpdateInstaller.result(requestCode, resultCode)) return;
         switch (requestCode)
         {
             case AndroidStorage.ADD_STORAGE_ACTIVITY_REQUEST:
@@ -488,6 +494,14 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
                 storage.onExportHomeResult(data);
                 break;
         }
+    }
+
+    public String appUpdates(String action) {
+        return PlayAppUpdater.control(this, action);
+    }
+
+    public void installUpdate(String url, String checksum, String directory, long size) {
+        AppUpdateInstaller.install(this, url, checksum, directory, size);
     }
 
     private static native void register(BaseGLActivity activity);

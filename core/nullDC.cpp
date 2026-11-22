@@ -14,6 +14,7 @@
 #include "debug/gdb_server.h"
 #include "archive/rzip.h"
 #include "ui/mainui.h"
+#include "ui/test_harness.h"
 #include "input/gamepad_device.h"
 #include "lua/lua.h"
 #include "stdclass.h"
@@ -80,6 +81,7 @@ int flycast_init(int argc, char* argv[])
 	settings.aica.muteAudio = true;
 #endif
 	try {
+		test_harness::prepareStorage();
 		if (!addrspace::reserve())
 		{
 			ERROR_LOG(VMEM, "Failed to alloc mem");

@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -21,6 +22,7 @@
 #include "cfg/option.h"
 #include "gamepad_device.h"
 #include "ui/gui.h"
+#include "ui/test_harness.h"
 #include "hw/maple/maple_devs.h"
 #include "oslib/i18n.h"
 #include <memory>
@@ -88,6 +90,8 @@ protected:
 
 	void input(u8 keycode, bool pressed, int modifier_keys)
 	{
+		if (test_harness::controllerInputOwned())
+			return;
 		const int port = maple_port();
 		const bool portIsValid = port >= 0 && port < MAPLE_PORTS;
 

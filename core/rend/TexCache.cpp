@@ -594,6 +594,7 @@ bool BaseTextureCacheData::Update()
 	PixelBuffer<u16> pb16;
 	PixelBuffer<u32> pb32;
 	PixelBuffer<u8> pb8;
+	bool applyUpscaling = false;
 
 	// Figure out if we really need to use a 32-bit pixel buffer
 	const int maxFilteredTextureSize = config::MaxFilteredTextureSize.get();
@@ -605,6 +606,7 @@ bool BaseTextureCacheData::Update()
 			&& tcw.PixelFmt != PixelYUV;
 	bool need_32bit_buffer = true;
 	if (!textureUpscaling
+		&& !config::DumpTextures
 		&& (!IsPaletted() || tex_type != TextureType::_8888)
 		&& texconv != NULL
 		&& !Force32BitTexture(tex_type))
@@ -662,23 +664,7 @@ bool BaseTextureCacheData::Update()
 			pb32.init(width, height);
 			texconv32(&pb32, (u8*)&vram[mmStartAddress], stride, heightLimit);
 
-			// xBRZ scaling
-			if (textureUpscaling)
-			{
-				// xBRZ only supports scale factors 2 through 6. Keep the allocated
-				// buffer, scaling operation, and uploaded dimensions in agreement.
-				const int factor = std::clamp((int)config::TextureUpscale, 2, 6);
-				PixelBuffer<u32> tmp_buf;
-				tmp_buf.init(width * factor, height * factor);
-
-				if (tcw.PixelFmt == Pixel1555 || tcw.PixelFmt == Pixel4444)
-					// Alpha channel formats. Palettes with alpha are already handled
-					has_alpha = true;
-				UpscalexBRZ(factor, pb32.data(), tmp_buf.data(), width, height, has_alpha);
-				pb32.steal_data(tmp_buf);
-				upscaled_w *= factor;
-				upscaled_h *= factor;
-			}
+			applyUpscaling = textureUpscaling;
 		}
 		temp_tex_buffer = pb32.data();
 	}
@@ -757,12 +743,32 @@ bool BaseTextureCacheData::Update()
 	//lock the texture to detect changes in it
 	protectVRam();
 
+	// Capture canonical game pixels before texture enhancements or GPU upload.
+	if (config::DumpTextures)
+	{
+		ComputeHash();
+		custom_texture.dumpTexture(this, width, height, temp_tex_buffer);
+		NOTICE_LOG(RENDERER, "Dumped texture %x.png. Old hash %x", texture_hash, old_texture_hash);
+	}
+	if (applyUpscaling)
+	{
+		// xBRZ only supports scale factors 2 through 6. Keep the allocated
+		// buffer, scaling operation, and uploaded dimensions in agreement.
+		const int factor = std::clamp((int)config::TextureUpscale, 2, 6);
+		PixelBuffer<u32> tmp_buf;
+		tmp_buf.init(width * factor, height * factor);
+		if (tcw.PixelFmt == Pixel1555 || tcw.PixelFmt == Pixel4444)
+			// Alpha channel formats. Palettes with alpha are already handled
+			has_alpha = true;
+		UpscalexBRZ(factor, pb32.data(), tmp_buf.data(), width, height, has_alpha);
+		pb32.steal_data(tmp_buf);
+		upscaled_w *= factor;
+		upscaled_h *= factor;
+		temp_tex_buffer = pb32.data();
+	}
 	bool customTextureUploaded = false;
 	if (dumpReplacedTexture)
 	{
-		ComputeHash();
-		custom_texture.dumpTexture(this, upscaled_w, upscaled_h, temp_tex_buffer);
-		NOTICE_LOG(RENDERER, "Dumped texture %x.png. Old hash %x", texture_hash, old_texture_hash);
 		const TextureType originalTextureType = tex_type;
 		customTextureUploaded = CheckCustomTexture();
 		if (!customTextureUploaded)
@@ -772,12 +778,6 @@ bool BaseTextureCacheData::Update()
 	{
 		UploadToGPU(upscaled_w, upscaled_h, (const u8 *)temp_tex_buffer, IsMipmapped(), mipmapped);
 		recordTextureUpload();
-	}
-	if (config::DumpTextures && !dumpReplacedTexture)
-	{
-		ComputeHash();
-		custom_texture.dumpTexture(this, upscaled_w, upscaled_h, temp_tex_buffer);
-		NOTICE_LOG(RENDERER, "Dumped texture %x.png. Old hash %x", texture_hash, old_texture_hash);
 	}
 	PrintTextureName();
 	// Restore the original texture size if it was constrained to VRAM limits above
