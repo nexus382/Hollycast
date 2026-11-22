@@ -5,6 +5,7 @@
 #include "ui/boxart/vmu_icon.h"
 #include "ui/game_scanner.h"
 #include "ui/library_media.h"
+#include "ui/library.h"
 #include "reios/reios.h"
 #include "imgread/isofs.h"
 #include <stb_image.h>
@@ -622,6 +623,63 @@ TEST_F(BoxartTest, LibraryInventoryBoundsWorkAndPreservesProgressTotals)
 		ASSERT_LE(advanced.processed, 16u);
 	}
 	EXPECT_EQ(batch.progress.ready + batch.progress.pending + batch.progress.unavailable, batch.progress.total);
+}
+
+TEST_F(BoxartTest, LibrarySortUsesDisplayedMetadataAndPersistedPlaytime)
+{
+	using Column = library::SortColumn;
+	std::vector<GameMedia> games(4);
+	const char* ids[] = {"B", "C", "A", "D"};
+	const char* titles[] = {"Zulu", "Alpha", "Alpha", "Bravo"};
+	const u32 regions[] = {GameBoxart::USA, GameBoxart::EUROPE, GameBoxart::JAPAN, 0};
+	json database = json::array();
+	for (size_t i = 0; i < games.size(); ++i)
+	{
+		GameMedia& game = games[i];
+		game.name = game.fileName = std::to_string(i) + ".chd";
+		game.path = (directory / game.fileName).string();
+		database.push_back({{"file_name", game.fileName}, {"game_path", game.path},
+				{"name", titles[i]}, {"unique_id", ids[i]}, {"region", regions[i]}});
+	}
+	writeDatabase(database);
+	std::ofstream(directory / "boxart" / "library-playtime.json")
+			<< R"({"version":1,"games":{"B":{"seconds":0},"D":{"seconds":60},"A":{"seconds":18446744073709551615}}})";
+	const auto history = directory / "boxart" / "vmu-icons" / "library";
+	std::filesystem::create_directories(history);
+	std::ofstream(history / "cache.json")
+			<< R"({"games":{"A":{"last_booted":20},"B":{"last_booted":30},"C":{"last_booted":10}}})";
+
+	auto sorted = [&](Column column, bool descending) {
+		std::vector<size_t> rows = {2, 0, 3, 1};
+		library::sortRows(rows, games, column, descending, std::locale::classic(), *boxart, nullptr);
+		return rows;
+	};
+	EXPECT_EQ(sorted(Column::ProductId, false), (std::vector<size_t>{2, 0, 1, 3}));
+	EXPECT_EQ(sorted(Column::ProductId, true), (std::vector<size_t>{3, 1, 0, 2}));
+	EXPECT_EQ(sorted(Column::Title, false), (std::vector<size_t>{2, 1, 3, 0}));
+	EXPECT_EQ(sorted(Column::Title, true), (std::vector<size_t>{0, 3, 2, 1}));
+	EXPECT_EQ(sorted(Column::Region, false), (std::vector<size_t>{1, 2, 0, 3}));
+	EXPECT_EQ(sorted(Column::Region, true), (std::vector<size_t>{3, 0, 2, 1}));
+	EXPECT_EQ(boxart->getBoxart(games[0]).playTimeSeconds, 0u);
+	EXPECT_FALSE(boxart->getBoxart(games[1]).playTimeSeconds.has_value());
+	EXPECT_EQ(boxart->getBoxart(games[2]).playTimeSeconds, UINT64_MAX);
+	EXPECT_EQ(sorted(Column::TimePlayed, false), (std::vector<size_t>{1, 0, 3, 2}));
+	EXPECT_EQ(sorted(Column::TimePlayed, true), (std::vector<size_t>{2, 3, 0, 1}));
+	EXPECT_EQ(sorted(Column::Date, false), (std::vector<size_t>{3, 1, 2, 0}));
+	EXPECT_EQ(sorted(Column::Date, true), (std::vector<size_t>{0, 2, 1, 3}));
+
+	const auto beforeBoot = library::sortRevisions(Column::Date, *boxart, nullptr);
+	const auto beforePlaytime = library::sortRevisions(Column::TimePlayed, *boxart, nullptr);
+	markLibraryGameBooted("D", games[3].path);
+	EXPECT_NE(beforeBoot, library::sortRevisions(Column::Date, *boxart, nullptr));
+	EXPECT_EQ(beforePlaytime, library::sortRevisions(Column::TimePlayed, *boxart, nullptr));
+	EXPECT_EQ(sorted(Column::Date, true), (std::vector<size_t>{3, 0, 2, 1}));
+	boxart->startPlaytime("C", games[1].path);
+	boxart->resumePlaytime();
+	boxart->checkpointPlaytime(true);
+	EXPECT_NE(beforePlaytime, library::sortRevisions(Column::TimePlayed, *boxart, nullptr));
+	ASSERT_TRUE(boxart->getBoxart(games[1]).playTimeSeconds.has_value());
+	EXPECT_EQ(sorted(Column::TimePlayed, false).front(), 0u);
 }
 
 TEST_F(BoxartTest, HistoryReadsDoNotCreateArtworkDirectories)

@@ -24,6 +24,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/LibretroHelpersTest.cpp
         src/AicaArmTest.cpp
         src/Sh4InterpreterTest.cpp
+        src/AssemblyDebuggerTest.cpp
         src/SorterTest.cpp
         src/MmuTest.cpp
         src/HttpTest.cpp
@@ -46,6 +47,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/oslib/I18nTest.cpp
         src/oslib/DirectoryTest.cpp
         src/rend/SampleTextureFilterTest.cpp
+        src/rend/TextureAtlasTest.cpp
+        src/rend/CustomTextureDumpTest.cpp
         src/ui/BoxartTest.cpp
         src/ui/ScreenScraperTest.cpp
         src/ui/LaunchBoxTest.cpp
@@ -53,6 +56,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/ui/TheGamesDbTest.cpp
         src/ui/LibraryTest.cpp
         src/ui/GameScannerTest.cpp
+        src/ui/LibrarySortTest.cpp
         src/ui/ReadinessTest.cpp
         src/ui/SetupChecklistLifecycleTest.cpp
         src/util/PeriodicThreadTest.cpp

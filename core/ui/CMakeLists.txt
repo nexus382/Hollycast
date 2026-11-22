@@ -1,6 +1,21 @@
 # Portions Copyright 2026 The Hollycast Authors
 
+option(HOLLYCAST_TEST_HARNESS "Enable native interactive testing and live telemetry" OFF)
+if(HOLLYCAST_TEST_HARNESS)
+    if(LIBRETRO OR ANDROID OR APPLE OR WINDOWS_STORE OR ENABLE_CTEST OR BUILD_TESTING OR TEST_AUTOMATION
+            OR NOT (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+        message(FATAL_ERROR "The native testing harness requires a standalone Windows/Linux application build")
+    endif()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE HOLLYCAST_TEST_HARNESS IMGUI_ENABLE_TEST_ENGINE)
+    target_sources(${PROJECT_NAME} PRIVATE test_harness.cpp test_harness.h test_harness_protocol.h
+            test_harness_ui.cpp test_harness_ui.h test_harness_capture.cpp test_harness_capture.h
+            test_harness_telemetry.cpp test_harness_telemetry.h test_harness_watch.h)
+endif()
+
 if(NOT LIBRETRO)
+    if(ENABLE_CTEST)
+        target_compile_definitions(${PROJECT_NAME} PRIVATE HOLLYCAST_DISABLE_STARTUP_UPDATES)
+    endif()
     option(HOLLYCAST_REQUIRE_SCREENSCRAPER "Require application access in official standalone builds"
             "$ENV{HOLLYCAST_REQUIRE_SCREENSCRAPER}")
     # Release builds receive application credentials through the build environment.
@@ -29,10 +44,19 @@ if(NOT LIBRETRO)
     unset(HOLLYCAST_SS_DEV_PASSWORD)
 
     target_sources(${PROJECT_NAME} PRIVATE
+            ../deps/qrcodegen/qrcodegen.cpp
+            ../deps/qrcodegen/qrcodegen.hpp
+            app_updater.cpp
+            app_updater.h
+            app_update_catalog.cpp
+            app_update_install.cpp
+            app_update_cleanup.cpp
+            app_update_package.h
             game_scanner.cpp
             game_scanner.h
             imgui_driver.h
             gui.cpp
+            library.cpp
             gui.h
             gui_font.cpp
             gui_font.h
@@ -49,6 +73,8 @@ if(NOT LIBRETRO)
             vgamepad.h
             gui_chat.h
             gui_cheats.cpp
+            gui_debugger.cpp
+            gui_debugger.h
             gui_util.cpp
             gui_util.h
             mainui.cpp

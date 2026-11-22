@@ -49,3 +49,16 @@ jobs:
         if: runner.os == 'Windows'
         # Native Win32 pointer/focus tests require an unlocked interactive desktop.
         run: ctest --test-dir build/vmu-tests -C Release --output-on-failure -LE interactive
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Configure phone VMU checks
+        run: |
+          git submodule update --init core/deps/asio
+          cmake -S tests/phone_vmu -B build/phone-vmu-tests
+      - name: Build phone VMU checks
+        run: cmake --build build/phone-vmu-tests --config Release --parallel 4
+      - name: Test phone VMU
+        run: ctest --test-dir build/phone-vmu-tests -C Release --output-on-failure
