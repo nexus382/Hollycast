@@ -37,7 +37,8 @@ const SETTINGS = {
   config: new Set(['UseReios', 'Dynarec.Enabled', 'aica.DSPEnabled', 'rend.ShowFPS', 'rend.Resolution',
     'pvr.rend', 'rend.vsync', 'rend.ThreadedRendering', 'ta.skip', 'pvr.AutoSkipFrame',
     'rend.WideScreen', 'rend.PerStripSorting', 'rend.UseMipmaps', 'pvr.MaxThreads',
-    'HikaruSorting', 'HikaruMaxLayers', 'HikaruPlanetRegion', 'HikaruPlanetDpadStick', 'HikaruAudioPacing']),
+    'HikaruSorting', 'HikaruMaxLayers', 'HikaruPlanetRegion', 'HikaruPlanetDpadStick', 'HikaruAudioPacing',
+    'Dreamcast.RewindEnable', 'Dreamcast.RewindInterval', 'Dreamcast.RewindCompression', 'Dreamcast.RewindDuration']),
   rend: /^(ResourceMonitorMode|Overlay[A-Za-z0-9_.]*|Perf[A-Za-z0-9_.]*)$/,
 };
 
@@ -115,6 +116,13 @@ export function validateMappingArgs(args) {
     check(Number.isInteger(args.code) && args.code >= 0 && args.code <= 65535, 'Mapping axis code must be an integer in 0..65535');
     check(Number.isInteger(args.value) && args.value >= -32768 && args.value <= 32767, 'Mapping axis value must be an integer in -32768..32767');
   } else throw new Error(`Unsupported mapping action: ${args.action}`);
+  return args;
+}
+
+export function validateRewindArgs(args) {
+  check(args && typeof args === 'object' && !Array.isArray(args), 'Rewind input must be an object');
+  check(Object.keys(args).length === 1 && Object.hasOwn(args, 'held'), 'Rewind accepts exactly: held');
+  check(typeof args.held === 'boolean', 'Rewind held must be boolean');
   return args;
 }
 
@@ -597,6 +605,18 @@ export class HollycastHarness {
     return result;
   }
 
+  async rewind(args, context = {}) {
+    validateRewindArgs(args);
+    checkUiContext(context);
+    // Rewind is optional so older native builds remain usable with doctor.
+    const ready = await readJson(path.join(this.directory, 'ready.json'), 65536);
+    check(Array.isArray(ready.capabilities) && ready.capabilities.includes('rewind'),
+      'This native build does not expose rewind control');
+    const result = await this.request('rewind', args, uiRequestOptions(context));
+    checkUiContext(context);
+    return result;
+  }
+
   async fill(target, text, { commit = true, modifiers = [], signal, deadline } = {}) {
     check(typeof text === 'string' && Buffer.byteLength(text, 'utf8') <= 4096 && !text.includes('\0'), 'Fill text must be at most 4096 UTF-8 bytes without NUL');
     check(typeof commit === 'boolean', 'Fill commit must be boolean');
@@ -826,6 +846,7 @@ async function main(argv) {
       + 'profile --run DIRECTORY --file PROFILE_JSON\n'
       + 'settings --run DIRECTORY --page PAGE\n'
       + 'mapping --run DIRECTORY --input JSON\n'
+      + 'rewind --run DIRECTORY --held true|false\n'
       + 'click --run DIRECTORY (--label LABEL|--item-id ID|--semantic-id ID) [--window NAME] [--input JSON]\n'
       + 'fill --run DIRECTORY --target SELECTOR_JSON (--text TEXT|--text-file PATH) [--modifiers JSON] [--commit true|false]\n'
       + 'set-toggle --run DIRECTORY --target SELECTOR_JSON --value true|false\n'
@@ -945,6 +966,11 @@ async function main(argv) {
     case 'profile': result = await harness.setWatchProfile(await readJson(options['--file'], 65536)); break;
     case 'settings': result = await harness.settings(options['--page']); break;
     case 'mapping': result = await harness.mapping(parseJsonArgument(options['--input'], 4096, 'Mapping')); break;
+    case 'rewind': {
+      check(['true', 'false'].includes(options['--held']), 'Rewind requires --held true|false');
+      result = await harness.rewind({ held: options['--held'] === 'true' });
+      break;
+    }
     case 'click': {
       const target = cliUiTarget(options);
       const clickOptions = options['--input'] === undefined ? {} : parseJsonArgument(options['--input'], 4096, 'Click');

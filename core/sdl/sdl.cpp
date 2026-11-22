@@ -2,6 +2,7 @@
 
 #if defined(USE_SDL)
 #include "types.h"
+#include "rewind.h"
 #include "cfg/cfg.h"
 #include "sdl/sdl.h"
 #ifdef _WIN32
@@ -665,6 +666,17 @@ void input_sdl_handle()
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
 				{
+					if (event.window.windowID == SDL_GetWindowID(window))
+					{
+						// Raw Input does not receive releases made in another window.
+						for (int i = 0; i < GamepadDevice::GetGamepadCount(); ++i)
+						{
+							const auto device = GamepadDevice::GetGamepad(i);
+							if (auto* keyboard = dynamic_cast<KeyboardDevice*>(device.get()))
+								keyboard->releaseKeys();
+						}
+					}
+					rewind_state::releaseRequests();
 					if (window_fullscreen)
 						SDL_ShowCursor(SDL_ENABLE);
 				}

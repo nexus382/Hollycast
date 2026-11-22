@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "maple_if.h"
+#include "rewind.h"
 #include "maple_cfg.h"
 #include "maple_helper.h"
 #include "hw/holly/holly_intc.h"
@@ -392,6 +393,7 @@ void maple_ReconnectDevices()
 
 void maple_ReconnectDevice(int bus, int port)
 {
+	rewind_state::invalidate();
 	if (port == 5)
 	{
 		// main device

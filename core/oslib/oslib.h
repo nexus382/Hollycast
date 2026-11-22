@@ -12,6 +12,14 @@
 #endif
 
 void os_DoEvents();
+#if defined(__ANDROID__) && !defined(LIBRETRO)
+void os_DispatchInputAction(void (*action)());
+#else
+inline void os_DispatchInputAction(void (*action)())
+{
+	action();
+}
+#endif
 void os_CreateWindow();
 void os_DestroyWindow();
 void os_SetupInput();

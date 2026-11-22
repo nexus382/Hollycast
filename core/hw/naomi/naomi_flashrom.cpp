@@ -2,6 +2,7 @@
 	Created on: Apr 19, 2020
 
 	Copyright 2020 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of flycast.
 
@@ -21,6 +22,7 @@
 #include "naomi_flashrom.h"
 #include "hw/flashrom/nvmem.h"
 #include "cfg/option.h"
+#include "rewind.h"
 
 extern u8 *EEPROM;
 
@@ -78,6 +80,7 @@ void write_naomi_flash(u32 addr, u8 value)
 		WARN_LOG(NAOMI, "NVMEM record doesn't exist or is too short");
 		return;
 	}
+	rewind_state::invalidateStorageWrite();
 	u8 *flashData = nvmem::getFlashData();
 	flashData[addr] = value;
 	flashData[addr + block_size] = value;

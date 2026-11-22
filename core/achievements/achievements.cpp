@@ -1080,12 +1080,11 @@ void Achievements::serialize(Serializer& ser)
 	u32 size = (u32)rc_client_progress_size(rc_client);
 	if (size > 0)
 	{
-		u8 *buffer = new u8[size];
-		if (rc_client_serialize_progress(rc_client, buffer) != RC_OK)
+		std::vector<u8> buffer(size);
+		if (rc_client_serialize_progress_sized(rc_client, buffer.data(), buffer.size()) != RC_OK)
 			size = 0;
 		ser << size;
-		ser.serialize(buffer, size);
-		delete[] buffer;
+		ser.serialize(buffer.data(), size);
 	}
 	else {
 		ser << size;
@@ -1094,20 +1093,21 @@ void Achievements::serialize(Serializer& ser)
 void Achievements::deserialize(Deserializer& deser)
 {
 	if (deser.version() < Deserializer::V50) {
-		 rc_client_deserialize_progress(rc_client, nullptr);
+		 rc_client_deserialize_progress_sized(rc_client, nullptr, 0);
 	}
 	else {
 		u32 size;
 		deser >> size;
 		if (size > 0)
 		{
-			u8 *buffer = new u8[size];
-			deser.deserialize(buffer, size);
-			rc_client_deserialize_progress(rc_client, buffer);
-			delete[] buffer;
+			if (size > deser.remaining())
+				throw Deserializer::Exception("Truncated achievement state");
+			std::vector<u8> buffer(size);
+			deser.deserialize(buffer.data(), size);
+			rc_client_deserialize_progress_sized(rc_client, buffer.data(), buffer.size());
 		}
 		else {
-			rc_client_deserialize_progress(rc_client, nullptr);
+			rc_client_deserialize_progress_sized(rc_client, nullptr, 0);
 		}
 	}
 }

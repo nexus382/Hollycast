@@ -212,12 +212,6 @@ const u32 NULL_CONTEXT = ~0u;
 
 static void serializeContext(Serializer& ser, const TA_context *ctx)
 {
-	if (ser.dryrun())
-	{
-		// Maximum size: address, size, data
-		ser.skip(4 + 4 + TA_DATA_SIZE);
-		return;
-	}
 	if (ctx == nullptr)
 	{
 		ser << NULL_CONTEXT;

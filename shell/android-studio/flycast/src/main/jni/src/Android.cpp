@@ -13,6 +13,7 @@
 #include "cfg/option.h"
 #include "stdclass.h"
 #include "oslib/oslib.h"
+#include "frontend_input_queue.h"
 #ifdef USE_BREAKPAD
 #include "client/linux/handler/exception_handler.h"
 #endif
@@ -49,7 +50,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_screenCh
 	settings.display.refreshRate = std::max(std::round(refreshRate), 60.f);
 }
 
-static bool game_started;
+static std::atomic<bool> game_started{false};
 
 //stuff for saving prefs
 jobject g_emulator;
@@ -84,8 +85,20 @@ static void emuEventCallback(Event event, void *)
 	}
 }
 
+static FrontendInputQueue inputActions;
+
+void os_DispatchInputAction(void (*action)())
+{
+	if (emu.usesSharedRewind())
+		inputActions.post(action);
+	else
+		action();
+}
+
 void os_DoEvents()
 {
+	// Java input callbacks can arrive while this thread is running the guest CPU.
+	inputActions.drain();
 }
 
 void common_linux_setup();
@@ -192,8 +205,31 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_setExter
     gui_refresh_files(refreshArtwork == JNI_TRUE);
 }
 
-static bool stopEmu()
+static bool stopEmu(bool* wasRunning = nullptr)
 {
+	if (emu.usesSharedRewind())
+	{
+		try {
+			// A queued save/load can temporarily leave the emulator in Loaded.
+			// Check whether to resume only after those actions have completed.
+			auto paused = inputActions.postPause([] {
+				const bool running = emu.running();
+				emu.stop();
+				emu.finishPendingPause();
+				return running;
+			});
+			if (!paused.valid() && emu.running())
+				return false;
+			const bool running = paused.valid() && paused.get();
+			game_started = false;
+			if (wasRunning != nullptr)
+				*wasRunning = running;
+			return true;
+		} catch (const std::exception& e) {
+			WARN_LOG(COMMON, "Could not acknowledge Android pause: %s", e.what());
+			return false;
+		}
+	}
 	if (!emu.running())
 	{
 		game_started = false;
@@ -219,9 +255,11 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_setGameU
 	if (!fileName.empty())
 	{
 		NOTICE_LOG(BOOT, "Game Disk URI: '%s'", fileName.c_str());
-		if (game_started)
+		const bool sharedRewind = emu.usesSharedRewind();
+		if (game_started || sharedRewind)
 		{
-			stopEmu();
+			if (!stopEmu() && sharedRewind)
+				return;
 			gui_stop_game();
 		}
 		std::string path = fileName.substr(0, 7) == "file://" ? fileName.substr(7) : fileName;
@@ -259,12 +297,13 @@ static cThread savestateThread(savestateThreadFunc, nullptr, "Flycast-save");
 
 extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_pause(JNIEnv *env,jobject obj)
 {
+	bool wasRunning = true;
 	if (config::GGPOEnable)
 	{
 		stopEmu();
 		gui_stop_game();
 	}
-	else if (game_started && stopEmu())
+	else if ((game_started || emu.usesSharedRewind()) && stopEmu(&wasRunning) && wasRunning)
 	{
 		game_started = true; // restart when resumed
 		if (config::AutoSaveState) {
@@ -276,19 +315,30 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_pause(JN
 
 extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_resume(JNIEnv *env,jobject obj)
 {
-    if (game_started)
-    {
-    	game_started = false;
+	if (!game_started)
+		return;
+	if (emu.usesSharedRewind())
+	{
 		savestateThread.WaitToEnd();
-        emu.start();
-    }
+		inputActions.post([] {
+			// Keep the resume marker until the render thread can consume it.
+			if (!emu.running() && game_started.exchange(false))
+				emu.start();
+		});
+		return;
+	}
+	game_started = false;
+	savestateThread.WaitToEnd();
+	emu.start();
 }
 
 void input_term();
 
 extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_stop(JNIEnv *env,jobject obj)
 {
-	stopEmu();
+	const bool sharedRewind = emu.usesSharedRewind();
+	if (!stopEmu() && sharedRewind)
+		return;
 	savestateThread.WaitToEnd();
 	gui_stop_game();
 	input_term();
@@ -301,13 +351,18 @@ static void *render_thread_func(void *)
 
 		mainui_loop(false);
 	} catch (const std::exception& e) {
+		inputActions.setActive(false);
 		ANativeWindow_release(g_window);
 	    g_window = nullptr;
 	    jni::String message(e.what());
 	    jni::env()->CallVoidMethod(g_activity, showAlertDialogMid, (jstring)message);
 	    return nullptr;
+	} catch (...) {
+		inputActions.setActive(false);
+		throw;
 	}
 
+	inputActions.setActive(false);
 	termRenderApi();
 	ANativeWindow_release(g_window);
     g_window = nullptr;
@@ -337,13 +392,19 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_rendinit
 	{
         g_window = ANativeWindow_fromSurface(env, surface);
         mainui_start();
-        render_thread.Start();
+		inputActions.setActive(true);
+		try {
+			render_thread.Start();
+		} catch (...) {
+			inputActions.setActive(false);
+			throw;
+		}
 	}
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_guiOpenSettings(JNIEnv *env, jobject obj)
 {
-    gui_open_settings();
+	os_DispatchInputAction(gui_open_settings);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_com_hollycast_emulator_emu_JNIdc_guiIsOpen(JNIEnv *env, jobject obj)
