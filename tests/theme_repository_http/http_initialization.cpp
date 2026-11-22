@@ -35,7 +35,7 @@ namespace http
 {
 void init() { initialized = true; ++initCalls; }
 void term() { initialized = false; }
-int get(const std::string& request, std::vector<u8>& content, const Headers*, Headers*, int)
+int get(const std::string& request, std::vector<u8>& content, const Headers*, Headers*, int, const std::atomic<bool>*)
 {
     ++getCalls;
     check(request == url, "Unexpected request URL");
@@ -73,16 +73,13 @@ int main(int argc, char** argv)
         }
         else
         {
-            check(scenario == "cold_start" || scenario == "after_shutdown", "Unknown test scenario");
+            check(scenario == "after_shutdown", "Unknown test scenario");
             checkCatalog(themes::repository::fetch(url));
             check(initialized && initCalls > 0 && getCalls == 1, "HTTP client was not initialized before fetching");
-            if (scenario == "after_shutdown")
-            {
-                // Other app services can shut down the shared HTTP client.
-                http::term();
-                checkCatalog(themes::repository::fetch(url));
-                check(initialized && getCalls == 2, "HTTP client was not reinitialized");
-            }
+            // Other app services can shut down the shared HTTP client.
+            http::term();
+            checkCatalog(themes::repository::fetch(url));
+            check(initialized && getCalls == 2, "HTTP client was not reinitialized");
         }
         std::cout << scenario << ": passed\n";
         return 0;

@@ -19,7 +19,8 @@
  */
 #include "types.h"
 #include <asio.hpp>
-#include "netservice.h"
+#include "dcnet.h"
+#include "dcnet_endpoint.h"
 #include "util/tsqueue.h"
 #include "oslib/oslib.h"
 #include "emulator.h"
@@ -40,26 +41,21 @@
 //#define WIRESHARK_DUMP 1
 #endif
 
+std::string dcnet::serverHostname(const char *fallback)
+{
+#ifndef LIBRETRO
+	return config::loadStr("network", "DCNetServer", fallback);
+#else
+	return fallback;
+#endif
+}
+
 namespace net::modbba
 {
 
 static TsQueue<u8> toModem;
 static constexpr size_t MAX_ETH_FRAME_SIZE = 1514;
 static constexpr size_t MAX_BBA_QUEUE_SIZE = 256;
-
-class DCNetService : public Service
-{
-public:
-	bool start() override;
-	void stop() override;
-
-	void writeModem(u8 b) override;
-	int readModem() override;
-	int modemAvailable() override;
-
-	void receiveEthFrame(const u8 *frame, u32 size) override;
-	u32 sendEthFrame(u8 *frame) override;
-};
 
 class PPPSocket
 {
@@ -439,7 +435,7 @@ public:
 		this->handler = std::function<void(const std::error_code&, const asio::ip::address&, const std::string&)>(handler);
 		try {
 			asio::ip::udp::resolver resolver(io_context);
-			auto it = resolver.resolve(asio::ip::udp::v4(), "dcnet.flyca.st", std::to_string(PORT));
+			auto it = resolver.resolve(asio::ip::udp::v4(), dcnet::PublicHost, std::to_string(PORT));
 			if (it.empty()) {
 				finish();
 				return;
@@ -690,10 +686,8 @@ private:
 	std::unique_ptr<EthSocket> ethSocket;
 	TsQueue<std::vector<u8>> bbaQueue;
 
-	static constexpr uint16_t PPP_PORT = 7654;
 	static constexpr uint16_t TAP_PORT = 7655;
 	static constexpr uint16_t POWER_SMASH_PPP_PORT = 7656;
-	friend DCNetService;
 };
 static DCNetThread thread;
 
@@ -766,45 +760,24 @@ void DCNetThread::connect(const asio::ip::address& address, const std::string& a
 	const bool powerSmash = settings.content.gameId == "HDR-0113"	// Power Smash
 			|| settings.content.gameId == "HDR-0091"				// Pro Yakyuu Team de Asobou Net!
 			|| settings.content.gameId == "HDR-0040";				// Virtual-On Oratorio Tangram
-	asio::ip::tcp::endpoint endpoint;
-	if (address.is_unspecified())
-	{
-		std::string hostname = "dcnet.flyca.st";
-#ifndef LIBRETRO
-		hostname = config::loadStr("network", "DCNetServer", hostname);
-#endif
-		std::string port;
-		if (config::EmulateBBA)
-			port = std::to_string(TAP_PORT);
-		else if (powerSmash)
-			port = std::to_string(POWER_SMASH_PPP_PORT);
-		else
-			port = std::to_string(PPP_PORT);
+	const auto endpoint = [&](uint16_t port) -> asio::ip::tcp::endpoint {
+		if (!address.is_unspecified())
+			return {address, port};
 		asio::ip::tcp::resolver resolver(*io_context);
 		asio::error_code ec;
-		auto it = resolver.resolve(hostname, port, ec);
+		auto it = resolver.resolve(dcnet::serverHostname(), std::to_string(port), ec);
 		if (ec)
 			throw FlycastException(ec.message());
 		if (it.empty())
 			throw FlycastException(i18n::Ts("Host not found"));
-		endpoint = *it.begin();
-	}
-	else
-	{
-		endpoint.address(address);
-		if (config::EmulateBBA)
-			endpoint.port(TAP_PORT);
-		else if (powerSmash)
-			endpoint.port(POWER_SMASH_PPP_PORT);
-		else
-			endpoint.port(PPP_PORT);
-	}
+		return it.begin()->endpoint();
+	};
 	if (config::EmulateBBA)
-		ethSocket = std::make_unique<EthSocket>(*io_context, bbaQueue, endpoint, apname);
+		ethSocket = std::make_unique<EthSocket>(*io_context, bbaQueue, endpoint(TAP_PORT), apname);
 	else if (powerSmash)
-		pppSocket = std::make_unique<PowerSmashPPPSocket>(*io_context, endpoint, apname);
+		pppSocket = std::make_unique<PowerSmashPPPSocket>(*io_context, endpoint(POWER_SMASH_PPP_PORT), apname);
 	else
-		pppSocket = std::make_unique<PPPSocket>(*io_context, endpoint, apname);
+		pppSocket = std::make_unique<PPPSocket>(*io_context, endpoint(dcnet::PppPort), apname);
 }
 
 void DCNetThread::run()
@@ -812,12 +785,9 @@ void DCNetThread::run()
 	toModem.clear();
 	bbaQueue.clear();
 	try {
-		std::string hostname;
-#ifndef LIBRETRO
-		hostname = config::loadStr("network", "DCNetServer");
+		const std::string hostname = dcnet::serverHostname("");
 		if (!hostname.empty())
 			connect({}, hostname);
-#endif
 		AccessPointFinder finder(*io_context);
 		if (hostname.empty())
 			finder.find([this](const std::error_code& ec,

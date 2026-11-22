@@ -6,7 +6,7 @@ import sys
 root = Path(__file__).resolve().parents[2]
 source = (root / "core/hw/maple/maple_devs.cpp").read_text(encoding="utf-8")
 header = (root / "core/hw/maple/maple_devs.h").read_text(encoding="utf-8")
-link = source[source.index("bool maple_sega_vmu::linkStatus()"):source.index("u32 maple_sega_vmu::dma(u32 cmd)")].replace("std::time(", "testTime(")
+link = source[source.index("bool maple_sega_vmu::linkStatus()"):source.index("u32 maple_sega_vmu::dma(u32 cmd)")]
 save = source[source.index("bool maple_sega_vmu::fullSave()"):source.index("void maple_sega_vmu::detachSaveFile()")]
 base_link = header[header.index("\tvirtual bool linkStatus()"):header.index("\tvirtual void requestReconnect()")]
 
@@ -19,11 +19,9 @@ using u64 = std::uint64_t;
 constexpr u64 SH4_MAIN_CLOCK = 200000000;
 u64 testTicks = 1;
 u64 sh4_sched_now64() { return testTicks; }
-std::time_t testTime(std::time_t *out) { const std::time_t now = 1700000000; if(out)*out=now; return now; }
 struct { struct { bool online = false; } network; } settings;
 std::string testCardPath;
 namespace hostfs { std::string getVmuPath(const char *, bool) { return testCardPath; } }
-namespace nowide { FILE *fopen(const char *path, const char *mode) { return std::fopen(path, mode); } }
 struct maple_base {
  bool reconnect_requested = false;
  u64 reconnect_time = 0;
@@ -123,8 +121,8 @@ void testMapleSync(Address address)
  check(!vmu.linkStatus() && state('4').find("HTTP/1.1 200") == 0, "Disk retry failed");
  check(vmu.flash_data[123] == 44 && readDisk(diskPath)[123] == 44, "Disk retry lost progress");
  check(backupPaths().size()==5,"Backup rotation must retain at most five snapshots");
- check(readDisk(firstBackupPath)==std::string(131072,'\x55'),"A same-second backup overwrote the first snapshot");
- check(readDisk(firstBackupPath+"-000001")==beforeSecondPhoneWrite,"A same-second checkout did not get a unique snapshot");
+ check(readDisk(firstBackupPath)==std::string(131072,'\x55'),"A later backup overwrote the first snapshot");
+ check(readDisk(backupPaths().back().string())==beforeSecondPhoneWrite,"A second checkout did not preserve its own snapshot");
 
  check(queue('3', progress).find("HTTP/1.1 409") == 0, "Delayed checkpoint was accepted while detached");
  progress[123] = 45; check(queue('5', progress).find("HTTP/1.1 202") == 0, "State-load fixture not queued");
@@ -157,7 +155,7 @@ void testMapleSync(Address address)
   check(state('f').find("HTTP/1.1 200")==0&&readDisk(diskPath)==data,"Repeated return lost card contents");
  }
  const auto retained=backupPaths();
- check(retained.size()==5,"More than five same-second checkouts must retain only the newest five snapshots");
+ check(retained.size()==5,"More than five checkouts must retain only the newest five snapshots");
  for(std::size_t i=0;i<retained.size();++i)
   check(readDisk(retained[i].string())==expectedSnapshots[expectedSnapshots.size()-retained.size()+i],"Backup rotation must retain the newest snapshots in timestamp order");
  phone_vmu::unpublishCard(2,vmu.flash_data);

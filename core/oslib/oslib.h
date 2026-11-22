@@ -1,6 +1,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 #pragma once
 #include "types.h"
+#include "vmu_path.h"
 #include <string>
 #include <vector>
 #if defined(DREAMPOTATO_INTEGRATED_MODE) && !defined(_WIN32)
@@ -21,6 +22,9 @@ void os_UninstallFaultHandler();
 void os_RunInstance(int argc, const char *argv[]);
 void os_SetThreadName(const char *name);
 void os_notify(const char *msg, int durationMs = 2000, const char *details = nullptr);
+#ifdef __ANDROID__
+void os_CopySensitiveTextToClipboard(const char *text);
+#endif
 
 #ifdef DREAMPOTATO_INTEGRATED_MODE
 //! Get the containing directory of the current '.app'/'AppImage' bundle, if applicable, or of the current executable
@@ -81,8 +85,6 @@ u32 static inline bitscanrev(u32 v)
 
 namespace hostfs
 {
-	bool isConfiguredVmuFileNameValid(const std::string& name);
-	std::string getVmuPath(const std::string& port, bool save);
 #ifdef DREAMPOTATO_INTEGRATED_MODE
 	std::string getDreamPotatoPath();
 #endif

@@ -852,8 +852,10 @@ bool VulkanShaderChain::updateConfiguredChain(vk::CommandBuffer commandBuffer)
 				postprocess::reportShaderChainStatus(generation, activePath, error);
 				return !programs.empty();
 			}
+	const auto history = postprocess::resolveShaderHistory(chain);
 	const std::vector<std::vector<bool>> mipmapRequirements = postprocess::resolveShaderPassOutputMipmaps(chain);
 	for (size_t passIndex = 0; passIndex < candidate.size(); ++passIndex) {
+		candidate[passIndex].historyDepth = history.passFrames[passIndex];
 		candidate[passIndex].inputNeedsMipmaps = postprocess::shaderInputNeedsMipmaps(chain.passes, passIndex);
 		for (size_t outputIndex = 0; outputIndex < candidate[passIndex].outputs.size(); ++outputIndex)
 			candidate[passIndex].outputs[outputIndex].needsMipmaps = mipmapRequirements[passIndex][outputIndex];
@@ -878,23 +880,7 @@ bool VulkanShaderChain::updateConfiguredChain(vk::CommandBuffer commandBuffer)
 	programs = std::move(candidate);
 	renderedFrames = 0;
 	parameters = std::move(chain.parameters);
-	sourceHistoryDepth = 1;
-	for (const postprocess::ShaderPass& pass : chain.passes)
-		for (const postprocess::ShaderPassInput& input : pass.inputs) {
-			const uint32_t requiredDepth = input.kind == postprocess::ShaderInputKind::History
-					? input.historyOffset + 1
-					: input.kind == postprocess::ShaderInputKind::Feedback ? 2u : 1u;
-			if (requiredDepth == 1)
-				continue;
-			if (input.sourcePass == postprocess::InvalidShaderPass)
-				sourceHistoryDepth = std::max(sourceHistoryDepth, requiredDepth);
-			else
-				programs[input.sourcePass].historyDepth = std::max(programs[input.sourcePass].historyDepth, requiredDepth);
-		}
-	for (const auto& program : programs)
-		for (const auto& output : program.pass.outputs)
-			if (output.previousFrame && output.previousPass != postprocess::InvalidShaderPass)
-				programs[output.previousPass].historyDepth = std::max(2u, programs[output.previousPass].historyDepth);
+	sourceHistoryDepth = std::max(1u, history.sourceFrames);
 	lookupTextures = std::move(candidateLookupTextures);
 	recordLookupUploads(commandBuffer);
 	activePath = requestedLabel;

@@ -19,6 +19,7 @@
 #include <cstdarg>
 #include <math.h>
 #include "types.h"
+#include "audio/sample_rate.h"
 #ifndef _WIN32
 #include <sys/time.h>
 #endif
@@ -750,14 +751,13 @@ static void setGameGeometry(retro_game_geometry& geometry)
 
 bool setAVInfo(retro_system_av_info& avinfo)
 {
-	double sample_rate = 44100.0;
 	double fps = (fps_spg) ? fps_spg : SPG_CONTROL.isPAL() ? 50.0 : 59.945300;
 
 	setGameGeometry(avinfo.geometry);
-	avinfo.timing.sample_rate = sample_rate;
+	avinfo.timing.sample_rate = audio::OutputSampleRate;
 	avinfo.timing.fps = fps / (double)libretro_vsync_swap_interval;
 
-	libretro_expected_audio_samples_per_run = sample_rate / fps;
+	libretro_expected_audio_samples_per_run = audio::OutputSampleRate / fps;
 
 	// Avoid video reinit with same timings
 	if (double_is_equal(avinfo.timing.fps, fps_current))

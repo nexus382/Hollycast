@@ -78,21 +78,25 @@ struct ServiceResult
 struct ServiceCheck
 {
 	const char *gameId;
+	bool (*probe)();
+	const char *description;
 	std::future<ServiceResult> pending;
 	Clock::time_point checked;
 	Clock::time_point nextCheck;
 	bool responding = false;
 };
 // Separate availability from the feed, so probes cannot change activity totals.
-std::array<ServiceCheck, 2> serviceChecks{{{"catalog:pba-bowling-2001"}, {"catalog:sega-rally-2"}}};
+std::array<ServiceCheck, 2> serviceChecks{{
+	{"catalog:pba-bowling-2001", [] { return dcnet::probePba(); }, Tnop("PBA lobby query through the DCnet VPN.")},
+	{"catalog:sega-rally-2", [] { return dcnet::probeSegaRally(); }, Tnop("Sega Rally 2 initialization handshake with DCnet.")},
+}};
 constexpr auto serviceRefreshInterval = std::chrono::minutes(2);
 constexpr auto serviceExpiry = std::chrono::minutes(3);
 
 void refreshServices()
 {
-	for (size_t i = 0; i < serviceChecks.size(); ++i)
+	for (auto& check : serviceChecks)
 	{
-		auto& check = serviceChecks[i];
 		if (check.pending.valid() && check.pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
 		{
 			try {
@@ -109,9 +113,8 @@ void refreshServices()
 		if (!check.pending.valid() && Clock::now() >= check.nextCheck)
 		{
 			try {
-				check.pending = std::async(std::launch::async, [i] {
-					const bool responding = i == 0 ? dcnet::probePba("dcnet.flyca.st") : dcnet::probeSegaRally("dcnet.flyca.st");
-					return ServiceResult{responding, Clock::now()};
+				check.pending = std::async(std::launch::async, [probe = check.probe] {
+					return ServiceResult{probe(), Clock::now()};
 				});
 			} catch (const std::exception&) {
 				check.responding = false;
@@ -382,8 +385,7 @@ void renderServerStatus(const dcnet::Game& game)
 		else if (check != serviceChecks.end())
 		{
 			ImGui::BeginTooltip();
-			ImGui::TextUnformatted(game.titleId() == "catalog:pba-bowling-2001"
-					? T("PBA lobby query through the DCnet VPN.") : T("Sega Rally 2 initialization handshake with DCnet."));
+			ImGui::TextUnformatted(T(check->description));
 			ImGui::TextUnformatted(T("Availability only. Player and match counts are not published."));
 			if (checked)
 				ImGui::Text(T("Checked %lld seconds ago. Refreshes every 2 minutes."),

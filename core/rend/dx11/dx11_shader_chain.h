@@ -139,10 +139,9 @@ private:
 	ComPtr<ID3D11Buffer> computeConstants;
 	Target mipmapSource;
 	TargetRing sourceHistory;
-	uint32_t sourceHistoryDepth = 1;
+	uint32_t sourceHistoryDepth = 0;
 	// Count completed display-chain frames, independently of PVR render-to-texture work.
 	uint32_t renderedFrames = 0;
-	bool needsSourceHistory = false;
 	std::array<int, 4> stencilFrameSize {};
 	std::vector<Program> programs;
 	std::vector<LookupTexture> lookupTextures;

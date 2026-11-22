@@ -6,36 +6,15 @@ class MultiBindMappingTest : public ::testing::Test
 {
 protected:
     InputMapping inputMapping;
-
-    void SetUp() override
-    {}
 };
 
-TEST_F(MultiBindMappingTest, get_button_code__found)
+TEST_F(MultiBindMappingTest, SingleButtonCodeOnlyMatchesItsAssignedKey)
 {
-    // Arrange
-    const DreamcastKey mappedKey = DreamcastKey::DC_BTN_A;
-    const u32 mappedCode = 4294967294;
-    inputMapping.set_button(mappedKey, mappedCode);
+    const u32 mappedCode = 4294967294u;
+    inputMapping.set_button(DreamcastKey::DC_BTN_A, mappedCode);
 
-    // Act
-    const u32 retrievedCode = inputMapping.get_button_code(0, mappedKey);
-
-    // Assert
-    ASSERT_EQ(retrievedCode, mappedCode);
-}
-
-TEST_F(MultiBindMappingTest, get_button_code__not_found)
-{
-    // Arrange
-    inputMapping.set_button(DreamcastKey::DC_BTN_A, 4294967294);
-
-    // Act
-    const u32 retrievedCode = inputMapping.get_button_code(0, DreamcastKey::DC_BTN_B);
-
-    // Assert
-    const u32 expectedCode = InputMapping::InputDef::INVALID_CODE;
-    ASSERT_EQ(retrievedCode, expectedCode);
+    EXPECT_EQ(mappedCode, inputMapping.get_button_code(0, DreamcastKey::DC_BTN_A));
+    EXPECT_EQ(InputMapping::InputDef::INVALID_CODE, inputMapping.get_button_code(0, DreamcastKey::DC_BTN_B));
 }
 
 TEST_F(MultiBindMappingTest, get_button_combo__found)
@@ -72,7 +51,7 @@ TEST_F(MultiBindMappingTest, get_button_combo__not_found)
     EXPECT_TRUE(retrievedCombo.inputs.empty());
 }
 
-TEST_F(MultiBindMappingTest, get_button_combo__not_found__overlapping_element)
+TEST_F(MultiBindMappingTest, UnorderedComboReplacesAnOverlappingBinding)
 {
     // Arrange
     const DreamcastKey mappedKey1 = DreamcastKey::DC_BTN_A;
@@ -85,6 +64,7 @@ TEST_F(MultiBindMappingTest, get_button_combo__not_found__overlapping_element)
         true
     };
     inputMapping.set_button(mappedKey1, combo1);
+    ASSERT_EQ(combo1, inputMapping.get_button_combo(0, mappedKey1));
     const DreamcastKey mappedKey2 = DreamcastKey::DC_BTN_B;
     // Contains all of the same keys and is not sequential, so the above should be removed when this is added
     const InputMapping::ButtonCombo combo2{
@@ -97,11 +77,8 @@ TEST_F(MultiBindMappingTest, get_button_combo__not_found__overlapping_element)
     };
     inputMapping.set_button(mappedKey2, combo2);
 
-    // Act
-    const InputMapping::ButtonCombo retrievedCombo = inputMapping.get_button_combo(0, mappedKey1);
-
-    // Assert
-    EXPECT_EQ(retrievedCombo, InputMapping::ButtonCombo());
+    EXPECT_EQ(InputMapping::ButtonCombo(), inputMapping.get_button_combo(0, mappedKey1));
+    EXPECT_EQ(combo2, inputMapping.get_button_combo(0, mappedKey2));
 }
 
 TEST_F(MultiBindMappingTest, get_button_combo__found__sequential_not_overlapped)

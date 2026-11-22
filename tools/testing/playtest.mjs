@@ -4,12 +4,13 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { controllerState, validateMappingArgs, validateSettingsPage, validateUiClickOptions, validateUiTarget, validateUiExpectedFields } from './hollytest.mjs';
+import { publishJson, redactUiEvidence } from './evidence.mjs';
+import { hasFreshTelemetry } from './telemetry.mjs';
 
 const PLAN_SCHEMA = 'hollytest.playtest-plan.v1';
 const MAX_PLAN_STEPS = 64;
 const MAX_PLAN_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
-const MAX_TELEMETRY_AGE_MS = 500;
 const ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const ASSERTION_OPERATORS = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'is_true', 'is_false']);
@@ -234,9 +235,7 @@ function isFreshObservation(sample, plan) {
   if (!sample || typeof sample !== 'object' || !sample.state || !sample.telemetry)
     return { fresh: false, reason: 'live_observation_missing' };
   const telemetry = sample.telemetry;
-  if (telemetry.sample_available !== true || telemetry.stale !== false
-      || !Number.isFinite(telemetry.sample_age_ms) || telemetry.sample_age_ms < 0
-      || telemetry.sample_age_ms > MAX_TELEMETRY_AGE_MS)
+  if (!hasFreshTelemetry(sample))
     return { fresh: false, reason: 'live_telemetry_stale_or_unavailable' };
   if (sample.state.game_id !== plan.identity.game_id)
     return { fresh: false, reason: 'game_identity_mismatch' };
@@ -317,40 +316,6 @@ function requireUiOperationPass(result, operation) {
   throw new PlaytestResultError(`${operation} did not pass: ${result?.reason ?? 'native readback unavailable'}`, outcome, { result });
 }
 
-function redactUiEvidence(value) {
-  if (Array.isArray(value)) return value.map(redactUiEvidence);
-  if (!value || typeof value !== 'object') return value;
-  const copy = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactUiEvidence(child)]));
-  if (Array.isArray(copy.ui?.items)) {
-    for (const item of copy.ui.items) {
-      const password = item.password === true;
-      const typedText = item.inputable === true && ['text', 'path', 'file'].includes(item.kind);
-      if (!password && !typedText && item.text_input_focused !== true) continue;
-      for (const key of ['value', 'value_label', 'draft_value']) {
-        if (!Object.hasOwn(item, key)) continue;
-        if (password || (typeof item[key] === 'string' && (['value', 'draft_value'].includes(key) || typedText)))
-          item[key] = '[redacted]';
-      }
-      if (password || typedText) item.text_value_redacted = true;
-    }
-  }
-  return copy;
-}
-
-async function writeNewJson(file, value) {
-  const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
-  try {
-    await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
-    try { await fs.link(temporary, file); }
-    catch (error) {
-      if (error.code === 'EEXIST') throw new Error(`Refusing to overwrite playtest evidence: ${file}`);
-      throw error;
-    }
-  } finally {
-    await fs.rm(temporary, { force: true });
-  }
-}
-
 async function createReportDirectory(sessionDirectory) {
   const name = `playtest-${Date.now()}-${randomBytes(6).toString('hex')}`;
   const directory = path.join(sessionDirectory, name);
@@ -390,12 +355,7 @@ async function runWaitFor(harness, step, plan, signal, deadline, onProgress) {
 function evidencePlan(plan) {
   const saved = structuredClone(plan);
   for (const step of saved.steps) {
-    if (step.op === 'fill') {
-      const text = step.text;
-      step.text = '[redacted]';
-      step.text_redacted = true;
-      step.text_length = Buffer.byteLength(text, 'utf8');
-    } else if (step.op === 'ui' && step.action === 'text') {
+    if (step.op === 'fill' || (step.op === 'ui' && step.action === 'text')) {
       const text = step.text;
       step.text = '[redacted]';
       step.text_redacted = true;
@@ -468,12 +428,12 @@ async function runStep(harness, step, plan, signal, deadline, onProgress, markIn
         ...(step.click_count === undefined ? {} : { click_count: step.click_count }) };
       const observation = await harness.click(target, options, { signal, deadline });
       abortError(signal);
-      return { target: typeof target === 'string' ? { label: target } : target, observation: redactUiEvidence(observation) };
+      return { target: typeof target === 'string' ? { label: target } : target, observation };
     }
     case 'settings': {
       const result = await harness.settings(step.page, { signal, deadline });
       abortError(signal);
-      return redactUiEvidence(result);
+      return result;
     }
     case 'mapping': {
       const result = await harness.mapping(step.input, { signal, deadline });
@@ -528,7 +488,7 @@ async function runStep(harness, step, plan, signal, deadline, onProgress, markIn
       const { id, op, action, ...fields } = step;
       const observation = await harness.ui(action, fields, { signal, deadline });
       abortError(signal);
-      return { action, observation: redactUiEvidence(observation) };
+      return { action, observation };
     }
     case 'screenshot': {
       const observation = await harness.observe({ screenshot: true, signal, deadline });
@@ -544,7 +504,7 @@ async function runStep(harness, step, plan, signal, deadline, onProgress, markIn
 
 function errorDetails(error) {
   if (error instanceof PlaytestResultError)
-    return { outcome: error.outcome, message: error.message, details: error.details ?? null };
+    return { outcome: error.outcome, message: error.message, details: redactUiEvidence(error.details ?? null) };
   if (/Command timed out; outcome is unknown|client lock is busy|Request deadline elapsed|Plan timeout elapsed|Playtest cancelled|aborted/i.test(error.message))
     return { outcome: 'INCONCLUSIVE', message: error.message, details: null };
   return { outcome: 'FAIL', message: error.message || String(error), details: null };
@@ -570,7 +530,7 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
     preflight: { status: 'not_run' }, steps, cleanup: { input_touched_ports: [], input_released: null,
       mapping_cancelled: null }, errors: [],
   };
-  await writeNewJson(path.join(reportLocation.directory, 'plan.json'), evidencePlan(plan));
+  await publishJson(path.join(reportLocation.directory, 'plan.json'), evidencePlan(plan));
 
   const timeoutController = new AbortController();
   const timeout = setTimeout(() => timeoutController.abort(new Error('Plan timeout elapsed')), plan.timeout_ms);
@@ -655,7 +615,7 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
             report.cleanup.mapping_cancelled = true;
           });
         stepRecord.status = 'pass';
-        stepRecord.result = result;
+        stepRecord.result = redactUiEvidence(result);
         stepRecord.finished_at = new Date().toISOString();
         steps[index] = stepRecord;
         await recordStep(stepRecord);
@@ -708,7 +668,7 @@ export async function runPlaytestPlan(harness, plan, { signal, onProgress } = {}
     report.duration_ms = Date.now() - startedMs;
     clearTimeout(timeout);
     signal?.removeEventListener('abort', onAbort);
-    await writeNewJson(path.join(reportLocation.directory, 'report.json'), report);
+    await publishJson(path.join(reportLocation.directory, 'report.json'), report);
   }
   return { ...report, report_directory: reportLocation.directory };
 }

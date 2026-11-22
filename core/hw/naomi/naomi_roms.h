@@ -91,5 +91,7 @@ struct Game
 	InputDescriptors *inputs;
 	u8 *eeprom_dump;
 	int multiboard;
+
+	int platform() const;
 };
 extern const Game Games[];

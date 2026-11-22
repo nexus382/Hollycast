@@ -79,7 +79,7 @@
 #include "achievements/achievements.h"
 #include "vgamepad.h"
 #include "rend/vmu_window.h"
-#include "network/phone_vmu.h"
+#include "network/phone_vmu_backup.h"
 #ifdef HAVE_PHONE_VMU
 #include "deps/qrcodegen/qrcodegen.hpp"
 #endif
@@ -100,7 +100,6 @@
 #include <unordered_set>
 #include <vector>
 #include <filesystem>
-#include <fstream>
 #include <mutex>
 #include <stdexcept>
 #include <vector>
@@ -8179,21 +8178,16 @@ static void renderPhoneVmuSettings()
 		config::PhoneVmuToken.set(phone_vmu::regeneratePairing());
 	ImGui::SameLine();
 	ImGui::TextWrapped("%s", T("Disconnects all paired phones. Scan the new code to pair again."));
-	// Phone save-back keeps timestamped snapshots next to each VMU file.
 	// Restoring replaces that VMU, so only offer it while no game is loaded.
 	{
 		static std::string phoneRestoreMessage;
 		namespace fs = std::filesystem;
 		const char *ports[] = { "A1", "A2", "B1", "B2", "C1", "C2", "D1", "D2" };
-		struct PhoneVmuBackup { fs::path card; fs::path snapshot; };
-		static std::vector<PhoneVmuBackup> newestBackups;
+		static std::vector<phone_vmu::CardBackup> newestBackups;
 		static double lastBackupScan = -1.0;
-		constexpr char backupMarker[] = ".phone-backup-";
-		constexpr std::size_t backupMarkerLength = sizeof(backupMarker) - 1;
 		const double now = ImGui::GetTime();
 		if (!game_started && (lastBackupScan < 0.0 || now - lastBackupScan >= 1.0))
 		{
-			newestBackups.clear();
 			std::vector<fs::path> directories;
 			for (const char *port : ports)
 			{
@@ -8202,133 +8196,22 @@ static void renderPhoneVmuSettings()
 				if (std::find(directories.begin(), directories.end(), dir) == directories.end())
 					directories.push_back(dir);
 			}
-			for (const fs::path& dir : directories)
-			{
-				std::error_code fsError;
-				fs::directory_iterator entry(dir, fsError), end;
-				for (; !fsError && entry != end; entry.increment(fsError))
-				{
-					const std::string filename = entry->path().filename().u8string();
-					const std::size_t marker = filename.rfind(backupMarker);
-					if (marker == std::string::npos || marker == 0)
-						continue;
-					const std::string stamp = filename.substr(marker + backupMarkerLength);
-					auto isDigits = [](auto first, auto last) {
-						return std::all_of(first, last, [](char c) { return c >= '0' && c <= '9'; });
-					};
-					const bool validStamp = stamp.size() == 15 && stamp[8] == '-'
-							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.end());
-					const bool validCollisionStamp = stamp.size() == 22 && stamp[8] == '-' && stamp[15] == '-'
-							&& isDigits(stamp.begin(), stamp.begin() + 8) && isDigits(stamp.begin() + 9, stamp.begin() + 15)
-							&& isDigits(stamp.begin() + 16, stamp.end());
-					if (!validStamp && !validCollisionStamp)
-						continue;
-					std::error_code fileError;
-					if (!entry->is_regular_file(fileError) || fileError)
-						continue;
-					const fs::path card = dir / fs::u8path(filename.substr(0, marker));
-					auto backup = std::find_if(newestBackups.begin(), newestBackups.end(), [&](const PhoneVmuBackup& item) {
-						return item.card == card;
-					});
-					if (backup == newestBackups.end())
-						newestBackups.push_back({ card, entry->path() });
-					else if (entry->path() > backup->snapshot)
-						backup->snapshot = entry->path();
-				}
-			}
-			std::sort(newestBackups.begin(), newestBackups.end(), [](const PhoneVmuBackup& a, const PhoneVmuBackup& b) {
-				return a.card < b.card;
-			});
+			newestBackups = phone_vmu::newestBackups(directories);
 			lastBackupScan = now;
 		}
-		for (const PhoneVmuBackup& backup : newestBackups)
+		for (const phone_vmu::CardBackup& backup : newestBackups)
 		{
 			const fs::path& vmuPath = backup.card;
-			const fs::path& newest = backup.snapshot;
 			if (game_started)
 				continue;
 			const std::string label = std::string(T("Restore VMU backup for ")) + vmuPath.filename().u8string();
 			if (ImGui::Button(label.c_str()))
 			{
-				constexpr std::size_t VmuSize = 128 * 1024;
-				std::error_code fsError;
-				fsError.clear();
-				if (fs::file_size(newest, fsError) != VmuSize || fsError)
-				{
-					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
-					continue;
-				}
-
-				std::string data(VmuSize, '\0');
-				std::ifstream in(newest, std::ios::binary);
-				if (!in || !in.read(data.data(), data.size())
-						|| in.peek() != std::ifstream::traits_type::eof())
-				{
-					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
-					continue;
-				}
-
-				fs::path tempPath = vmuPath;
-				tempPath += ".phone-restore.tmp";
-				const std::string tempPathUtf8 = tempPath.u8string();
-				const std::string vmuPathUtf8 = vmuPath.u8string();
-				FILE *out = nowide::fopen(tempPathUtf8.c_str(), "wb");
-				bool tempWritten = out != nullptr;
-				if (out != nullptr)
-				{
-					tempWritten = std::fwrite(data.data(), 1, data.size(), out) == data.size()
-							&& std::fflush(out) == 0;
-					if (std::fclose(out) != 0)
-						tempWritten = false;
-				}
-				if (!tempWritten)
-				{
-					nowide::remove(tempPathUtf8.c_str());
-					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
-					continue;
-				}
-
-				bool snapshotOk = true;
-				fsError.clear();
-				if (fs::exists(vmuPath, fsError))
-				{
-					std::time_t now = std::time(nullptr);
-					std::tm local {};
-					bool timeReady = false;
-#ifdef _WIN32
-					timeReady = localtime_s(&local, &now) == 0;
-#else
-					timeReady = localtime_r(&now, &local) != nullptr;
-#endif
-					char timestamp[16] = {};
-					timeReady = timeReady && std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", &local) != 0;
-					snapshotOk = timeReady && !fsError;
-					bool snapshotCreated = false;
-					for (unsigned suffix = 0; snapshotOk && suffix < 100; ++suffix)
-					{
-						fs::path snapshotPath = vmuPath;
-						const std::string suffixText = std::to_string(suffix);
-						snapshotPath += backupMarker + std::string(timestamp)
-								+ (suffix == 0 ? "" : "-" + std::string(6 - suffixText.size(), '0') + suffixText);
-						fsError.clear();
-						snapshotCreated = fs::copy_file(vmuPath, snapshotPath, fs::copy_options::none, fsError);
-						if (snapshotCreated)
-							break;
-						if (fsError != std::errc::file_exists)
-							snapshotOk = false;
-					}
-					snapshotOk = snapshotOk && snapshotCreated;
-				}
-				else if (fsError)
-					snapshotOk = false;
-				if (!snapshotOk || nowide::rename(tempPathUtf8.c_str(), vmuPathUtf8.c_str()) != 0)
-				{
-					nowide::remove(tempPathUtf8.c_str());
-					phoneRestoreMessage = std::string(T("Could not restore VMU ")) + vmuPath.filename().u8string() + ".";
-					continue;
-				}
-				lastBackupScan = -1.0;
-				phoneRestoreMessage = std::string(T("Restored VMU ")) + vmuPath.filename().u8string() + ".";
+				const bool restored = phone_vmu::restoreCard(backup, std::time(nullptr));
+				if (restored)
+					lastBackupScan = -1.0;
+				phoneRestoreMessage = std::string(restored ? T("Restored VMU ") : T("Could not restore VMU "))
+						+ vmuPath.filename().u8string() + ".";
 			}
 		}
 		if (!newestBackups.empty() && game_started)
@@ -8336,7 +8219,7 @@ static void renderPhoneVmuSettings()
 		if (!phoneRestoreMessage.empty())
 			ImGui::TextWrapped("%s", phoneRestoreMessage.c_str());
 	}
-	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi, then scan this code or open the address below in its browser. Choose a VMU slot on your phone, then return to your game."));
+	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi and scan this code. To link two VMUs, open the A1 and A2 addresses below in separate browser panes before starting the mini-games."));
 	static int selectedAddress = 0;
 	selectedAddress = std::clamp(selectedAddress, 0, static_cast<int>(connection.urls.size()) - 1);
 	if (connection.urls.size() > 1)
@@ -8375,9 +8258,22 @@ static void renderPhoneVmuSettings()
 				draw->AddRectFilled(pos, pos + ImVec2(cell, cell), IM_COL32(0, 0, 0, 255));
 			}
 	ImGui::Dummy(size);
-	ImGui::TextWrapped("%s", url.c_str());
-	if (ImGui::Button(T("Copy address")))
-		ImGui::SetClipboardText(url.c_str());
+	const char *copyLabels[] = { T("COPY A1 URL"), T("COPY A2 URL") };
+	for (int i = 0; i < 2; ++i)
+	{
+		const std::string cardUrl = url + (i == 0 ? "#A1" : "#A2");
+		ImGui::TextWrapped("%s", cardUrl.c_str());
+		ImGui::PushID(i);
+		if (ImGui::Button(copyLabels[i]))
+		{
+#ifdef __ANDROID__
+			os_CopySensitiveTextToClipboard(cardUrl.c_str());
+#else
+			ImGui::SetClipboardText(cardUrl.c_str());
+#endif
+		}
+		ImGui::PopID();
+	}
 	ImGui::TextWrapped("%s", T("Sharing stays on when you close settings. Turn off Connect Phone to disconnect all phones. Allow Hollycast through your firewall on private networks if needed."));
 }
 #endif
@@ -8799,9 +8695,7 @@ void renderAudioTab()
 	const bool showAudioLatency = RenderCollapsingHeader("AudioLatencySection", ICON_FA_CLOCK, T("Audio Latency"), ImGuiTreeNodeFlags_DefaultOpen);
 	if (showAudioLatency)
 	{
-		// Audio Latency Section
 #ifdef __ANDROID__
-		// Automatic Latency (Android only)
 		if (config::AudioBackend.get() == "auto" || config::AudioBackend.get() == "android")
 	{
 			RenderGeneralToggleSettingRow(
@@ -8819,11 +8713,10 @@ void renderAudioTab()
 	}
 #endif
 
-	// Manual Latency Control
 	if (!config::AutoLatency
 		|| (config::AudioBackend.get() != "auto" && config::AudioBackend.get() != "android"))
 	{
-		static int latencyTemp = (int)roundf(config::AudioBufferSize.get() * 1000.f / 44100.f);
+		static int latencyTemp = (int)roundf(config::AudioBufferSize.get() * 1000.f / audio::OutputSampleRate);
 		static int openingAudioBufferSize = 0;
 
 		SettingsUI::PopupSliderConfig latencyConfig {};
@@ -8842,7 +8735,7 @@ void renderAudioTab()
 		latencyConfig.onApply = nullptr;
 		latencyConfig.onOpen = []() {
 			openingAudioBufferSize = config::AudioBufferSize.get();
-			latencyTemp = (int)roundf(openingAudioBufferSize * 1000.f / 44100.f);
+			latencyTemp = (int)roundf(openingAudioBufferSize * 1000.f / audio::OutputSampleRate);
 		};
 		latencyConfig.onCancel = []() {
 			// Milliseconds round the sample count. Restore the exact original
@@ -8850,7 +8743,7 @@ void renderAudioTab()
 			config::AudioBufferSize.set(openingAudioBufferSize);
 		};
 		latencyConfig.onValueChange = []() {
-			config::AudioBufferSize.set((int)roundf(latencyTemp * 44100.f / 1000.f));
+			config::AudioBufferSize.set((int)roundf(static_cast<float>(latencyTemp) * audio::OutputSampleRate / 1000.f));
 		};
 		latencyConfig.iconSize = 20.0f;
 		latencyConfig.iconSpacing = 8.0f;
@@ -9082,19 +8975,6 @@ void renderAudioTab()
 	}
 }
 
-static std::string vmuSlotLabel(int bus, int slot)
-{
-	std::string label;
-	label.push_back(static_cast<char>('A' + bus));
-	label.push_back(static_cast<char>('1' + slot));
-	return label;
-}
-
-static std::string defaultVmuFileNameForSlot(int bus, int slot)
-{
-	return "vmu_save_" + vmuSlotLabel(bus, slot) + ".bin";
-}
-
 static bool isSharedVmuSlotActive(int bus, int slot)
 {
 	if (config::MapleMainDevices[bus] == MDT_None)
@@ -9104,22 +8984,14 @@ static bool isSharedVmuSlotActive(int bus, int slot)
 
 static std::string normalizeVmuFileName(std::string name)
 {
-	if (name.find('.') == std::string::npos)
-		return name + ".bin";
-
-	std::string lower = name;
-	string_tolower(lower);
-	const bool hasVmuExtension = lower.size() >= 4
-		&& (lower.compare(lower.size() - 4, 4, ".bin") == 0
-			|| lower.compare(lower.size() - 4, 4, ".vmu") == 0);
-	if (!hasVmuExtension)
+	if (!hostfs::hasVmuExtension(name))
 		name += ".bin";
 	return name;
 }
 
 static bool isLikelyPerGameA1VmuFileName(const std::string& fileName)
 {
-	static constexpr std::string_view suffix = "_vmu_save_A1.bin";
+	constexpr std::string_view suffix = hostfs::perGameVmuSuffix;
 	return fileName.size() >= suffix.size()
 		&& fileName.compare(fileName.size() - suffix.size(), suffix.size(), suffix.data()) == 0;
 }
@@ -9127,20 +8999,12 @@ static bool isLikelyPerGameA1VmuFileName(const std::string& fileName)
 static void setConfiguredVmuSlotFileName(int bus, int slot, const std::string& fileName)
 {
 	config::MapleVmuSlotFileNames[bus][slot].get() =
-		fileName == defaultVmuFileNameForSlot(bus, slot) ? "" : fileName;
+		fileName == hostfs::defaultVmuFileName(hostfs::vmuSlotLabel(bus, slot)) ? "" : fileName;
 }
 
 static bool isManualVmuSlotEditable(int bus, int slot, bool perGameEnabled)
 {
 	return isSharedVmuSlotActive(bus, slot) && !(perGameEnabled && bus == 0 && slot == 0);
-}
-
-static std::string currentSlotVmuFileName(int bus, int slot)
-{
-	const std::string configuredName = config::MapleVmuSlotFileNames[bus][slot].get();
-	if (hostfs::isConfiguredVmuFileNameValid(configuredName))
-		return configuredName;
-	return defaultVmuFileNameForSlot(bus, slot);
 }
 
 static void applyVmuSlotSelection(int bus, int slot, const std::string& fileName)
@@ -9379,7 +9243,7 @@ static void findAssignedVmuSlot(const std::string& fileName, bool perGameEnabled
 		for (int slot = 0; slot < 2; slot++)
 		{
 			if (isManualVmuSlotEditable(bus, slot, perGameEnabled)
-					&& currentSlotVmuFileName(bus, slot) == fileName)
+					&& hostfs::sharedVmuFileName(hostfs::vmuSlotLabel(bus, slot)) == fileName)
 			{
 				sourceBus = bus;
 				sourceSlot = slot;
@@ -9437,7 +9301,7 @@ static void renderVmuCardManager()
 	const bool selectedLooksPerGameA1 = perGameEnabled && hasSelection && isLikelyPerGameA1VmuFileName(selectedName);
 	const bool selectedIsAssigned = selectedBus >= 0;
 	const bool selectedIsSlotDefault = selectedIsAssigned
-		&& selectedName == defaultVmuFileNameForSlot(selectedBus, selectedSlot);
+		&& selectedName == hostfs::defaultVmuFileName(hostfs::vmuSlotLabel(selectedBus, selectedSlot));
 	const bool canEjectSelection = selectedIsAssigned && !selectedIsSlotDefault;
 
 	if (ImGui::Button(T("Refresh")))
@@ -9488,7 +9352,7 @@ static void renderVmuCardManager()
 		if (ImGui::Button(T("Eject")))
 		{
 			vmuOpError.clear();
-			applyVmuSlotSelection(selectedBus, selectedSlot, defaultVmuFileNameForSlot(selectedBus, selectedSlot));
+			applyVmuSlotSelection(selectedBus, selectedSlot, hostfs::defaultVmuFileName(hostfs::vmuSlotLabel(selectedBus, selectedSlot)));
 			refreshVmuList = true;
 		}
 	}
@@ -9500,12 +9364,12 @@ static void renderVmuCardManager()
 			for (int slot = 0; slot < 2; slot++)
 			{
 				if (!isManualVmuSlotEditable(bus, slot, perGameEnabled)
-						|| currentSlotVmuFileName(bus, slot) != fileName) {
+						|| hostfs::sharedVmuFileName(hostfs::vmuSlotLabel(bus, slot)) != fileName) {
 					continue;
 				}
 				if (!labels.empty())
 					labels += ", ";
-				labels += vmuSlotLabel(bus, slot);
+				labels += hostfs::vmuSlotLabel(bus, slot);
 			}
 		}
 		return labels;
@@ -9696,7 +9560,7 @@ static void renderVmuCardManager()
 						if (!isSharedVmuSlotActive(bus, slot))
 							continue;
 
-						const std::string label = vmuSlotLabel(bus, slot);
+						const std::string label = hostfs::vmuSlotLabel(bus, slot);
 						if (perGameEnabled && bus == 0 && slot == 0)
 						{
 							const std::string lockedLabel = label + " (" + T("Per Game VMU") + ")";
@@ -9719,7 +9583,7 @@ static void renderVmuCardManager()
 							}
 
 							// Keep one active VMU slot per file so two emulated cards never write the same save.
-							const std::string targetName = currentSlotVmuFileName(bus, slot);
+							const std::string targetName = hostfs::sharedVmuFileName(hostfs::vmuSlotLabel(bus, slot));
 							if (sourceBus >= 0)
 								applyVmuSlotSelection(sourceBus, sourceSlot, targetName);
 							applyVmuSlotSelection(bus, slot, sourceName);

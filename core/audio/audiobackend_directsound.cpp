@@ -98,7 +98,7 @@ public:
 		memset(&wfx, 0, sizeof(WAVEFORMATEX));
 		wfx.wFormatTag = WAVE_FORMAT_PCM;
 		wfx.nChannels = 2;
-		wfx.nSamplesPerSec = 44100;
+		wfx.nSamplesPerSec = audio::OutputSampleRate;
 		wfx.nBlockAlign = 4;
 		wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
 		wfx.wBitsPerSample = 16;

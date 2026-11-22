@@ -1,9 +1,10 @@
 #include "gtest/gtest.h"
 #include "util/tsqueue.h"
-#include <atomic>
 #include <chrono>
 #include <future>
-#include <thread>
+#include <memory>
+#include <string>
+#include <utility>
 
 class TsQueueTest : public ::testing::Test
 {
@@ -32,60 +33,37 @@ TEST_F(TsQueueTest, Basic)
 TEST_F(TsQueueTest, MultiThread)
 {
 	TsQueue<bool> queue;
-	std::atomic<bool> gotResult = false;
-	std::future<bool> future = std::async(std::launch::async, [&]() {
-		bool res = queue.pop();
-		gotResult = true;
-		return res;
+	std::promise<void> started;
+	auto ready = started.get_future();
+	auto result = std::async(std::launch::async, [&]() {
+		started.set_value();
+		return queue.pop();
 	});
-	std::this_thread::sleep_for(std::chrono::milliseconds(500));
-	ASSERT_FALSE(gotResult);
-	ASSERT_EQ(std::future_status::timeout, future.wait_for(std::chrono::seconds(0)));
+	ready.wait();
+	EXPECT_EQ(std::future_status::timeout, result.wait_for(std::chrono::milliseconds(50)));
 	queue.push(true);
-	ASSERT_TRUE(future.get());
+	EXPECT_TRUE(result.get());
 }
 
-TEST_F(TsQueueTest, Class)
+TEST_F(TsQueueTest, CopiesLvalueOnPush)
 {
-	struct T1 {
-		float f;
-	};
-	TsQueue<T1> q1;
-	q1.push({ 3.14f });
-	T1 r1 = q1.pop();
-	ASSERT_EQ(3.14f, r1.f);
+	TsQueue<std::string> queue;
+	std::string value = "pi";
+	queue.push(value);
+	EXPECT_EQ("pi", value);
+	value.clear();
+	EXPECT_EQ("pi", queue.pop());
+}
 
-	class T2
-	{
-	public:
-		std::string s;
-	};
-	TsQueue<T2> q2;
-	q2.push({ "pi" });
-	T2 r2 = q2.pop();
-	ASSERT_EQ(std::string("pi"), r2.s);
-
-	// Non copyable, but moveable
-	class T3
-	{
-	public:
-		T3(const char *s) : s(s) {}
-		T3(const T3&) = delete;
-		T3(T3&& other) {
-			std::swap(s, other.s);
-		}
-		T3& operator=(const T3& other) = delete;
-		T3& operator=(T3&& other) {
-			std::swap(s, other.s);
-			return *this;
-		}
-
-		const char *s;
-	};
-	TsQueue<T3> q3;
-	q3.push(T3("pi"));
-	T3 r3 = q3.pop();
-	ASSERT_EQ(std::string("pi"), r3.s);
+TEST_F(TsQueueTest, TransfersMoveOnlyValue)
+{
+	TsQueue<std::unique_ptr<int>> queue;
+	auto value = std::make_unique<int>(42);
+	const auto *original = value.get();
+	queue.push(std::move(value));
+	EXPECT_EQ(nullptr, value);
+	auto result = queue.pop();
+	EXPECT_EQ(original, result.get());
 }
 
 TEST_F(TsQueueTest, Clear)

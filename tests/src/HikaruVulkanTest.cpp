@@ -29,7 +29,7 @@ namespace hikaru::graphics {
 enum class FragmentListInitFaultForTesting : unsigned {
     OutOfDeviceMemory=1,OutOfHostMemory=2,BadAlloc=3,InvalidShader=4,DeviceLost=5
 };
-// Defined only when the native test executable compiles the Vulkan backend.
+const char* vulkanFragmentListDeviceLimitation(VulkanContext& context);
 std::unique_ptr<Backend> makeVulkanBackendForTesting(bool specialize);
 std::array<uint64_t,2> vulkanGeometryCountsForTesting(const Backend&);
 std::array<uint64_t,3> vulkanFragmentCountsForTesting(const Backend&);
@@ -99,6 +99,16 @@ protected:
     }
 };
 
+class HikaruVulkanFragmentListTest : public HikaruVulkanTest {
+    void SetUp() override {
+        HikaruVulkanTest::SetUp();
+        if (HasFatalFailure() || IsSkipped())
+            return;
+        if (const char* reason = vulkanFragmentListDeviceLimitation(*VulkanContext::Instance()))
+            GTEST_SKIP() << reason;
+    }
+};
+
 Draw fragmentMesh(float z,const Vec4& color,unsigned mode=0) {
     auto draw=mesh();draw.depthTest=false;draw.depthWrite=false;
     draw.uniforms.flags={};draw.uniforms.blend={0,mode==1?1.f:0.f,float(mode),0};
@@ -127,7 +137,19 @@ TEST_F(HikaruVulkanTest, OptionalShaderCompilationRejectsInvalidGlslWithoutChang
     auto required=ShaderCompiler::Compile(vk::ShaderStageFlagBits::eVertex,validVertex);
     EXPECT_TRUE(required);
 }
-TEST_F(HikaruVulkanTest, FragmentListInitializationFailuresFallBackWithoutChangingTheScene) {
+TEST_F(HikaruVulkanTest, UnavailableFragmentListsPreserveTheSceneForOrderedDrawing) {
+    auto backend=makeVulkanBackendForTesting(true);
+    allocate(*backend);
+    clear(*backend);
+    const auto before=pixels(*backend);
+    if (vulkanFragmentListDeviceLimitation(*VulkanContext::Instance()) == nullptr)
+        disableVulkanFragmentListsForTesting(*backend);
+    EXPECT_FALSE(backend->beginFragmentList(0,1024*1024));
+    equalPixels(before,pixels(*backend),"unsupported capability fallback");
+    drawOrderedFragment(*backend,fragmentMesh(-0.25f,{1,0,0,0.5f}));
+    EXPECT_NE(before,pixels(*backend));
+}
+TEST_F(HikaruVulkanFragmentListTest, FragmentListInitializationFailuresFallBackWithoutChangingTheScene) {
     const std::array<FragmentListInitFaultForTesting,4> faults={
         FragmentListInitFaultForTesting::OutOfDeviceMemory,
         FragmentListInitFaultForTesting::OutOfHostMemory,
@@ -147,14 +169,14 @@ TEST_F(HikaruVulkanTest, FragmentListInitializationFailuresFallBackWithoutChangi
         equalPixels(drawn,pixels(*backend),"disabled fragment lists leave ordinary drawing available");
     }
 }
-TEST_F(HikaruVulkanTest, FragmentListInitializationPropagatesDeviceLossWithoutDisablingLists) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentListInitializationPropagatesDeviceLossWithoutDisablingLists) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);clear(*backend);
     injectVulkanFragmentListInitFaultForTesting(*backend,static_cast<unsigned>(FragmentListInitFaultForTesting::DeviceLost));
     EXPECT_THROW(backend->beginFragmentList(0,1024*1024),vk::DeviceLostError);
     ASSERT_TRUE(backend->beginFragmentList(0,1024*1024));
     EXPECT_TRUE(backend->endFragmentList());
 }
-TEST_F(HikaruVulkanTest, FragmentListsMatchOrderedMixedBlendsAndDepthTies) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentListsMatchOrderedMixedBlendsAndDepthTies) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
     const Vec4 background={0.2f,0.4f,0.6f,0.8f};
     std::vector<Draw> layers;
@@ -175,11 +197,11 @@ TEST_F(HikaruVulkanTest, FragmentListsMatchOrderedMixedBlendsAndDepthTies) {
     ASSERT_TRUE(backend->endFragmentList());
     equalPixels(expected,pixels(*backend),"mixed blends and equal-depth display order",1);
 }
-TEST_F(HikaruVulkanTest, FragmentListsKeepRgb10PrecisionAcrossTargetFormatReuse) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentListsKeepRgb10PrecisionAcrossTargetFormatReuse) {
     auto reference=makeVulkanBackendForTesting(false),lists=makeVulkanBackendForTesting(true);
     exerciseRgb10FragmentListPrecision(*reference,*lists);
 }
-TEST_F(HikaruVulkanTest, FragmentListsSurviveBatchRolloverWithoutALayerArrayLimit) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentListsSurviveBatchRolloverWithoutALayerArrayLimit) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
     const auto render=[&](bool lists){
         clear(*backend);
@@ -197,7 +219,7 @@ TEST_F(HikaruVulkanTest, FragmentListsSurviveBatchRolloverWithoutALayerArrayLimi
     const auto counts=vulkanFragmentCountsForTesting(*backend);
     EXPECT_EQ(counts[1],1u);EXPECT_EQ(counts[2],0u);
 }
-TEST_F(HikaruVulkanTest, FragmentListOverflowPreservesTheSceneAndRecoversOnResize) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentListOverflowPreservesTheSceneAndRecoversOnResize) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
     const Vec4 background={0.2f,0.3f,0.4f,1};
     backend->clear(mesh(),GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,background,1);
@@ -220,13 +242,10 @@ TEST_F(HikaruVulkanTest, FragmentListOverflowPreservesTheSceneAndRecoversOnResiz
     // No fragments: an old viewport's nodes must not leak into the new image.
     ASSERT_TRUE(backend->endFragmentList());
     equalPixels(resizedBefore,pixels(*backend,32),"empty resized collection");
-    disableVulkanFragmentListsForTesting(*backend);
-    EXPECT_FALSE(backend->beginFragmentList(0,1024*1024));
-    equalPixels(resizedBefore,pixels(*backend,32),"unsupported capability fallback");
     const auto counts=vulkanFragmentCountsForTesting(*backend);
     EXPECT_EQ(counts[0],2u);EXPECT_EQ(counts[1],1u);EXPECT_EQ(counts[2],1u);
 }
-TEST_F(HikaruVulkanTest, FragmentListsPreserveOpaqueDepthPatternAndPackedStripShading) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentListsPreserveOpaqueDepthPatternAndPackedStripShading) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
     auto opaque=fragmentMesh(-0.2f,{0.1f,0.4f,0.7f,1});
     opaque.depthTest=opaque.depthWrite=true;opaque.uniforms.peel[0]=0;
@@ -260,7 +279,7 @@ TEST_F(HikaruVulkanTest, FragmentListsPreserveOpaqueDepthPatternAndPackedStripSh
 }
 
 
-TEST_F(HikaruVulkanTest, FragmentSmallListBoundariesMatchTheGeneralResolverExactly) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentSmallListBoundariesMatchTheGeneralResolverExactly) {
     auto general=makeVulkanBackendForTesting(true),fastBackend=makeVulkanBackendForTesting(true);
     forceVulkanGeneralFragmentResolveForTesting(*general);
     allocate(*general);allocate(*fastBackend);
@@ -281,7 +300,7 @@ TEST_F(HikaruVulkanTest, FragmentSmallListBoundariesMatchTheGeneralResolverExact
         equalPixels(expected,render(*fastBackend),"small/general boundary and tied blend order");
     }
 }
-TEST_F(HikaruVulkanTest, FragmentPoolAdaptsWithoutReallocatingEveryCollection) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentPoolAdaptsWithoutReallocatingEveryCollection) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
     hikaru::graphics::Texture target;target.width=target.height=128;
     backend->texture(0,target,0,TextureUpload::Definition,nullptr,0);
@@ -321,7 +340,7 @@ TEST_F(HikaruVulkanTest, FragmentPoolAdaptsWithoutReallocatingEveryCollection) {
     }
     EXPECT_EQ(vulkanFragmentCountsForTesting(*backend)[2],0u);
 }
-TEST_F(HikaruVulkanTest, FragmentReuseOrdersBackToBackTargetsAndEmptyViewports) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentReuseOrdersBackToBackTargetsAndEmptyViewports) {
     auto reference=makeVulkanBackendForTesting(true),backend=makeVulkanBackendForTesting(true);
     allocate(*reference);allocate(*backend);
     for(auto* renderer:{reference.get(),backend.get()}) {
@@ -374,7 +393,7 @@ TEST_F(HikaruVulkanTest, FragmentReuseOrdersBackToBackTargetsAndEmptyViewports) 
         }
     }
 }
-TEST_F(HikaruVulkanTest, FragmentReuseRetiresBeforeBudgetChangesAndOverflow) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentReuseRetiresBeforeBudgetChangesAndOverflow) {
     auto reference=makeVulkanBackendForTesting(true),backend=makeVulkanBackendForTesting(true);
     allocate(*reference);clear(*reference);allocate(*backend);clear(*backend);
     drawOrderedFragment(*reference,fragmentMesh(-0.25f,{1,0,0,0.4f}));
@@ -433,7 +452,7 @@ TEST_F(HikaruVulkanTest, FrameGpuDiagnosticsRetireWithSubmissionGenerationWithou
     EXPECT_EQ(samples[0],9u);EXPECT_EQ(samples[2],1u)<<"timing must recover after the skipped presentation";
 }
 
-TEST_F(HikaruVulkanTest, FragmentGpuTimestampsRetireAcrossEmptyCollectionsAndResizes) {
+TEST_F(HikaruVulkanFragmentListTest, FragmentGpuTimestampsRetireAcrossEmptyCollectionsAndResizes) {
     auto backend=makeVulkanBackendForTesting(true);allocate(*backend);
     if(!enableVulkanFragmentGpuTimingForTesting(*backend))GTEST_SKIP()<<"queue has no timestamp support";
     for(unsigned i=0;i<4;++i) {

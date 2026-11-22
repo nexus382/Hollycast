@@ -23,6 +23,23 @@ TEST(LibraryTest, AllPreservesOrderingAndContinuePlayingSortsSavedGames)
 			(std::vector<size_t>{2, 6, 0, 3}));
 }
 
+TEST(LibraryTest, DiscPickerIncludesDiscImagesAndPhysicalDrivesWhenFiltering)
+{
+	const std::vector<library::Entry> entries {
+		{"", "BIOS"}, {"/games/a.CHD", "Game A"}, {"/games/b.gdi", "Game B"},
+		{"/games/c.cdi", "Game C"}, {"/games/d.cue", "Game D"}, {"/dev/sr0", "Drive", 0, true},
+		{"/games/rom.zip", "Arcade"}, {"/games/track.bin", "Track"}, {"", "Empty drive", 0, true}
+	};
+	const std::vector<size_t> expected {1, 2, 3, 4, 5};
+	EXPECT_EQ(expected, library::selectGames(entries, library::View::Discs, {}));
+
+	library::FilteredGames filtered;
+	auto matches = [&](size_t) { return true; };
+	filtered.rebuild(entries, library::View::Discs, {}, matches);
+	filtered.update(entries, {"/games/rom.zip", "/games/track.bin"}, matches);
+	EXPECT_EQ(expected, filtered.getRows());
+}
+
 TEST(LibraryTest, FavouritesUseFullOpaquePathIdentityAndPreserveLibraryOrder)
 {
 	const std::vector<Entry> entries = {

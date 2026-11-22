@@ -68,15 +68,7 @@ bool TheGamesDb::needsMedia(const GameBoxart& item, u32 selection)
 {
     if (item.arcade) return !item.scraped;
     if ((selection & artwork::metadataMedia) && !item.tgdbSearched) return true;
-    selection &= supportedMedia;
-    for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
-    {
-        if (!(selection & (1u << i))) continue;
-        const auto cached = item.tgdbMedia.find(artwork::mediaTypes[i].name);
-        if (!(item.tgdbCheckedMedia & (1u << i))
-                || (cached != item.tgdbMedia.end() && !file_exists(cached->second))) return true;
-    }
-    return false;
+    return artwork::needsImages(selection & supportedMedia, item.tgdbCheckedMedia, item.tgdbMedia);
 }
 
 bool TheGamesDb::initialize(const std::string& saveDirectory)
