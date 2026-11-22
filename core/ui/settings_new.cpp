@@ -8219,7 +8219,7 @@ static void renderPhoneVmuSettings()
 		if (!phoneRestoreMessage.empty())
 			ImGui::TextWrapped("%s", phoneRestoreMessage.c_str());
 	}
-	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi, then scan this code or open the address below in its browser. Choose a VMU slot on your phone, then return to your game."));
+	ImGui::TextWrapped("%s", T("Connect your phone to the same Wi-Fi and scan this code. To link two VMUs, open the A1 and A2 addresses below in separate browser panes before starting the mini-games."));
 	static int selectedAddress = 0;
 	selectedAddress = std::clamp(selectedAddress, 0, static_cast<int>(connection.urls.size()) - 1);
 	if (connection.urls.size() > 1)
@@ -8258,9 +8258,22 @@ static void renderPhoneVmuSettings()
 				draw->AddRectFilled(pos, pos + ImVec2(cell, cell), IM_COL32(0, 0, 0, 255));
 			}
 	ImGui::Dummy(size);
-	ImGui::TextWrapped("%s", url.c_str());
-	if (ImGui::Button(T("Copy address")))
-		ImGui::SetClipboardText(url.c_str());
+	const char *copyLabels[] = { T("COPY A1 URL"), T("COPY A2 URL") };
+	for (int i = 0; i < 2; ++i)
+	{
+		const std::string cardUrl = url + (i == 0 ? "#A1" : "#A2");
+		ImGui::TextWrapped("%s", cardUrl.c_str());
+		ImGui::PushID(i);
+		if (ImGui::Button(copyLabels[i]))
+		{
+#ifdef __ANDROID__
+			os_CopySensitiveTextToClipboard(cardUrl.c_str());
+#else
+			ImGui::SetClipboardText(cardUrl.c_str());
+#endif
+		}
+		ImGui::PopID();
+	}
 	ImGui::TextWrapped("%s", T("Sharing stays on when you close settings. Turn off Connect Phone to disconnect all phones. Allow Hollycast through your firewall on private networks if needed."));
 }
 #endif

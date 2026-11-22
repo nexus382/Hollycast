@@ -4713,6 +4713,9 @@ void gui_display_ui()
 	if (styleReloadRequested)
 		gui_updateStyle();
 	gui_newFrame();
+#ifdef __ANDROID__
+	const bool settingsAlreadyOpen = gui_state == GuiState::Settings;
+#endif
 	if (gui_state == GuiState::Settings)
 		SettingsNew::prepareControllerNavigation();
 	ImGui::NewFrame();
@@ -4788,6 +4791,13 @@ void gui_display_ui()
 	switch (gui_state)
 	{
 	case GuiState::Settings:
+#ifdef __ANDROID__
+		// A menu item can open Settings on release before this frame draws the panel.
+		// Consume that release here so the next touch can still interact immediately.
+		if (!settingsAlreadyOpen && ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen
+				&& ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+			ImGui::SetKeyOwner(ImGuiKey_MouseLeft, ImGuiKeyOwner_NoOwner, ImGuiInputFlags_LockThisFrame);
+#endif
 		// Settings now always use the new UI through the compatibility facade.
 		gui_display_settings();
 		break;

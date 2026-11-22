@@ -203,10 +203,21 @@ int main(int argc, char **argv)
 		const std::string thirdBrowser = linkHeaders + std::string(32, 'd') + "\r\n";
 		check(request(address, offerPath, "POST", "offer", firstBrowser + "Origin: http://unpaired.example\r\n").find("HTTP/1.1 403") == 0,
 			"Cross-origin page could create a VMU link");
-		check(request(address, offerPath, "POST", "offer", firstBrowser).find("HTTP/1.1 200") == 0, "Could not create a VMU link");
+		const std::string pendingPath = address.path + "link/pending";
+		check(request(address, pendingPath).find("HTTP/1.1 404") == 0, "Empty room advertised an invite");
+		check(request(address, offerPath, "POST", "offer", firstBrowser).find("HTTP/1.1 200") == 0
+				&& request(address, pendingPath).find("HTTP/1.1 404") == 0
+				&& request(address, offerPath, "DELETE", "", firstBrowser).find("HTTP/1.1 200") == 0,
+			"An invite without an A1 slot should only be available through its invite URL");
+		check(request(address, offerPath, "POST", "offer", firstBrowser + "X-VMU-Slot: 0\r\n").find("HTTP/1.1 200") == 0,
+			"Could not create an A1 VMU link");
+		check(body(request(address, pendingPath)) == room, "A2 could not discover the A1 invite");
+		check(request(address, pendingPath, "GET", "", "Origin: http://unpaired.example\r\n").find("HTTP/1.1 404") == 0,
+			"Cross-origin page discovered an invite");
 		check(body(request(address, offerPath, "GET", "", secondBrowser)) == "offer", "Second browser did not receive the offer");
 		check(request(address, answerPath, "GET", "", firstBrowser).find("HTTP/1.1 404") == 0, "Answer was visible before joining");
 		check(request(address, answerPath, "POST", "answer", secondBrowser).find("HTTP/1.1 200") == 0, "Second browser could not join");
+		check(request(address, pendingPath).find("HTTP/1.1 404") == 0, "Claimed invite was still advertised");
 		check(request(address, answerPath, "POST", "other", thirdBrowser).find("HTTP/1.1 409") == 0, "Third browser replaced the answer");
 		check(request(address, answerPath, "DELETE", "", thirdBrowser).find("HTTP/1.1 403") == 0, "Third browser cancelled the answer");
 		check(request(address, answerPath, "DELETE", "", secondBrowser).find("HTTP/1.1 200") == 0, "Second browser could not cancel joining");
@@ -224,13 +235,16 @@ int main(int argc, char **argv)
 				&& request(address, answerPath, "POST", "other", thirdBrowser).find("HTTP/1.1 409") == 0,
 			"Cancelled link allowed another answer after the host had read the first one");
 		std::string newFirstBrowser = firstBrowser;
-		newFirstBrowser.replace(newFirstBrowser.find(room), room.size(), std::string(32, 'e'));
+		const std::string retryRoom(32, 'e');
+		newFirstBrowser.replace(newFirstBrowser.find(room), room.size(), retryRoom);
 		std::string newSecondBrowser = secondBrowser;
-		newSecondBrowser.replace(newSecondBrowser.find(room), room.size(), std::string(32, 'e'));
-		check(request(address, offerPath, "POST", "offer", newFirstBrowser).find("HTTP/1.1 200") == 0,
+		newSecondBrowser.replace(newSecondBrowser.find(room), room.size(), retryRoom);
+		check(request(address, offerPath, "POST", "offer", newFirstBrowser + "X-VMU-Slot: 0\r\n").find("HTTP/1.1 200") == 0,
 			"Cancelled link blocked a fresh invitation");
+		check(body(request(address, pendingPath)) == retryRoom, "A2 did not discover the replacement A1 invite");
 		check(request(address, offerPath, "DELETE", "", newFirstBrowser).find("HTTP/1.1 200") == 0, "First browser could not close the invitation");
 		check(request(address, offerPath, "GET", "", newSecondBrowser).find("HTTP/1.1 404") == 0, "Closed link retained its offer");
+		check(request(address, pendingPath).find("HTTP/1.1 404") == 0, "Closed invite remained discoverable");
 		check(body(request(address, address.path + "vmu-core.LICENSE")).find("GNU GENERAL PUBLIC LICENSE") != std::string::npos, "VMU license was not served");
 		const auto wakeMedia = body(request(address, address.path + "wake-media.js"));
 		check(wakeMedia.find("const PhoneVmuWakeMedia") != std::string::npos && wakeMedia.find("Copyright (c) Rich Tibbett") != std::string::npos,
