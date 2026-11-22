@@ -14,6 +14,7 @@ void prepareStorage();
 void poll();
 void beforePresent();
 void presented();
+void recordRewind();
 void releaseInputs();
 #else
 inline bool controllerInputOwned() { return false; }
@@ -26,6 +27,7 @@ inline void prepareStorage()
 inline void poll() {}
 inline void beforePresent() {}
 inline void presented() {}
+inline void recordRewind() {}
 inline void releaseInputs() {}
 #endif
 

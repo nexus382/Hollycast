@@ -80,7 +80,7 @@ void write_naomi_flash(u32 addr, u8 value)
 		WARN_LOG(NAOMI, "NVMEM record doesn't exist or is too short");
 		return;
 	}
-	rewind_state::invalidate();
+	rewind_state::invalidateStorageWrite();
 	u8 *flashData = nvmem::getFlashData();
 	flashData[addr] = value;
 	flashData[addr + block_size] = value;

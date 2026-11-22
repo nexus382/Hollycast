@@ -26,8 +26,9 @@ public:
 	bool push(const std::uint8_t* data, std::size_t size, std::uint64_t timestamp = 0);
 	// Stores a payload produced by compress() without compressing again.
 	bool pushCompressed(std::vector<std::uint8_t>&& compressed, std::size_t uncompressedSize, std::uint64_t timestamp = 0);
-	// When currentTimestamp matches the newest state, pop selects its predecessor
-	// if available. The selected state and any newer state are removed only after
+	bool hasSnapshotBefore(std::uint64_t timestamp) const;
+	// With a timestamp, pop selects the newest state strictly before it.
+	// The selected state and any newer state are removed only after
 	// a successful decode; on failure history is retained and output is unspecified.
 	bool pop(std::vector<std::uint8_t>& output,
 			std::optional<std::uint64_t> currentTimestamp = std::nullopt);

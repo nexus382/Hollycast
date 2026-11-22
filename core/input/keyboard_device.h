@@ -25,6 +25,7 @@
 #include "ui/test_harness.h"
 #include "hw/maple/maple_devs.h"
 #include "oslib/i18n.h"
+#include <array>
 #include <memory>
 
 extern u8 kb_key[4][6];	// normal keys pressed
@@ -100,22 +101,41 @@ protected:
 		const int port = maple_port();
 		const bool portIsValid = port >= 0 && port < MAPLE_PORTS;
 
-		// Checking if we're in-game with an emulated keyboard first,
-		// then check if the "Bypass Emulated Keyboard" hotkey is held and we're not in GUI,
-		// if so: send emu hotkeys only and return earlier.
-		if ((settings.platform.isConsole() && portIsValid && config::MapleMainDevices[port] == MDT_Keyboard)
-				|| (settings.platform.isArcade() && settings.input.keyboardGame))
-		{
-			if (keycode == input_mapper->get_button_code(0, EMU_BTN_BYPASS_KB))
-				bypass_kb = pressed && !gui_keyboard_captured();
+		const bool emulatedKeyboard = (settings.platform.isConsole() && portIsValid && config::MapleMainDevices[port] == MDT_Keyboard)
+				|| (settings.platform.isArcade() && settings.input.keyboardGame);
+		const bool captured = gui_keyboard_captured();
+		KeyRoute& heldRoute = heldKeyRoutes[keycode];
+		if (!pressed && bypassKey == keycode)
+			bypassKey = InputMapping::InputDef::INVALID_CODE;
 
-			if (bypass_kb)
-			{
-				set_maple_port(-1);
-				gamepad_btn_input(keycode, pressed);
-				set_maple_port(port);
+		// Keep repeats and releases on the path that handled the press, even
+		// when the bypass key is released before another held key.
+		KeyRoute route = heldRoute;
+		if (route == KeyRoute::Unpressed)
+		{
+			if (!pressed)
 				return;
-			}
+			if (emulatedKeyboard && !captured && input_mapper
+					&& keycode == input_mapper->get_button_code(0, EMU_BTN_BYPASS_KB))
+				bypassKey = keycode;
+			if (emulatedKeyboard && bypassKey != InputMapping::InputDef::INVALID_CODE)
+				route = KeyRoute::Bypass;
+			else if (captured)
+				route = KeyRoute::Captured;
+			else if (gui_is_open() || port == MAPLE_PORTS || !emulatedKeyboard)
+				route = KeyRoute::Mapped;
+			else
+				route = KeyRoute::Guest;
+			heldRoute = route;
+		}
+		if (!pressed)
+			heldRoute = KeyRoute::Unpressed;
+		if (route == KeyRoute::Bypass)
+		{
+			set_maple_port(-1);
+			gamepad_btn_input(keycode, pressed);
+			set_maple_port(port);
+			return;
 		}
 
 		// Some OSes (Mac OS) don't distinguish left and right modifier keys so we set them both.
@@ -182,7 +202,7 @@ protected:
 				kb_shift[port] |= modifier_keys;
 			}
 		}
-		if (gui_keyboard_captured())
+		if (route == KeyRoute::Captured)
 		{
 			// chat: disable the keyboard controller. Only accept emu keys (menu, escape...)
 			set_maple_port(-1);
@@ -191,14 +211,18 @@ protected:
 		}
 		// Do not map keyboard keys to gamepad buttons unless the GUI is open
 		// or the corresponding maple device (if any) isn't a keyboard
-		else if (gui_is_open()
-				|| port == (int)std::size(kb_key)
-				|| (settings.platform.isConsole() && (!portIsValid || config::MapleMainDevices[port] != MDT_Keyboard))
-				|| (settings.platform.isArcade() && !settings.input.keyboardGame))
+		else if (route == KeyRoute::Mapped)
 			gamepad_btn_input(keycode, pressed);
 	}
 
 public:
+	void releaseKeys()
+	{
+		for (size_t keycode = 0; keycode < heldKeyRoutes.size(); ++keycode)
+			if (heldKeyRoutes[keycode] != KeyRoute::Unpressed)
+				input(static_cast<u8>(keycode), false, 0);
+	}
+
 	const char *get_button_name(u32 code) override
 	{
 		switch (code)
@@ -497,6 +521,8 @@ public:
 	}
 
 private:
+	enum class KeyRoute : u8 { Unpressed, Guest, Mapped, Captured, Bypass };
+
 	void setFlag(int& v, u32 bitmask, bool set)
 	{
 		if (set)
@@ -507,5 +533,6 @@ private:
 
 	int _modifier_keys = 0;
 	u32 _kb_used = 0;
-	bool bypass_kb = false;
+	std::array<KeyRoute, 256> heldKeyRoutes{};
+	u32 bypassKey = InputMapping::InputDef::INVALID_CODE;
 };

@@ -1960,7 +1960,7 @@ void MIEImpl::handle_86_subcommand()
 			size = std::min((int)sizeof(eeprom) - address, size);
 			// The EEPROM file is rewritten below; keep rewind history from
 			// crossing this durable write like other save boundaries.
-			rewind_state::invalidate();
+			rewind_state::invalidateStorageWrite();
 			memcpy(eeprom + address, dma_buffer_in + 4, size);
 
 			std::string eeprom_file = getEepromPath();

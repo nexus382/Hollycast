@@ -209,7 +209,8 @@ void input_x11_handle()
 				if (capturing_mouse)
 					x11_uncapture_mouse();
 				capturing_mouse = false;
-				// A held rewind key won't deliver its release without focus.
+				// X11 stops delivering key releases when the window loses focus.
+				x11Keyboard->releaseKeys();
 				rewind_state::releaseRequests();
 				break;
 

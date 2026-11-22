@@ -1240,7 +1240,7 @@ static void gui_display_commands()
 		ImGui::NextColumn();
 		{
 			const char* rewindUnavailableReason = rewind_state::unavailableReason();
-			const bool canStepBack = rewindUnavailableReason == nullptr && rewind_state::snapshotCount() != 0;
+			const bool canStepBack = rewindUnavailableReason == nullptr && rewind_state::canStep();
 			{
 				DisabledScope _{!canStepBack};
 				const bool stepBackClicked = IconButton(ICON_FA_BACKWARD_STEP, T("Step Back"), ScaledVec2(buttonWidth, 50)).realize();
@@ -1259,7 +1259,7 @@ static void gui_display_commands()
 			if (rewindUnavailableReason != nullptr)
 				ImGui::TextWrapped("%s", T(rewindUnavailableReason));
 			else if (config::RewindEnable && !canStepBack)
-				ImGui::TextWrapped("%s", T("No rewind snapshots yet. Play a little longer to record history."));
+				ImGui::TextWrapped("%s", T("No earlier rewind snapshot available. Play a little longer to record history."));
 
 			DisabledScope _{!dc_savestateAllowed()};
 			ImguiStateTexture savestatePic;

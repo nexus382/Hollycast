@@ -80,14 +80,21 @@ bool RewindBuffer::pushCompressed(std::vector<std::uint8_t>&& compressed, std::s
 	return true;
 }
 
+bool RewindBuffer::hasSnapshotBefore(std::uint64_t timestamp) const
+{
+	return !states_.empty() && states_.front().timestamp < timestamp;
+}
+
 bool RewindBuffer::pop(std::vector<std::uint8_t>& output, std::optional<std::uint64_t> currentTimestamp)
 {
-	if (states_.empty())
+	auto end = states_.end();
+	if (currentTimestamp)
+		end = std::lower_bound(states_.begin(), end, *currentTimestamp,
+				[](const State& state, std::uint64_t timestamp) { return state.timestamp < timestamp; });
+	if (end == states_.begin())
 		return false;
 
-	std::size_t targetIndex = states_.size() - 1;
-	if (currentTimestamp && states_.size() > 1 && states_.back().timestamp == *currentTimestamp)
-		--targetIndex;
+	const std::size_t targetIndex = (end - states_.begin()) - 1;
 	const State& state = states_[targetIndex];
 	if (state.uncompressedSize > MaxStateSize
 			|| state.uncompressedSize > static_cast<std::size_t>(std::numeric_limits<uLongf>::max())

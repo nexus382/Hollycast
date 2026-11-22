@@ -14,9 +14,11 @@
 #include "input/dreamlink/maplelink.h"
 #include "network/ice.h"
 #include "network/net_handshake.h"
+#include "network/netservice.h"
 #include "network/phone_vmu.h"
 #include "oslib/i18n.h"
 #include "oslib/oslib.h"
+#include "ui/test_harness.h"
 #include "util/worker_thread.h"
 
 #include <algorithm>
@@ -42,7 +44,9 @@ std::unordered_map<const void*, unsigned> heldSources;
 std::atomic<bool> held{false};
 std::atomic<bool> stepRequested{false};
 std::atomic<bool> invalidated{false};
+std::atomic<bool> storageWritten{false};
 bool reversing = false;
+thread_local bool restoringSnapshot = false;
 bool failed = false;
 bool configuredEnabled = false;
 int interval = 0, duration = 0, compression = -1;
@@ -81,20 +85,21 @@ struct CompressionResult
 	std::vector<u8> compressed;
 	std::vector<u8> workspace;
 };
+enum class CompressionUse { Snapshot, Workspace, Discard };
 struct PendingCompression
 {
 	std::future<CompressionResult> result;
 	std::size_t rawSize = 0;
 	u64 timestamp = 0;
-	unsigned token = 0;
+	CompressionUse use = CompressionUse::Snapshot;
 };
 std::unique_ptr<WorkerThread> compressWorker;
 std::optional<PendingCompression> pendingCompression;
-unsigned pendingToken = 0;
 
 void clearHistory()
 {
-	++pendingToken;	// any in-flight compression result is now stale
+	if (pendingCompression)
+		pendingCompression->use = CompressionUse::Discard;
 	history.clear();
 	std::vector<u8>().swap(scratch);
 	lastCapture = 0;
@@ -111,8 +116,7 @@ void fail(const std::exception& error)
 	os_notify(i18n::T("Rewind stopped"), 5000, error.what());
 }
 
-// Render-thread only: collect a finished compression, if any. Results whose
-// token no longer matches belong to an abandoned timeline or configuration.
+// Render-thread only: collect a finished compression, if any.
 void harvestCompression()
 {
 	if (!pendingCompression
@@ -122,10 +126,12 @@ void harvestCompression()
 	pendingCompression.reset();
 	try
 	{
-		if (pending.token != pendingToken)
+		if (pending.use == CompressionUse::Discard)
 			return;
 		CompressionResult result = pending.result.get();
 		scratch = std::move(result.workspace);
+		if (pending.use == CompressionUse::Workspace)
+			return;
 		if (!history.pushCompressed(std::move(result.compressed), pending.rawSize, pending.timestamp))
 			throw std::runtime_error("The rewind memory limit cannot hold this game's state.");
 		const u64 historyTicks = u64(duration) * SH4_MAIN_CLOCK;
@@ -133,15 +139,25 @@ void harvestCompression()
 	}
 	catch (const std::exception& error)
 	{
-		fail(error);
+		if (pending.use == CompressionUse::Snapshot)
+			fail(error);
 	}
 }
 
 void syncHistory()
 {
-	// Multiple guest writes before the next frame share one history boundary.
+	// Keep the deadline and reusable buffer across frequent guest writes.
+	const bool wroteStorage = storageWritten.load(std::memory_order_relaxed)
+			&& storageWritten.exchange(false, std::memory_order_relaxed);
 	if (invalidated.load(std::memory_order_relaxed) && invalidated.exchange(false, std::memory_order_relaxed))
 		clearHistory();
+	else if (wroteStorage)
+	{
+		history.clear();
+		if (pendingCompression && pendingCompression->use == CompressionUse::Snapshot)
+			pendingCompression->use = CompressionUse::Workspace;
+		reversing = false;
+	}
 	harvestCompression();
 }
 
@@ -184,7 +200,8 @@ const char* unsupportedReason(bool checkThreadMode)
 	// Battle Cable uses a serial pipe and never sets the modem's online flag.
 	// The active handshake still owns that pipe if the user changes the setting.
 	if (settings.network.online || config::GGPOEnable || config::BattleCableEnable
-			|| NetworkHandshake::instance != nullptr || ice::getState() != ice::Offline || settings.naomi.multiboard
+			|| NetworkHandshake::instance != nullptr || ice::getState() != ice::Offline
+			|| net::modbba::isCapcomDirectActive() || settings.naomi.multiboard
 			|| settings.naomi.slave || settings.naomi.drivingSimSlave)
 		return Tnop("Rewind is unavailable during network or linked-cabinet play.");
 	if (threaded)
@@ -293,7 +310,7 @@ bool requiresSharedThread()
 
 bool canStep()
 {
-	return unavailableReason() == nullptr && history.size() != 0;
+	return history.size() != 0 && unavailableReason() == nullptr && history.hasSnapshotBefore(sh4_sched_now64());
 }
 
 void requestStep()
@@ -309,6 +326,16 @@ void invalidate()
 {
 	// Device writes can originate on the CPU thread when rewind is disabled.
 	invalidated.store(true, std::memory_order_relaxed);
+}
+
+void invalidateStorageWrite()
+{
+	storageWritten.store(true, std::memory_order_relaxed);
+}
+
+bool restoring()
+{
+	return restoringSnapshot;
 }
 
 void poll(bool loading)
@@ -371,9 +398,11 @@ FrameAction beforeFrame()
 		return FrameAction::Run;
 	}
 	const auto now = std::chrono::steady_clock::now();
-	if (history.size() == 0 || (reversing && !singleStep && now < nextRestore))
+	const u64 guestNow = sh4_sched_now64();
+	if (!history.hasSnapshotBefore(guestNow) || (reversing && !singleStep && now < nextRestore))
 	{
 		// The main loop still polls host input; never advance at the oldest snapshot.
+		test_harness::recordRewind();
 		std::this_thread::sleep_for(std::chrono::milliseconds(8));
 		return FrameAction::Hold;
 	}
@@ -384,13 +413,22 @@ FrameAction beforeFrame()
 		{
 			ClearAudioOutput();
 			// A snapshot still compressing belongs to the future being abandoned.
-			++pendingToken;
+			if (pendingCompression)
+				pendingCompression->use = CompressionUse::Discard;
 		}
-		if (!history.pop(scratch, sh4_sched_now64()))
+		if (!history.pop(scratch, guestNow))
 			return FrameAction::Hold;
 		Deserializer deser(scratch.data(), scratch.size(), false, true);
 		applying = true;
-		emu.loadstate(deser);
+		test_harness::recordRewind();
+		{
+			struct RestoreScope
+			{
+				bool previous = std::exchange(restoringSnapshot, true);
+				~RestoreScope() { restoringSnapshot = previous; }
+			} restoreScope;
+			emu.loadstate(deser);
+		}
 		reversing = true;
 		// Short intervals play back in real time; sparse history moves back faster.
 		nextRestore = now + std::chrono::milliseconds(std::min(interval, 250));
@@ -415,7 +453,8 @@ void afterFrame()
 	syncHistory();
 	if (unavailableReason() != nullptr)
 	{
-		if (history.size() != 0 || !scratch.empty() || (pendingCompression && pendingCompression->token == pendingToken))
+		if (history.size() != 0 || !scratch.empty()
+				|| (pendingCompression && pendingCompression->use != CompressionUse::Discard))
 			clearHistory();
 		if (requested())
 			releaseRequests();
@@ -433,12 +472,11 @@ void afterFrame()
 		if (!compressWorker)
 			compressWorker = std::make_unique<WorkerThread>("RewindCompress");
 		const int level = compression;
-		const unsigned token = pendingToken;
 		pendingCompression = PendingCompression{
 			compressWorker->runFuture([workspace = std::move(scratch), stateSize, level]() mutable {
 				auto compressed = RewindBuffer::compress(workspace.data(), stateSize, level);
 				return CompressionResult{std::move(compressed), std::move(workspace)};
-			}), stateSize, now, token};
+			}), stateSize, now};
 		lastCapture = now;
 	}
 	catch (const std::exception& error)

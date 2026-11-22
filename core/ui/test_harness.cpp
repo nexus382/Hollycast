@@ -470,6 +470,12 @@ static std::string captureGame;
 static int captureRenderer;
 static std::uint64_t captureGuestStart;
 
+void recordRewind()
+{
+	if (recording)
+		captureProblems.insert("rewind_restore");
+}
+
 static Json rewindStatus()
 {
 	// Loading runs on a worker and may still be building the Maple device array.
@@ -481,7 +487,7 @@ static Json rewindStatus()
 	return {{"enabled", optionsReady ? Json(static_cast<bool>(config::RewindEnable)) : Json(nullptr)},
 		{"available", reason == nullptr},
 		{"unavailable_reason", reason == nullptr ? Json(nullptr) : Json(reason)},
-		{"can_step", reason == nullptr && rewind_state::snapshotCount() != 0}, {"requested", rewind_state::requested()},
+		{"can_step", reason == nullptr && rewind_state::canStep()}, {"requested", rewind_state::requested()},
 		{"held_by_harness", rewind_state::requested(&harnessRewindSource)},
 		{"snapshots", rewind_state::snapshotCount()}, {"memory_bytes", rewind_state::memoryUsed()},
 		{"interval_ms", optionsReady ? Json(config::RewindInterval.get()) : Json(nullptr)},
@@ -499,8 +505,7 @@ static Json rewindOperation(const Json& args)
 		require(game_started && emu.running(), "Rewind hold requires a running game");
 		const char *reason = rewind_state::unavailableReason();
 		require(reason == nullptr, reason == nullptr ? "" : reason);
-		if (recording)
-			captureProblems.insert("rewind_restore");
+		recordRewind();
 		if (!rewind_state::requested(&harnessRewindSource))
 			rewind_state::setRequested(&harnessRewindSource, true);
 	}

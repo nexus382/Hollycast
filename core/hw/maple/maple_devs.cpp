@@ -400,12 +400,11 @@ void maple_sega_vmu::deserialize(Deserializer& deser)
 		memset(&accessed_blocks[0], 0, sizeof(accessed_blocks));
 		loaded_us_since_write = std::numeric_limits<u64>::max();
 	}
-	for (u8 b : lcd_data)
-		if (b != 0)
-		{
-			setLcd();
-			break;
-		}
+	if (std::any_of(std::begin(lcd_data), std::end(lcd_data), [](u8 b) { return b != 0; }))
+		setLcd();
+	else if (deser.rewind() && config)
+		// Rewind reuses the device. Clear the previous image without activating an unused LCD.
+		config->ResetImage();
 	fullSaveNeeded = true;
 #ifdef HAVE_PHONE_VMU
 	phone_vmu::publishCard(bus_id * 2 + bus_port, flash_data, sizeof(flash_data), file != nullptr && !settings.network.online);
@@ -756,7 +755,7 @@ u32 maple_sega_vmu::dma(u32 cmd)
 					}
 					// Never cross a durable card write when rewinding. Keep saves on the
 					// current timeline, including games which save in several DMA phases.
-					rewind_state::invalidate();
+					rewind_state::invalidateStorageWrite();
 					rptr(&flash_data[write_adr],write_len);
 #ifdef HAVE_PHONE_VMU
 					phone_vmu::updateCard(bus_id * 2 + bus_port, write_adr, &flash_data[write_adr], write_len);

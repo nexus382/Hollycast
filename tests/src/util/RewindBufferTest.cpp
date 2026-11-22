@@ -337,7 +337,7 @@ TEST(RewindBufferTest, PopSkipsSnapshotAtCurrentTimestampAndUpdatesMemoryAccount
 	EXPECT_EQ(oldestBytes, buffer.memoryUsed());
 }
 
-TEST(RewindBufferTest, PopKeepsLoneSnapshotFallbackAtCurrentTimestamp)
+TEST(RewindBufferTest, PopWaitsForAnEarlierSnapshot)
 {
 	RewindBuffer buffer;
 	buffer.configure(1024, 8);
@@ -345,7 +345,11 @@ TEST(RewindBufferTest, PopKeepsLoneSnapshotFallbackAtCurrentTimestamp)
 	ASSERT_TRUE(buffer.push(only.data(), only.size(), 100));
 
 	std::vector<std::uint8_t> output;
-	ASSERT_TRUE(buffer.pop(output, 100));
+	EXPECT_FALSE(buffer.hasSnapshotBefore(100));
+	EXPECT_FALSE(buffer.pop(output, 100));
+	EXPECT_EQ(1U, buffer.size());
+	EXPECT_TRUE(buffer.hasSnapshotBefore(101));
+	ASSERT_TRUE(buffer.pop(output, 101));
 	EXPECT_EQ(only, output);
 	EXPECT_EQ(0U, buffer.size());
 	EXPECT_EQ(0U, buffer.memoryUsed());

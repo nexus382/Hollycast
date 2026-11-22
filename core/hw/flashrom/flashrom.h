@@ -102,7 +102,7 @@ struct SRamChip : WritableChip
 			return;
 		// Persistent storage is a save boundary: recorded history must not
 		// cross a guest write that a later pause/stop will save to disk.
-		rewind_state::invalidate();
+		rewind_state::invalidateStorageWrite();
 		switch (sz)
 		{
 		case 1:

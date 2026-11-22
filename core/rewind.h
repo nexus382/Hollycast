@@ -11,6 +11,8 @@ enum class FrameAction { Run, Restore, Hold };
 #ifdef LIBRETRO
 // Libretro frontends own rewind controls and state; shared engine hooks stay inert.
 inline void invalidate() {}
+inline void invalidateStorageWrite() {}
+inline bool restoring() { return false; }
 inline void releaseRequests() {}
 inline void setButtonInputAllowed(bool) {}
 #else
@@ -38,6 +40,10 @@ std::size_t memoryUsed();
 
 // Invalidation is thread-safe; history is released by poll() on the render thread.
 void invalidate();
+// Drop snapshots that predate a write and keep the snapshot capture cadence.
+void invalidateStorageWrite();
+// LoadState listeners run synchronously on the thread applying the snapshot.
+bool restoring();
 void poll(bool loading = false);
 FrameAction beforeFrame();
 void afterFrame();

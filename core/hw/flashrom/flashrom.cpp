@@ -165,7 +165,7 @@ void DCFlashChip::Write(u32 addr,u32 val,u32 sz)
 	case FS_ByteProgram:
 		if ((addr & 0x1e000) != 0x1a000 && addr >= write_protect_size)
 		{
-			rewind_state::invalidate();
+			rewind_state::invalidateStorageWrite();
 			data[addr] &= val;
 		}
 		state = FS_Normal;
@@ -204,7 +204,7 @@ void DCFlashChip::Write(u32 addr,u32 val,u32 sz)
 			|| ((addr & 0xfff) == 0xaaa && (val & 0xff) == 0x10))
 		{
 			// chip erase
-			rewind_state::invalidate();
+			rewind_state::invalidateStorageWrite();
 			INFO_LOG(FLASHROM, "Erasing Chip!");
 			u8 save[0x2000];
 			// this area is write-protected
@@ -249,7 +249,7 @@ void DCFlashChip::Write(u32 addr,u32 val,u32 sz)
 				INFO_LOG(FLASHROM, "Erase Sector %08X!", addr);
 				if (start != nullptr)
 				{
-					rewind_state::invalidate();
+					rewind_state::invalidateStorageWrite();
 					memset(start, 0xFF, len);
 				}
 			}
@@ -297,7 +297,7 @@ int DCFlashChip::WriteBlock(u32 part_id, u32 block_id, const void *data)
 	user.block_id = block_id;
 	user.crc = crc_block(&user);
 
-	rewind_state::invalidate();
+	rewind_state::invalidateStorageWrite();
 	write_physical_block(offset, phys_id, &user);
 
 	return 1;

@@ -315,14 +315,20 @@ TEST_F(AssemblyDebuggerTest, AndroidRewindPauseWaitsForRestoreAndQueuedSave)
     } frontend;
     frontend.actions.setActive(true);
     const auto pauseOnRestore = +[](Event, void* param) {
+        EXPECT_TRUE(rewind_state::restoring());
         std::thread(&Frontend::requestPause, static_cast<Frontend*>(param)).join();
     };
     EventManager::listen(Event::LoadState, pauseOnRestore, &frontend);
+    // Advance the guest clock so the lone snapshot is earlier than the live state.
+    EXPECT_FALSE(rewind_state::canStep());
+    --Sh4cntx.sh4_sched_next;
+    EXPECT_TRUE(rewind_state::canStep());
     Sh4cntx.r[0] = 42;
     int source = 0;
     rewind_state::setButtonInputAllowed(true);
     rewind_state::setRequested(&source, true);
     EXPECT_EQ(rewind_state::FrameAction::Restore, rewind_state::beforeFrame());
+    EXPECT_FALSE(rewind_state::restoring());
     rewind_state::releaseSource(&source);
     rewind_state::setButtonInputAllowed(!gui_is_open());
     EventManager::unlisten(Event::LoadState, pauseOnRestore, &frontend);

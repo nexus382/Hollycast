@@ -6,6 +6,8 @@
 #include "hw/maple/maple_if.h"
 #include "hw/naomi/card_reader.h"
 #include "input/dreamlink/maplelink.h"
+#include "input/keyboard_device.h"
+#include "imgui.h"
 #include "network/net_handshake.h"
 #include "rewind.h"
 #include "serialize.h"
@@ -133,6 +135,55 @@ TEST_F(RewindTest, MenuClearsAndBlocksButtonRequests)
 	EXPECT_TRUE(rewind_state::requested(&controllerSource));
 	rewind_state::setRequested(&controllerSource, false);
 	EXPECT_FALSE(rewind_state::requested());
+}
+
+TEST_F(RewindTest, KeyboardReleasesRewindAfterBypassAndFocusLoss)
+{
+	class TestKeyboard : public KeyboardDevice
+	{
+	public:
+		TestKeyboard() : KeyboardDevice(0, "Rewind test keyboard")
+		{
+			input_mapper = getDefaultMapping();
+			input_mapper->set_button(EMU_BTN_BYPASS_KB, 0x48);
+		}
+
+		using KeyboardDevice::input;
+	};
+
+	struct KeyboardEnvironment
+	{
+		ImGuiContext* previousContext = ImGui::GetCurrentContext();
+		ImGuiContext* context = ImGui::CreateContext();
+		MapleDeviceType previousDevice = config::MapleMainDevices[0].get();
+		~KeyboardEnvironment()
+		{
+			config::MapleMainDevices[0] = previousDevice;
+			ImGui::DestroyContext(context);
+			ImGui::SetCurrentContext(previousContext);
+		}
+	} environment;
+	ImGui::SetCurrentContext(environment.context);
+	constexpr u8 BypassKey = 0x48;
+	constexpr u8 RewindKey = 0x2A;
+	TestKeyboard keyboard;
+
+	config::MapleMainDevices[0] = MDT_Keyboard;
+	keyboard.input(BypassKey, true, 0);
+	keyboard.input(RewindKey, true, 0);
+	EXPECT_TRUE(rewind_state::requested(&keyboard));
+	keyboard.input(BypassKey, false, 0);
+	keyboard.input(RewindKey, false, 0);
+	EXPECT_FALSE(rewind_state::requested(&keyboard));
+
+	config::MapleMainDevices[0] = MDT_SegaController;
+	keyboard.input(RewindKey, true, 0);
+	EXPECT_TRUE(rewind_state::requested(&keyboard));
+	keyboard.releaseKeys();
+	EXPECT_FALSE(rewind_state::requested(&keyboard));
+	keyboard.input(RewindKey, true, 0);
+	EXPECT_TRUE(rewind_state::requested(&keyboard));
+	keyboard.releaseKeys();
 }
 
 TEST_F(RewindTest, AvailableWhenAllGatesPass)
