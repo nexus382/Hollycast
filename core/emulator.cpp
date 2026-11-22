@@ -1016,6 +1016,25 @@ void Emulator::stop()
 	}
 }
 
+bool Emulator::resetGame()
+{
+	stop();
+	finishPendingPause();
+	if (state != Loaded)
+		return false;
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru())
+	{
+		hikaru::frontend::requestReset();
+		return true;
+	}
+#endif
+	// The CPU has stopped and joined. Drop frames queued before the reset.
+	rend_reset();
+	dc_reset(false);
+	return true;
+}
+
 // Called on the emulator thread for soft reset
 void Emulator::requestReset()
 {

@@ -161,6 +161,8 @@ public:
 	 * Does nothing if the game isn't running.
 	 */
 	void stop();
+	// Soft-reset the loaded title from the frontend between render frames.
+	bool resetGame();
 #ifndef LIBRETRO
 	// Android controls must use the render thread even during a save-state's temporary stop.
 	bool usesSharedRewind() const { return sharedRewind.load(std::memory_order_relaxed); }

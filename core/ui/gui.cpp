@@ -149,8 +149,10 @@ static float appliedUserUiScale = 1.f;
 static bool clearActiveIdNextFrame;
 bool showExitSaveDialog = false;
 static bool showAutoLoadDialog = false;
-enum class ExitSaveDialogAction { ReturnToLibrary, ExitEmulator };
+enum class ExitSaveDialogAction { ReturnToLibrary, ExitEmulator, RestartGame };
 static ExitSaveDialogAction exitSaveDialogAction = ExitSaveDialogAction::ReturnToLibrary;
+enum class PendingRestart { Idle, Suspended, Save, Discard };
+static std::atomic<PendingRestart> pendingRestart{PendingRestart::Idle};
 
 GameScanner scanner;
 static BackgroundGameLoader gameLoader;
@@ -273,6 +275,10 @@ static void emuEventCallback(Event event, void *)
 		GamepadDevice::load_system_mappings();
 		break;
 	case Event::Terminate:
+	{
+		auto restart = pendingRestart.load();
+		if (restart == PendingRestart::Save || restart == PendingRestart::Discard)
+			pendingRestart.compare_exchange_strong(restart, PendingRestart::Idle);
 		SettingsNew::stopTextureFilterLiveTune();
 		performance_overlay::reset();
 		boxart.checkpointPlaytime(true);
@@ -281,6 +287,7 @@ static void emuEventCallback(Event event, void *)
 		SettingsNew::closeShaderLiveTune();
 		postprocess::requestShaderChainReload();
 		break;
+	}
 	case Event::Pause:
 		performance_overlay::reset();
 		boxart.checkpointPlaytime(true);
@@ -796,7 +803,7 @@ void gui_stop_game(const std::string& message, bool allowAutoSave)
 static void savestate();
 static void savestate(int slot);
 
-static void save_auto_state_before_exit()
+static void save_auto_state_before_action()
 {
 	if (!dc_savestateAllowed())
 		return;
@@ -804,22 +811,27 @@ static void save_auto_state_before_exit()
 	try {
 		if (gui_state == GuiState::Closed)
 			emu.stop();
-		// Save here before exit so the chosen "Save and Exit" path uses the
-		// hidden auto-save slot, then suppress unloadGame() from writing a second
-		// auto-save for the same shutdown.
+		// Exit and restart both use the hidden auto-save slot.
 		savestate(dc_getAutoSaveSlot());
-		dc_skipAutoSaveOnNextUnload();
 	} catch (const FlycastException& e) {
-		WARN_LOG(COMMON, "save_auto_state_before_exit: %s", e.what());
+		WARN_LOG(COMMON, "Could not save state before exit or restart: %s", e.what());
 	}
 }
 
-static void finish_exit_request(bool exitEmulator, bool saveFirst)
+static void finish_exit_save_action(ExitSaveDialogAction action, bool saveFirst)
 {
-	if (saveFirst)
-		save_auto_state_before_exit();
+	if (action == ExitSaveDialogAction::RestartGame)
+	{
+		// Menus can draw inside a guest frame or under Hikaru's frame lock.
+		auto idle = PendingRestart::Idle;
+		pendingRestart.compare_exchange_strong(idle, saveFirst ? PendingRestart::Save : PendingRestart::Discard);
+		return;
+	}
 
-	if (exitEmulator && !commandLineStart)
+	if (saveFirst)
+		save_auto_state_before_action();
+
+	if (action == ExitSaveDialogAction::ExitEmulator && !commandLineStart)
 	{
 		emu.unloadGame(false);
 		mainui_stop();
@@ -829,21 +841,21 @@ static void finish_exit_request(bool exitEmulator, bool saveFirst)
 	gui_stop_game("", false);
 }
 
-void gui_request_exit_to_library()
+static void request_exit_save_action(ExitSaveDialogAction action)
 {
-	if (dc_savestateAllowed() && config::AutoSaveState)
+	const bool maySave = dc_savestateAllowed();
+	if (maySave && !config::AutoSaveState && config::SaveProtection)
 	{
-		finish_exit_request(false, true);
-		return;
-	}
-
-	if (dc_savestateAllowed() && config::SaveProtection)
-	{
-		exitSaveDialogAction = ExitSaveDialogAction::ReturnToLibrary;
+		exitSaveDialogAction = action;
 		showExitSaveDialog = true;
 		return;
 	}
-	gui_stop_game("", false);
+	finish_exit_save_action(action, maySave && config::AutoSaveState);
+}
+
+void gui_request_exit_to_library()
+{
+	request_exit_save_action(ExitSaveDialogAction::ReturnToLibrary);
 }
 
 void gui_request_exit_emulator()
@@ -854,20 +866,47 @@ void gui_request_exit_emulator()
 		return;
 	}
 
-	if (dc_savestateAllowed() && config::AutoSaveState)
-	{
-		finish_exit_request(true, true);
-		return;
-	}
+	request_exit_save_action(ExitSaveDialogAction::ExitEmulator);
+}
 
-	if (!dc_savestateAllowed() || !config::SaveProtection)
-	{
-		finish_exit_request(true, false);
-		return;
-	}
+void gui_request_restart_game()
+{
+	if (game_started && !showExitSaveDialog && pendingRestart.load() == PendingRestart::Idle)
+		request_exit_save_action(ExitSaveDialogAction::RestartGame);
+}
 
-	exitSaveDialogAction = ExitSaveDialogAction::ExitEmulator;
-	showExitSaveDialog = true;
+void gui_set_restart_suspended(bool suspended)
+{
+	const LockGuard lock(guiMutex);
+	pendingRestart.store(suspended ? PendingRestart::Suspended : PendingRestart::Idle);
+}
+
+void gui_apply_pending_restart()
+{
+	auto restart = pendingRestart.load();
+	if (restart == PendingRestart::Idle || restart == PendingRestart::Suspended)
+		return;
+	const LockGuard lock(guiMutex);
+	if (!pendingRestart.compare_exchange_strong(restart, PendingRestart::Idle) || !game_started)
+		return;
+	try
+	{
+		if (restart == PendingRestart::Save)
+		{
+			emu.stop();
+			emu.finishPendingPause();
+			save_auto_state_before_action();
+		}
+		if (!emu.resetGame())
+			return;
+		gui_setState(GuiState::Closed);
+		if (assembly_debugger::active())
+			assembly_debugger::resume();
+		else
+			emu.start();
+	} catch (const FlycastException& e) {
+		gui_stop_game(e.what(), false);
+	}
 }
 
 void gui_request_initial_auto_load()
@@ -957,47 +996,41 @@ static void savestate()
 
 static void render_exit_save_dialog()
 {
-	static bool wasDialogShown = false;
-
 	if (!showExitSaveDialog)
-	{
-		wasDialogShown = false;
 		return;
-	}
 
 	// Center dialog
 	ImGui::SetNextWindowPos(
 		ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f),
 		ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
-	// Only open popup if it's not already open and this is a new request
-	if (showExitSaveDialog && !wasDialogShown)
-	{
+	if (!ImGui::IsPopupOpen(Tnop("Exit Save Prompt")))
 		ImGui::OpenPopup(Tnop("Exit Save Prompt"));
-		wasDialogShown = true;
-	}
 
 	const bool exitEmulator = exitSaveDialogAction == ExitSaveDialogAction::ExitEmulator;
-	const char* message = exitEmulator ? T("Do you want to save state before exiting the emulator?")
+	const bool restart = exitSaveDialogAction == ExitSaveDialogAction::RestartGame;
+	const char* message = restart ? T("Do you want to save state before restarting the game?")
+			: exitEmulator ? T("Do you want to save state before exiting the emulator?")
 			: T("Do you want to save state before returning to the library?");
-	const char* saveAndExit = T("Save & Exit");
-	const char* exitWithoutSaving = T("Exit Without Saving");
+	const char* saveLabel = restart ? T("Save & Restart") : T("Save & Exit");
+	const char* discardLabel = restart ? T("Restart Without Saving") : T("Exit Without Saving");
 	const char* cancelButton = T("Cancel");
-	exit_prompt::sizeNextWindow(message, saveAndExit, exitWithoutSaving, cancelButton);
-	const std::string exitGamePopup = std::string(exitEmulator ? T("Exit Emulator?") : T("Exit Game?")) + "###Exit Save Prompt";
+	exit_prompt::sizeNextWindow(message, saveLabel, discardLabel, cancelButton);
+	const std::string exitGamePopup = std::string(restart ? T("Restart Game?")
+			: exitEmulator ? T("Exit Emulator?") : T("Exit Game?")) + "###Exit Save Prompt";
 	if (ImGui::BeginPopupModal(exitGamePopup.c_str(), NULL,
 		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar))
 	{
 		// Check if save is allowed
 		bool canSave = dc_savestateAllowed();
-		const auto choice = exit_prompt::drawChoices(message, saveAndExit, exitWithoutSaving, cancelButton);
+		const auto choice = exit_prompt::drawChoices(message, saveLabel, discardLabel, cancelButton);
 		if (choice == exit_prompt::Choice::Save)
 		{
 			if (canSave)
 			{
 				ImGui::CloseCurrentPopup();
 				showExitSaveDialog = false;
-				finish_exit_request(exitEmulator, true);
+				finish_exit_save_action(exitSaveDialogAction, true);
 			}
 			else
 			{
@@ -1009,7 +1042,7 @@ static void render_exit_save_dialog()
 		{
 			ImGui::CloseCurrentPopup();
 			showExitSaveDialog = false;
-			finish_exit_request(exitEmulator, false);
+			finish_exit_save_action(exitSaveDialogAction, false);
 		}
 		if (choice == exit_prompt::Choice::Cancel)
 		{

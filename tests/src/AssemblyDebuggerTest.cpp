@@ -284,6 +284,24 @@ TEST_F(AssemblyDebuggerTest, BlocksConflictingDebuggerAndOnlineModes)
 }
 
 #ifndef LIBRETRO
+TEST_F(AssemblyDebuggerTest, FrontendResetReturnsToBootVector)
+{
+    program({ 0xAFFE, 0x0009 }); // bra to itself; nop in the delay slot
+    for (bool threaded : { false, true })
+    {
+        config::ThreadedRendering = threaded;
+        Sh4cntx.pc = pc;
+        Sh4cntx.r[0] = 42;
+        emu.start();
+
+        ASSERT_TRUE(emu.resetGame());
+        EXPECT_FALSE(emu.running());
+        EXPECT_EQ(0xA0000000u, Sh4cntx.pc);
+        EXPECT_EQ(0u, Sh4cntx.r[0]);
+        EXPECT_EQ(path.string(), settings.content.path);
+    }
+}
+
 TEST_F(AssemblyDebuggerTest, AndroidRewindPauseWaitsForRestoreAndQueuedSave)
 {
     const bool previousRewind = config::RewindEnable;

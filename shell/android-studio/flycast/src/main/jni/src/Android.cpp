@@ -297,6 +297,8 @@ static cThread savestateThread(savestateThreadFunc, nullptr, "Flycast-save");
 
 extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_pause(JNIEnv *env,jobject obj)
 {
+	// A confirmed menu restart must not resume the guest during activity suspension.
+	gui_set_restart_suspended(true);
 	bool wasRunning = true;
 	if (config::GGPOEnable)
 	{
@@ -316,20 +318,25 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_pause(JN
 extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_resume(JNIEnv *env,jobject obj)
 {
 	if (!game_started)
+	{
+		gui_set_restart_suspended(false);
 		return;
+	}
+	// Keep Restart suspended until the background state writer releases the guest.
+	savestateThread.WaitToEnd();
 	if (emu.usesSharedRewind())
 	{
-		savestateThread.WaitToEnd();
 		inputActions.post([] {
 			// Keep the resume marker until the render thread can consume it.
 			if (!emu.running() && game_started.exchange(false))
 				emu.start();
 		});
+		gui_set_restart_suspended(false);
 		return;
 	}
 	game_started = false;
-	savestateThread.WaitToEnd();
 	emu.start();
+	gui_set_restart_suspended(false);
 }
 
 void input_term();

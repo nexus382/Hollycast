@@ -68,6 +68,8 @@ bool mainui_rend_frame()
 {
 	FC_PROFILE_SCOPE;
 
+	// Apply the confirmed choice before the next poll of Android lifecycle events.
+	gui_apply_pending_restart();
 	SettingsNew::processShaderLoading();
 	os_DoEvents();
 	os_UpdateInputState();

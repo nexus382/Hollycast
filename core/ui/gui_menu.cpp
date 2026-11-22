@@ -266,15 +266,7 @@ void pauseOrResume()
 
 void restartGame()
 {
-	if (::game_started)
-	{
-		emu.stop();
-#ifdef USE_HIKARU
-		if (settings.platform.isHikaru())
-			emu.requestReset();
-#endif
-		emu.start();
-	}
+	gui_request_restart_game();
 }
 
 void toggleFastForward()
