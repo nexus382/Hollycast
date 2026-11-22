@@ -57,5 +57,6 @@ public:
 };
 
 void setCustomService(Service *service);
+bool isCapcomDirectActive();
 
 }

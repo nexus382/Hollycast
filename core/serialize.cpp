@@ -116,8 +116,8 @@ void dc_deserialize(Deserializer& deser)
 	DEBUG_LOG(SAVESTATE, "Loaded %d bytes", (u32)deser.size());
 }
 
-Deserializer::Deserializer(const void *data, size_t limit, bool rollback)
-	: SerializeBase(limit, rollback), data((const u8 *)data)
+Deserializer::Deserializer(const void *data, size_t limit, bool rollback, bool rewind)
+	: SerializeBase(limit, rollback), data((const u8 *)data), _rewind(rewind)
 {
 	if (!data || limit < sizeof(Version)) throw Exception("Truncated savestate header");
 	if (limit >= 8 && !memcmp(data, "RASTATE\001", 8))

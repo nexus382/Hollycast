@@ -265,6 +265,41 @@ in `finally`. Expired input releases on the next emulator UI tick. A completely
 stalled owner cannot service input until it resumes. This tests the emulator's mapping/consumption path;
 physical USB/Bluetooth latency requires separate hardware measurements.
 
+## Rewind control
+
+Native builds that advertise the `rewind` ready capability accept one input
+command (the complete native op is `rewind` with exactly `{held: boolean}`):
+
+```powershell
+node tools/testing/hollytest.mjs rewind --run D:/tmp/hollytest-session-001 --held true
+node tools/testing/hollytest.mjs observe --run D:/tmp/hollytest-session-001
+node tools/testing/hollytest.mjs live --run D:/tmp/hollytest-session-001
+node tools/testing/hollytest.mjs rewind --run D:/tmp/hollytest-session-001 --held false
+```
+
+Enable Rewind in a disposable profile with the `config` keys
+`Dreamcast.RewindEnable`, `Dreamcast.RewindInterval`,
+`Dreamcast.RewindCompression` (0 Fast, 1 Balanced, 2 Maximum), and
+`Dreamcast.RewindDuration`, then launch the game. Hollycast automatically
+uses shared threading when Rewind is available. Holds stay active
+until released (there is no lease expiry), and every `release`, `quit`, menu,
+or restricted-session path also drops the harness hold. Holding fails with
+the emulator's unavailable reason when Rewind cannot run; releasing always
+succeeds, even if the session became restricted (hardcore, online, or
+multiboard). Holding during a performance capture marks that capture invalid
+with reason `rewind_restore`.
+
+Each rewind reply and `state.rewind` in `observe`/`live` report
+`enabled`, `available`, `unavailable_reason`, `can_step`, `requested`,
+`held_by_harness`, `snapshots`, `memory_bytes`,
+`interval_ms`, `duration_s`, and `compression`. While the game loader is
+applying its settings, the four configuration fields are `null`. `unavailable_reason` is
+user-facing text and may change; assert on `available`/`can_step` instead.
+To prove time moved backwards, compare the sampled `sh4_cycles` string in
+`live` telemetry before and after holding (it is sampled on the CPU's VBlank
+boundary, never read live). A falling snapshot count alone, or the monotonic
+completed-frame counter, does not prove a restore.
+
 ## Native UI inspection and Windows settings
 
 The native UI inspector is the primary way to inspect settings and widget state.
