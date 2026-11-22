@@ -5,6 +5,9 @@ package com.hollycast.emulator;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipDescription;
+import android.content.ClipboardManager;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -15,6 +18,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.PersistableBundle;
 import android.preference.PreferenceManager;
 import android.util.Log;
 import android.view.InputDevice;
@@ -182,6 +186,26 @@ public abstract class BaseGLActivity extends Activity implements ActivityCompat.
                 dlgAlert.setCancelable(false);
                 dlgAlert.create().show();
             }
+        });
+    }
+
+    // Called from the native render thread.
+    public void copySensitiveTextToClipboard(String text)
+    {
+        handler.post(() -> {
+            if (isFinishing() || isDestroyed())
+                return;
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard == null)
+                return;
+            ClipData clip = ClipData.newPlainText("Phone VMU URL", text);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // The pairing token grants access to this session. Hide it in the clipboard preview.
+                PersistableBundle extras = new PersistableBundle();
+                extras.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true);
+                clip.getDescription().setExtras(extras);
+            }
+            clipboard.setPrimaryClip(clip);
         });
     }
 
