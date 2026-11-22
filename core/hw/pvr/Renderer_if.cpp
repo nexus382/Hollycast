@@ -693,6 +693,7 @@ void rend_start_render()
 			ctx->rend.clearFramebuffer = false;
 		}
 		ggpo::endOfFrame();
+		ctx->rend.palVideoMode = SPG_CONTROL.isPAL();
 		swapIntervalDetector.render();
 		if (!config::EmulateFramebuffer)
 			ctx->rend.swapInterval = swapIntervalDetector.swapInterval();

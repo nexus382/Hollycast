@@ -25,6 +25,7 @@
 
 #include <future>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <array>
 #include <string>
@@ -53,7 +54,10 @@ public:
 	GameBoxart getBoxartAndLoad(const GameMedia& media, bool startFetch = true);
 	GameBoxart getBoxart(const GameMedia& media);
 	// Metadata lookup only: never open a disc or start artwork work.
-	GameBoxart getCachedBoxart(const GameMedia& media);
+	GameBoxart getCachedBoxart(const GameMedia& media, BoxartSourceMode mode = BoxartSourceMode::ScrapedOnly);
+	std::optional<u64> getLibraryPlaytime(const GameBoxart& game);
+	struct MetadataRevision { u64 database, playtime; };
+	MetadataRevision metadataRevision();
 	std::string getLibraryCoverMediaPath(const GameMedia& media);
 	std::string getCustomMediaPath(const GameMedia& media, config::LibraryCoverMediaMode mediaMode, bool verifyLocal = false);
 	// Art of the game's disc: its physical media if known, otherwise the label on the disc
@@ -129,8 +133,6 @@ private:
 	void markArtworkChanged(const std::string& gamePath);
 	void markAllArtworkChanged();
 	void loadLibraryPlaytimeDatabase();
-	//! @pre playtimeMutex must be locked.
-	void applyLibraryPlaytimeUnlocked(GameBoxart& boxart) const;
 	void recoverDatabases(const std::string& databaseDir, const std::string& artworkDir);
 	void reviewDatabaseArtwork();
 	void saveDatabase(bool checkpoint = false);
@@ -182,6 +184,7 @@ private:
 	std::chrono::steady_clock::time_point lastDatabaseSave; // Protected by databaseWriteMutex.
 	// Incremented while mutex is held so a completed save never clears a newer update.
 	u64 databaseGeneration = 0;
+	u64 playtimeGeneration = 0; // Protected by mutex along with changes to libraryPlaytimeByGameId.
 	struct ArtworkChangeEntry { u64 revision; std::string gamePath; };
 	static constexpr size_t kArtworkChangeHistoryLimit = 4096;
 	std::deque<ArtworkChangeEntry> artworkChangeHistory;

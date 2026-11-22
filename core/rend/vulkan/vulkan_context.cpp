@@ -843,6 +843,12 @@ void VulkanContext::CreateSwapChain()
 			if (surfaceCapabilities.maxImageCount != 0)
 				imageCount = std::min(imageCount, surfaceCapabilities.maxImageCount);
 			vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eColorAttachment;
+#ifdef HOLLYCAST_TEST_HARNESS
+			// Read the composited image without depending on desktop capture.
+			harnessCanCapture = static_cast<bool>(surfaceCapabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferSrc);
+			if (harnessCanCapture)
+				usage |= vk::ImageUsageFlagBits::eTransferSrc;
+#endif
 #if defined(TEST_AUTOMATION) || (defined(VIDEO_ROUTING) && defined(TARGET_MAC))
 			// for final screenshot or Syphon
 			usage |= vk::ImageUsageFlagBits::eTransferSrc;

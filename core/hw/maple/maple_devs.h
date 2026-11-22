@@ -437,6 +437,7 @@ struct maple_sega_vmu: maple_base
 	void OnSetup() override;
 	~maple_sega_vmu() override;
 	u32 dma(u32 cmd) override;
+	bool linkStatus() override;
 	const void *getData(size_t& size) const override;
 	void setLcd();
 };

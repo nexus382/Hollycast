@@ -62,6 +62,7 @@ public class HttpClient {
     {
         final long startedAtNanos = System.nanoTime();
         HttpURLConnection conn = null;
+        Thread canceller = null;
         try {
             if (cancellationToken != 0 && isCancelled(cancellationToken))
                 return 499;
@@ -76,6 +77,25 @@ public class HttpClient {
             if (reqHeaderNames != null) {
                 for (int i = 0; i < reqHeaderNames.length; i++)
                     conn.setRequestProperty(reqHeaderNames[i], reqHeaderValues[i]);
+            }
+            if (cancellationToken != 0) {
+                if (isCancelled(cancellationToken))
+                    return 499;
+                final HttpURLConnection request = conn;
+                canceller = new Thread(() -> {
+                    try {
+                        // A disconnect before connect can be a no-op. Keep polling
+                        // until the request completes so cancellation remains latched.
+                        while (!Thread.currentThread().isInterrupted()) {
+                            if (isCancelled(cancellationToken))
+                                request.disconnect();
+                            Thread.sleep(25);
+                        }
+                    } catch (InterruptedException stopped) {
+                        Thread.currentThread().interrupt();
+                    }
+                }, "HollycastHttpCancel");
+                canceller.start();
             }
             conn.connect();
             int responseCode = conn.getResponseCode();
@@ -149,6 +169,22 @@ public class HttpClient {
         } catch (Throwable t) {
             Log.e("hollycast", "Unknown error", t);
         } finally {
+            if (canceller != null) {
+                canceller.interrupt();
+                boolean interrupted = false;
+                // The token points to the native caller's atomic. Wait for its
+                // monitor to finish before returning control to that caller.
+                for (;;) {
+                    try {
+                        canceller.join();
+                        break;
+                    } catch (InterruptedException e) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted)
+                    Thread.currentThread().interrupt();
+            }
             if (conn != null)
                 conn.disconnect();
         }

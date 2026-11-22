@@ -11,7 +11,10 @@
 #include <sys/param.h> /* for MAXPATHLEN */
 #include <unistd.h>
 #include "ui/gui.h"
+#include "ui/gui_debugger.h"
 #include "ui/gui_menu.h"
+#include "debug/assembly_debugger.h"
+#include "ui/app_updater.h"
 #include "oslib/oslib.h"
 #include "sdl/sdl.h"
 #include <functional>
@@ -290,6 +293,11 @@ static void addMenuSeparator(NSMenu *menu)
 	runMenuAction([]() { GuiMenu::openCustomBoxartSettings(); });
 }
 
+- (void)openAssemblyDebugger:(id)sender
+{
+	runMenuAction([]() { gui_open_debugger(); });
+}
+
 - (void)openGeneralSettings:(id)sender
 {
 	runMenuAction([]() { GuiMenu::openGeneralSettings(); });
@@ -342,7 +350,7 @@ static void addMenuSeparator(NSMenu *menu)
 
 - (void)checkForUpdates:(id)sender
 {
-	[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://nexus382.github.io/Hollycast/"]];
+	runMenuAction([]() { app_updates::open(); });
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem
@@ -356,6 +364,9 @@ static void addMenuSeparator(NSMenu *menu)
 		return GuiMenu::isGameRunning();
 	case MENU_TAG_DISABLED:
 		return NO;
+	case MENU_TAG_ASSEMBLY_DEBUGGER:
+		[menuItem setState:assembly_debugger::active() ? NSControlStateValueOn : NSControlStateValueOff];
+		return assembly_debugger::available();
 	default:
 		return YES;
 	}
@@ -469,6 +480,7 @@ static void setupHollycastMenus(void)
 	NSMenuItem *toolsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Tools" action:nil keyEquivalent:@""];
 	NSMenu *toolsMenu = [[NSMenu alloc] initWithTitle:@"Tools"];
 	addMenuItem(toolsMenu, @"CHD Convert", nil, @"", MENU_TAG_DISABLED);
+	addMenuItem(toolsMenu, @"Assembly Debugger", @selector(openAssemblyDebugger:), @"", MENU_TAG_ASSEMBLY_DEBUGGER);
 	addMenuItem(toolsMenu, @"Custom Boxart", @selector(openCustomBoxart:), @"", 0);
 	[toolsMenuItem setSubmenu:toolsMenu];
 	[[NSApp mainMenu] addItem:toolsMenuItem];

@@ -71,7 +71,7 @@ jobs:
         with:
           msystem: MINGW64
           install: git make
-          pacboy: ccache:p cmake:p libcdio:p lua:p ninja:p SDL2:p toolchain:p
+          pacboy: ccache:p cmake:p libcdio:p lua:p make:p ninja:p SDL2:p toolchain:p
         if: matrix.config.shell == 'msys2 {0}'
 
       - name: Set up build environment (Windows, Visual Studio)
@@ -108,14 +108,27 @@ jobs:
 
       - name: Compile universal dependencies (macOS)
         run: |
-          for formula in ./shell/apple/libomp.rb ./shell/apple/libpng-flycast.rb; do
-            libname=$(basename "$formula" .rb)
-            HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_DEVELOPER=1 brew install --build-from-source --formula "$formula" || \
-            HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1 HOMEBREW_DEVELOPER=1 brew reinstall --build-from-source --formula "$formula"
-            prefix=$(brew --prefix $libname)
-            # Find and verify the static library
-            libfile=$(find "$prefix/lib" -name "*.a" | head -n1)
-            lipo -info "$libfile"
+          # Homebrew resolves formula names through taps. Use our pinned recipes
+          # so both libraries are built as universal static archives.
+          tap=hollycast/universal
+          brew tap-new --no-git "$tap"
+          cp shell/apple/libomp.rb shell/apple/libpng-flycast.rb "$(brew --repository "$tap")/Formula/"
+          brew trust --formula "$tap/libomp" "$tap/libpng-flycast"
+          export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+
+          for libname in libomp libpng-flycast; do
+            formula="$tap/$libname"
+            if [ -n "$(brew list --versions "$libname")" ]; then
+              brew reinstall --build-from-source --formula "$formula"
+            else
+              brew install --build-from-source --formula "$formula"
+            fi
+            prefix=$(brew --prefix "$formula")
+            case "$libname" in
+              libomp) libfile="$prefix/lib/libomp.a" ;;
+              libpng-flycast) libfile="$prefix/lib/libpng16.a" ;;
+            esac
+            lipo "$libfile" -verify_arch arm64 x86_64
             # Export prefix for subsequent CMake steps
             if [ -z "$CMAKE_PREFIX_PATH" ]; then
               CMAKE_PREFIX_PATH="$prefix"
@@ -148,7 +161,31 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.config.buildType }} -DCMAKE_INSTALL_PREFIX=artifact -DENABLE_CTEST=ON -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF ${{ matrix.config.cmakeArgs }}
           cmake --build build --config ${{ matrix.config.buildType }}
           ./build/Hollycast
+          ctest --test-dir build --output-on-failure -R updater -E updater_linux_install
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
+
+      - name: Set up native harness client runtime
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+        if: matrix.config.name == 'x86_64-pc-linux-gnu' || matrix.config.name == 'x86_64-pc-windows-msvc'
+
+      - name: Native harness checks
+        shell: bash
+        env:
+          HOLLYCAST_SCREENSCRAPER_DEV_ID: ${{ !startsWith(matrix.config.name, 'libretro') && secrets.HOLLYCAST_SCREENSCRAPER_DEV_ID || '' }}
+          HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD: ${{ !startsWith(matrix.config.name, 'libretro') && secrets.HOLLYCAST_SCREENSCRAPER_DEV_PASSWORD || '' }}
+          HOLLYCAST_REQUIRE_SCREENSCRAPER: ${{ !startsWith(matrix.config.name, 'libretro') && github.repository == 'nexus382/Hollycast' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        if: matrix.config.name == 'x86_64-pc-linux-gnu' || matrix.config.name == 'x86_64-pc-windows-msvc'
+        run: |
+          node --test tools/testing/hollytest.test.mjs tools/testing/playtest.test.mjs
+          pwsh -NoProfile -File tools/testing/build-helpers.test.ps1
+          cmake -S tools/testing -B build-harness-protocol -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-harness-protocol --parallel 4
+          ctest --test-dir build-harness-protocol --output-on-failure
+          cmake -S . -B build-native-harness -G Ninja -DCMAKE_BUILD_TYPE=Release -DHOLLYCAST_TEST_HARNESS=ON -DENABLE_CTEST=OFF -DBUILD_TESTING=OFF -DTEST_AUTOMATION=OFF -DUSE_DISCORD=OFF -DUSE_LUA=OFF
+          cmake --build build-native-harness --target Hollycast --parallel 4
 
       - name: Dump symbols
         run: |
@@ -156,6 +193,13 @@ jobs:
           core/deps/breakpad/bin/dump_syms artifact/bin/Hollycast.exe > symbols/Hollycast.sym 2>/dev/null
           strip artifact/bin/Hollycast.exe
         if: matrix.config.name == 'x86_64-w64-mingw32'
+
+      - name: Updater tests (Windows)
+        if: matrix.config.name == 'x86_64-pc-windows-msvc'
+        run: |
+          cmake -S tests/updater -B build-updater-tests -G Ninja -DCMAKE_BUILD_TYPE=Release "-DUPDATER_HELPER=${{ github.workspace }}/artifact/bin/HollycastUpdater.exe"
+          cmake --build build-updater-tests --parallel 16
+          ctest --test-dir build-updater-tests --output-on-failure
 
       - name: Build breakpad (linux)
         working-directory: core/deps/breakpad
@@ -173,6 +217,8 @@ jobs:
           shell/linux/make-appimage.sh . artifact/bin appimage
           mv Hollycast-x86_64.AppImage artifact/bin
           rm artifact/bin/Hollycast
+          # The transaction fixture packages a real AppImage with the same tool.
+          ctest --test-dir build --output-on-failure -R updater_linux_install
         if: matrix.config.name == 'x86_64-pc-linux-gnu'
 
       - name: Package app (macos)
@@ -185,7 +231,7 @@ jobs:
 
       - name: Package app (windows)
         run: |
-          powershell Compress-Archive artifact/bin/Hollycast.exe artifact/bin/Hollycast.zip
+          powershell -NoProfile -Command "Compress-Archive -LiteralPath 'artifact/bin/Hollycast.exe','artifact/bin/HollycastUpdater.exe' -DestinationPath 'artifact/bin/Hollycast.zip'"
           rm artifact/bin/Hollycast.exe
           cp artifact/bin/Hollycast.zip "${{ matrix.config.packagePath }}"
         if: matrix.config.name == 'x86_64-w64-mingw32'

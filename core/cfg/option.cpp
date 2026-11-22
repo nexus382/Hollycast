@@ -102,6 +102,7 @@ Option<int> PreloadCustomTextures("rend.PreloadCustomTextures", 0);
 Option<bool> DumpTextures("rend.DumpTextures");
 Option<bool> DumpUniqueTextures("rend.DumpUniqueTextures");
 Option<bool> DumpReplacedTextures("rend.DumpReplacedTextures");
+Option<bool> SplitTextureSheets("rend.SplitTextureSheets");
 Option<int> ScreenStretching("rend.ScreenStretching", 100);
 Option<bool> StretchToFill("rend.StretchToFill");
 Option<bool> Fog("rend.Fog", true);
