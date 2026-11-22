@@ -536,16 +536,8 @@ bool needsMedia(const GameBoxart& item, u32 selection)
 	if (item.arcade) return false;
 	if ((selection & artwork::metadataMedia) && !item.screenScraperSearched) return true;
 	selection &= allMedia;
-	if (!selection) return false;
-	if (!item.screenScraperSearched || (item.screenScraperCheckedMedia & selection) != selection)
-		return true;
-	for (size_t i = 0; i < mediaTypes.size(); ++i)
-	{
-		const auto it = item.screenScraperMedia.find(mediaTypes[i].name);
-		if ((selection & (1u << i)) && it != item.screenScraperMedia.end() && !file_exists(it->second))
-			return true;
-	}
-	return false;
+	return selection && (!item.screenScraperSearched
+			|| artwork::needsImages(selection, item.screenScraperCheckedMedia, item.screenScraperMedia));
 }
 } // namespace screenscraper
 

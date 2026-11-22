@@ -44,6 +44,7 @@
 #include "gui_util.h"
 #include "gui_font.h"
 #include "imgread/common.h"
+#include "imgread/disc_image.h"
 #include "emulator.h"
 #include "wsi/context.h"
 #ifdef USE_HIKARU
@@ -81,6 +82,9 @@
 #include "vgamepad.h"
 #include "settings.h"
 #include "settings_new.h"
+#ifndef LIBRETRO
+#include "rend/postprocess/shader_chain.h"
+#endif
 #include "oslib/i18n.h"
 #include "gui_font.h"
 using namespace i18n;
@@ -260,6 +264,9 @@ static void emuEventCallback(Event event, void *)
 		break;
 	case Event::Start:
 		SettingsNew::stopTextureFilterLiveTune();
+		SettingsNew::closeShaderLiveTune();
+		// Renderer contexts can outlive a title, even when the shader paths match.
+		postprocess::requestShaderChainReload();
 		performance_overlay::reset();
 		boxart.startPlaytime(settings.platform.system == DC_PLATFORM_DREAMCAST ? settings.content.gameId : "", settings.content.path);
 		markLibraryGameBooted(settings.content.gameId, settings.content.path);
@@ -271,6 +278,8 @@ static void emuEventCallback(Event event, void *)
 		boxart.checkpointPlaytime(true);
 		GamepadDevice::load_system_mappings();
 		game_started = false;
+		SettingsNew::closeShaderLiveTune();
+		postprocess::requestShaderChainReload();
 		break;
 	case Event::Pause:
 		performance_overlay::reset();
@@ -436,6 +445,9 @@ void gui_keyboard_key(u8 keyCode, bool pressed)
 {
 	if (test_harness::controllerInputOwned())
 		return;
+#ifndef LIBRETRO
+	postprocess::setShaderHostKey(keyCode, pressed);
+#endif
 	if (!inited)
 		return;
 	ImGuiKey key = keycodeToImGuiKey(keyCode);
@@ -471,12 +483,15 @@ void gui_set_mouse_position(int x, int y, bool touchscreen, bool harnessInput)
 	mouseX = std::round(x * scale);
 	mouseY = std::round(y * scale);
 	mouseTouchscreen = touchscreen;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
+#endif
 }
 
 bool gui_is_menu_touch_target(float x, float y)
 {
 	// Reuse Android's gesture capture so virtual controls never consume panel taps.
-	return SettingsNew::textureFilterLiveTuneActive()
+	return SettingsNew::liveTuneActive()
 			|| GuiMenu::isTouchTarget(std::round(x * settings.display.pointScale),
 			std::round(y * settings.display.pointScale));
 }
@@ -490,12 +505,18 @@ void gui_set_mouse_button(int button, bool pressed, bool touchscreen, bool harne
 	else
 		mouseButtons &= ~(1 << button);
 	mouseTouchscreen = touchscreen;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
+#endif
 }
 
 void gui_set_mouse_wheel(float delta) {
 	if (test_harness::controllerInputOwned())
 		return;
 	mouseWheel += delta;
+#ifndef LIBRETRO
+	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons, delta);
+#endif
 	mouseTouchscreen = false;
 }
 
@@ -665,6 +686,24 @@ void gui_open_settings()
 	else if (gui_state == GuiState::GameInfo)
 	{
 		gui_setState(GuiState::Main);
+	}
+}
+
+void gui_open_shader_settings()
+{
+	const LockGuard lock(guiMutex);
+	if (gui_state != GuiState::Closed || !game_started || settings.network.online
+			|| ggpo::active() || !achievements::canPause())
+		return;
+
+	try {
+		SettingsNew::stopTextureFilterLiveTune();
+		vgamepad::hide();
+		emu.stop();
+		SettingsNew::openTab(SettingsNew::SettingsTab::Shader);
+		gui_setState(GuiState::Settings);
+	} catch (const FlycastException& e) {
+		gui_stop_game(e.what());
 	}
 }
 
@@ -1492,10 +1531,8 @@ struct GameInfoMediaEntry
 	bool required = false; // Only missing assets actually consumed by the hover UI are shown.
 };
 
-struct HoverGameInfoCache
+struct GameInfoMedia
 {
-	std::string gameId;
-	GameBoxart art;
 	std::string mixImagePath;
 	std::string titleImagePath;
 	std::string coverPath;
@@ -1505,7 +1542,34 @@ struct HoverGameInfoCache
 	std::string titleScreenPath;
 	std::string physicalPath;
 	std::string manualPath;
-	std::string primaryImagePath;
+};
+
+static GameInfoMedia load_game_info_media(const GameMedia& game)
+{
+	using Mode = config::LibraryCoverMediaMode;
+	GameInfoMedia media;
+	media.mixImagePath = boxart.getCustomMediaPath(game, Mode::MixImage);
+	media.titleImagePath = boxart.getCustomMediaPath(game, Mode::Title);
+	media.coverPath = boxart.getCustomMediaPath(game, Mode::Cover);
+	media.casePath = boxart.getCustomMediaPath(game, Mode::Case);
+	media.screenshotPath = boxart.getCustomMediaPath(game, Mode::Screenshot);
+	media.fanArtPath = boxart.getCustomMediaPath(game, Mode::FanArt);
+	media.titleScreenPath = boxart.getCustomMediaPath(game, Mode::TitleScreen);
+	media.physicalPath = boxart.getDiscArtPath(game);
+	media.manualPath = game.manualPath.empty() ? boxart.getCustomMediaPath(game, Mode::Manual) : game.manualPath;
+	return media;
+}
+
+static const std::string& game_info_title(const GameMedia& details)
+{
+	return details.name.empty() ? details.fileName : details.name;
+}
+
+struct HoverGameInfoCache
+{
+	std::string gameId;
+	GameBoxart art;
+	GameInfoMedia media;
 	std::string title;
 	int selectedMediaIndex = 0;
 	bool mediaPopupOpen = false;
@@ -1615,15 +1679,15 @@ static bool draw_game_info_image_cover_cropped(const std::string& path, ImDrawLi
 static std::vector<GameInfoMediaEntry> make_game_info_media_entries(const HoverGameInfoCache& cache)
 {
 	std::vector<GameInfoMediaEntry> entries {
-		{ "Mix", cache.mixImagePath, false, true },
-		{ "Cover", !cache.coverPath.empty() ? cache.coverPath : cache.art.boxartPath, false, true },
-		{ "Case", cache.casePath, false },
-		{ "Screenshot", cache.screenshotPath, false },
-		{ "Title Logo", cache.titleImagePath, false, true },
-		{ "Title Screen", cache.titleScreenPath, false },
-		{ "Fan Art", cache.fanArtPath, false },
-		{ "Physical", cache.physicalPath, false },
-		{ "Manual", cache.manualPath, false },
+		{ "Mix", cache.media.mixImagePath, false, true },
+		{ "Cover", !cache.media.coverPath.empty() ? cache.media.coverPath : cache.art.boxartPath, false, true },
+		{ "Case", cache.media.casePath, false },
+		{ "Screenshot", cache.media.screenshotPath, false },
+		{ "Title Logo", cache.media.titleImagePath, false, true },
+		{ "Title Screen", cache.media.titleScreenPath, false },
+		{ "Fan Art", cache.media.fanArtPath, false },
+		{ "Physical", cache.media.physicalPath, false },
+		{ "Manual", cache.media.manualPath, false },
 	};
 	// Optional images remain browsable when already available. Their absence does
 	// not mean the baseline view needs a scrape of every supported media category.
@@ -1633,14 +1697,6 @@ static std::vector<GameInfoMediaEntry> make_game_info_media_entries(const HoverG
 	if (!entries.empty())
 		entries[std::clamp(cache.selectedMediaIndex, 0, (int)entries.size() - 1)].selected = true;
 	return entries;
-}
-
-static std::string selected_game_info_media_path(const std::vector<GameInfoMediaEntry>& mediaEntries)
-{
-	for (const GameInfoMediaEntry& media : mediaEntries)
-		if (media.selected)
-			return media.path;
-	return {};
 }
 
 static const GameInfoMediaEntry *selected_game_info_media(const std::vector<GameInfoMediaEntry>& mediaEntries)
@@ -1660,20 +1716,20 @@ static int default_game_info_media_index(const HoverGameInfoCache& cache)
 	return 0;
 }
 
-static std::string best_game_info_hero_background_path(const HoverGameInfoCache& cache)
+static std::string best_game_info_hero_background_path(const GameInfoMedia& media)
 {
-	if (!cache.fanArtPath.empty())
-		return cache.fanArtPath;
-	if (!cache.screenshotPath.empty())
-		return cache.screenshotPath;
-	if (!cache.titleScreenPath.empty())
-		return cache.titleScreenPath;
-	if (!cache.mixImagePath.empty())
-		return cache.mixImagePath;
-	if (!cache.coverPath.empty())
-		return cache.coverPath;
-	if (!cache.casePath.empty())
-		return cache.casePath;
+	if (!media.fanArtPath.empty())
+		return media.fanArtPath;
+	if (!media.screenshotPath.empty())
+		return media.screenshotPath;
+	if (!media.titleScreenPath.empty())
+		return media.titleScreenPath;
+	if (!media.mixImagePath.empty())
+		return media.mixImagePath;
+	if (!media.coverPath.empty())
+		return media.coverPath;
+	if (!media.casePath.empty())
+		return media.casePath;
 	return {};
 }
 
@@ -1724,44 +1780,6 @@ static void draw_game_info_chip_row(const GameMedia& game, float scale)
 	}
 }
 
-static bool draw_game_info_badge(const GameInfoMediaEntry& media, int index)
-{
-	const bool found = !media.path.empty();
-	const ImVec4 bg = media.selected ? blendThemeColor(ImGuiCol_Button, ImGuiCol_ButtonActive, 0.85f)
-			: found ? blendThemeColor(ImGuiCol_FrameBg, ImGuiCol_ButtonActive, 0.28f, 0.88f)
-			: ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
-	const ImVec4 text = media.selected ? ImGui::GetStyle().Colors[ImGuiCol_Text]
-			: found ? themeStatusColor("success", ImVec4(0.20f, 0.76f, 0.38f, 1.0f))
-			: CustomTheme::roleColor("warning", ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "media.status");
-
-	ImguiStyleVar rounding(ImGuiStyleVar_FrameRounding, uiScaled(11.0f));
-	ImguiStyleVar padding(ImGuiStyleVar_FramePadding, ScaledVec2(9.0f, 4.0f));
-	ImguiStyleColor button(ImGuiCol_Button, bg);
-	ImguiStyleColor buttonHovered(ImGuiCol_ButtonHovered, bg);
-	ImguiStyleColor buttonActive(ImGuiCol_ButtonActive, bg);
-	ImguiStyleColor textColor(ImGuiCol_Text, text);
-	const std::string label = std::string(found ? ICON_FA_CIRCLE " " : ICON_FA_CIRCLE_DOT " ") + media.label
-			+ "##library_media_badge_" + std::to_string(index);
-	const bool clicked = ImGui::Button(label.c_str());
-	if (!found && ImGui::IsItemHovered())
-		ImGui::SetTooltip("%s media missing", media.label);
-	return clicked;
-}
-
-static int draw_game_info_badge_wrap(const std::vector<GameInfoMediaEntry>& mediaEntries)
-{
-	int clickedIndex = -1;
-	for (size_t i = 0; i < mediaEntries.size(); i++)
-	{
-		const float nextWidth = ImGui::CalcTextSize(mediaEntries[i].label).x + ImGui::GetStyle().FramePadding.x * 2.0f + uiScaled(26.0f);
-		if (i != 0 && ImGui::GetContentRegionAvail().x > nextWidth + uiScaled(12.0f))
-			ImGui::SameLine();
-		if (draw_game_info_badge(mediaEntries[i], (int)i))
-			clickedIndex = (int)i;
-	}
-	return clickedIndex;
-}
-
 static void draw_library_hover_hero(const HoverGameInfoCache& cache, const GameMedia& game, float width, float height, float scale)
 {
 	const auto scaled = [scale](float value) { return value * scale; };
@@ -1772,7 +1790,7 @@ static void draw_library_hover_hero(const HoverGameInfoCache& cache, const GameM
 	dl->AddRectFilled(p + size(0.0f, 4.0f), p + heroSize + size(0.0f, 4.0f),
 			alphaOverride(ImGui::GetColorU32(ImGuiCol_BorderShadow), 0.45f), scaled(14.0f));
 	dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_ChildBg), 0.95f), scaled(14.0f));
-	if (draw_game_info_image_cover_cropped(best_game_info_hero_background_path(cache), dl, p, p + heroSize, IM_COL32(255, 255, 255, 62)))
+	if (draw_game_info_image_cover_cropped(best_game_info_hero_background_path(cache.media), dl, p, p + heroSize, IM_COL32(255, 255, 255, 62)))
 		dl->AddRectFilled(p, p + heroSize, alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.58f), scaled(14.0f));
 	dl->AddRectFilled(ImVec2(p.x, p.y + heroSize.y - scaled(48.0f)), p + heroSize,
 			alphaOverride(ImGui::GetColorU32(ImGuiCol_WindowBg), 0.44f), scaled(14.0f));
@@ -1788,7 +1806,7 @@ static void draw_library_hover_hero(const HoverGameInfoCache& cache, const GameM
 		const ImVec2 titlePos = ImGui::GetCursorPos();
 		const float titleWidth = ImGui::GetContentRegionAvail().x;
 		const float titleHeight = std::max(1.f, chipY - titlePos.y - scaled(6.f));
-		const bool drewLogo = draw_game_info_image_contained(cache.titleImagePath,
+		const bool drewLogo = draw_game_info_image_contained(cache.media.titleImagePath,
 				ImVec2(titleWidth, titleHeight), ImVec2(std::min(titleWidth, scaled(680.f)), titleHeight));
 		if (!drewLogo)
 		{
@@ -1833,7 +1851,7 @@ static void draw_library_hover_media_card(const std::vector<GameInfoMediaEntry>&
 	ImGui::TextColored(blendThemeColor(ImGuiCol_TextDisabled, ImGuiCol_HeaderActive, 0.4f), "%s", T("Media Preview"));
 	ImGui::PopFont();
 	const GameInfoMediaEntry *selected = selected_game_info_media(mediaEntries);
-	const std::string selectedPath = selected != nullptr ? selected->path : selected_game_info_media_path(mediaEntries);
+	const std::string selectedPath = selected != nullptr ? selected->path : std::string();
 	const char *selectedLabel = selected != nullptr ? selected->label : T("Media");
 	const bool found = !selectedPath.empty();
 	const float previewHeight = std::max(1.f, ImGui::GetContentRegionAvail().y - scaled(96.f));
@@ -2009,24 +2027,10 @@ static void draw_library_game_info_hover(const GameMedia& game, const GameBoxart
 	{
 		hoverCache.gameId = gameId;
 		hoverCache.art = displayArt != nullptr ? *displayArt : getLibraryDisplayArtwork(game, 0.0);
-		hoverCache.mixImagePath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::MixImage);
-		hoverCache.titleImagePath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Title);
-		hoverCache.coverPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Cover);
-		hoverCache.casePath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Case);
-		hoverCache.screenshotPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Screenshot);
-		hoverCache.fanArtPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::FanArt);
-		hoverCache.titleScreenPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::TitleScreen);
-		hoverCache.physicalPath = boxart.getDiscArtPath(game);
-		hoverCache.manualPath = !game.manualPath.empty()
-				? game.manualPath : boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Manual);
-		hoverCache.primaryImagePath = !hoverCache.mixImagePath.empty() ? hoverCache.mixImagePath : hoverCache.art.boxartPath;
+		hoverCache.media = load_game_info_media(game);
 		GameMedia details = game;
 		hoverCache.art.applyMetadata(details);
-		hoverCache.title = details.name;
-		if (hoverCache.title.empty() || hoverCache.title == game.fileName)
-			hoverCache.title = hoverCache.art.name;
-		if (hoverCache.title.empty())
-			hoverCache.title = game.fileName;
+		hoverCache.title = game_info_title(details);
 		hoverCache.selectedMediaIndex = default_game_info_media_index(hoverCache);
 		hoverCache.ready = true;
 	}
@@ -2121,22 +2125,7 @@ static void gui_display_game_info()
 	GameMedia game = selectedGameForInfo;
 	const GameBoxart art = getLibraryDisplayArtwork(game, 0.0);
 	art.applyMetadata(game);
-	const std::string mixImagePath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::MixImage);
-	const std::string titleImagePath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Title);
-	const std::string coverPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Cover);
-	const std::string casePath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Case);
-	const std::string screenshotPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Screenshot);
-	const std::string fanArtPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::FanArt);
-	const std::string titleScreenPath = boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::TitleScreen);
-	const std::string physicalPath = boxart.getDiscArtPath(game);
-	const std::string manualPath = !game.manualPath.empty()
-			? game.manualPath : boxart.getCustomMediaPath(game, config::LibraryCoverMediaMode::Manual);
-	const std::string primaryImagePath = !mixImagePath.empty() ? mixImagePath : art.boxartPath;
-	std::string title = game.name;
-	if (title.empty() || title == game.fileName)
-		title = art.name;
-	if (title.empty())
-		title = game.fileName;
+	const GameInfoMedia media = load_game_info_media(game);
 
 	ImVec2 windowPos(static_cast<float>(insetLeft), static_cast<float>(insetTop));
 	ImVec2 windowSize(std::max(0, settings.display.width - insetLeft - insetRight),
@@ -2157,15 +2146,15 @@ static void gui_display_game_info()
 			gui_setState(GuiState::Main);
 
 		ImGui::Dummy(ScaledVec2(0, 4));
-		if (!titleImagePath.empty())
+		if (!media.titleImagePath.empty())
 		{
 			const float headerWidth = std::min(windowSize.x - ImGui::GetStyle().WindowPadding.x * 2.0f, uiScaled(520.0f));
-			draw_game_info_image(titleImagePath, ImVec2(headerWidth, uiScaled(92.0f)));
+			draw_game_info_image(media.titleImagePath, ImVec2(headerWidth, uiScaled(92.0f)));
 		}
 		else
 		{
 			ImGui::PushFont(nullptr, uiLargeFontSize());
-			ImGui::TextWrapped("%s", title.c_str());
+			ImGui::TextWrapped("%s", game_info_title(game).c_str());
 			ImGui::PopFont();
 		}
 		ImGui::Separator();
@@ -2179,7 +2168,7 @@ static void gui_display_game_info()
 		{
 			scrollWindowFromTouch();
 			const float previewSize = std::min(leftWidth, panelHeight * 0.78f);
-			if (!draw_game_info_image(primaryImagePath, ImVec2(previewSize, previewSize)))
+			if (!draw_game_info_image(media.mixImagePath.empty() ? art.boxartPath : media.mixImagePath, ImVec2(previewSize, previewSize)))
 			{
 				ImGui::Dummy(ImVec2(previewSize, previewSize * 0.6f));
 				ImGui::TextDisabled("%s", T("No media preview"));
@@ -2217,21 +2206,21 @@ static void gui_display_game_info()
 			ImGui::Separator();
 			ImGui::TextDisabled("%s", T("MEDIA:"));
 			ImGui::SameLine(0.0f, uiScaled(10.0f));
-			draw_game_info_media_label("Mix", !mixImagePath.empty());
-			draw_game_info_media_label("Cover", !coverPath.empty());
-			draw_game_info_media_label("Case", !casePath.empty());
-			draw_game_info_media_label("Screenshot", !screenshotPath.empty());
-			draw_game_info_media_label("Marquee", !titleImagePath.empty());
-			draw_game_info_media_label("Title Screen", !titleScreenPath.empty());
-			draw_game_info_media_label("Fan Art", !fanArtPath.empty());
-			draw_game_info_media_label("Physical", !physicalPath.empty());
-			draw_game_info_media_label("Manual", !manualPath.empty());
+			draw_game_info_media_label("Mix", !media.mixImagePath.empty());
+			draw_game_info_media_label("Cover", !media.coverPath.empty());
+			draw_game_info_media_label("Case", !media.casePath.empty());
+			draw_game_info_media_label("Screenshot", !media.screenshotPath.empty());
+			draw_game_info_media_label("Marquee", !media.titleImagePath.empty());
+			draw_game_info_media_label("Title Screen", !media.titleScreenPath.empty());
+			draw_game_info_media_label("Fan Art", !media.fanArtPath.empty());
+			draw_game_info_media_label("Physical", !media.physicalPath.empty());
+			draw_game_info_media_label("Manual", !media.manualPath.empty());
 			ImGui::NewLine();
 
-			if (!manualPath.empty())
+			if (!media.manualPath.empty())
 			{
 				ImGui::TextDisabled("%s", T("Manual"));
-				ImGui::TextWrapped("%s", manualPath.c_str());
+				ImGui::TextWrapped("%s", media.manualPath.c_str());
 			}
 		}
 		ImGui::EndChild();
@@ -2680,10 +2669,12 @@ void gui_load_game()
 	auto picker = ref new Pickers::FileOpenPicker();
 	picker->ViewMode = Pickers::PickerViewMode::List;
 
-	picker->FileTypeFilter->Append(".chd");
-	picker->FileTypeFilter->Append(".gdi");
-	picker->FileTypeFilter->Append(".cue");
-	picker->FileTypeFilter->Append(".cdi");
+	for (auto extension : discimage::extensions)
+	{
+		std::wstring filter = L".";
+		filter.append(extension.begin(), extension.end());
+		picker->FileTypeFilter->Append(ref new Platform::String(filter.c_str()));
+	}
 	picker->FileTypeFilter->Append(".zip");
 	picker->FileTypeFilter->Append(".7z");
 	picker->FileTypeFilter->Append(".elf");
@@ -3615,7 +3606,7 @@ static void gui_display_content()
 		bool gameListEmpty = false;
 		bool libraryViewEmpty = false;
 		bool noFilteredResults = false;
-		const library::View visibleView = gui_state == GuiState::SelectDisk ? library::View::All : libraryView;
+		const library::View visibleView = gui_state == GuiState::SelectDisk ? library::View::Discs : libraryView;
 		if (visibleView == library::View::ContinuePlaying)
 			advanceLibrarySavestates();
 		{
@@ -3638,7 +3629,7 @@ static void gui_display_content()
 			static u64 filteredStateRevision = 0;
 			static library::FilteredGames filteredGames;
 			const auto filteredRowsKey = std::make_tuple(scannerGeneration, gameList.size(),
-					std::string(filter.InputBuf), visibleView, gui_state == GuiState::SelectDisk,
+					std::string(filter.InputBuf), visibleView,
 					config::LibraryFavourites.get(),
 					config::BoxartSourceMode.get(),
 					config::LibraryCoverMedia.get(), config::ArtworkProvider.get(), config::FetchBoxart.get(),
@@ -3654,13 +3645,6 @@ static void gui_display_content()
 			}
 			const auto matchesFilter = [&](size_t gameIndex) {
 				const GameMedia& game = gameList[gameIndex];
-				if (gui_state == GuiState::SelectDisk)
-				{
-					const std::string extension = get_file_extension(game.path);
-					if ((!game.device && extension != "gdi" && extension != "chd"
-							&& extension != "cdi" && extension != "cue") || game.path.empty())
-						return false;
-				}
 				if (filter.PassFilter(game.name.c_str()))
 					return true;
 				if (game.device)
@@ -3761,18 +3745,8 @@ static void gui_display_content()
 					if (sortSpecs != nullptr)
 						sortSpecs->SpecsDirty = false;
 
-					auto drawTableGame = [&](const GameMedia& game, int rowIndex, bool filterPassed = false) -> bool
+					auto drawTableGame = [&](const GameMedia& game, int rowIndex) -> bool
 					{
-						if (gui_state == GuiState::SelectDisk)
-						{
-							std::string extension = get_file_extension(game.path);
-							if (!game.device && extension != "gdi" && extension != "chd"
-									&& extension != "cdi" && extension != "cue")
-								return false;
-							if (game.path.empty())
-								return false;
-						}
-
 						std::string gameName = game.name;
 						GameBoxart art;
 						if (!game.device)
@@ -3781,12 +3755,6 @@ static void gui_display_content()
 							if (!art.name.empty())
 								gameName = art.name;
 						}
-
-						if (!filterPassed && !filter.PassFilter(game.name.c_str())
-								&& (art.name.empty() || !filter.PassFilter(art.name.c_str())))
-							return false;
-						if (!filterPassed)
-							displayedGameCount++;
 
 						ImguiID _(game.path.empty() ? "bios" : (game.path + "_row"));
 						ImGui::TableNextRow(ImGuiTableRowFlags_None, tableRowHeight);
@@ -3874,51 +3842,20 @@ static void gui_display_content()
 						return false;
 					};
 
-					if (filter.IsActive())
-					{
-						displayedGameCount = static_cast<int>(filteredRows.size());
-						if (gui_state == GuiState::SelectDisk)
+					displayedGameCount = static_cast<int>(tableRows->size());
+					ImGuiListClipper clipper;
+					clipper.Begin(displayedGameCount, tableRowHeight);
+					bool gameStartedFromRow = false;
+					while (clipper.Step() && !gameStartedFromRow)
+						for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
 						{
-							for (size_t gameIndex : *tableRows)
-								if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex), true))
-									break;
-						}
-						else
-						{
-							ImGuiListClipper clipper;
-							clipper.Begin(static_cast<int>(filteredRows.size()), tableRowHeight);
-							bool gameStartedFromRow = false;
-							while (clipper.Step() && !gameStartedFromRow)
-								for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i)
-								{
-									const size_t gameIndex = (*tableRows)[i];
-									if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex), true))
-									{
-										gameStartedFromRow = true;
-										break;
-									}
-								}
-						}
-					}
-					else if (gui_state != GuiState::SelectDisk)
-					{
-						ImGuiListClipper clipper;
-						clipper.Begin(static_cast<int>(visibleGames.size()), tableRowHeight);
-						bool gameStartedFromRow = false;
-						while (clipper.Step() && !gameStartedFromRow)
-							for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-								if (drawTableGame(gameList[(*tableRows)[i]], static_cast<int>((*tableRows)[i])))
-								{
-									gameStartedFromRow = true;
-									break;
-								}
-					}
-					else
-					{
-						for (size_t i : *tableRows)
-							if (drawTableGame(gameList[i], static_cast<int>(i)))
+							const size_t gameIndex = (*tableRows)[i];
+							if (drawTableGame(gameList[gameIndex], static_cast<int>(gameIndex)))
+							{
+								gameStartedFromRow = true;
 								break;
-					}
+							}
+						}
 					ImGui::EndTable();
 				}
 				ImGui::PopFont();
@@ -3938,17 +3875,6 @@ static void gui_display_content()
 				for (size_t visibleIndex : visibleGames)
 				{
 					const GameMedia& game = gameList[visibleIndex];
-					if (gui_state == GuiState::SelectDisk)
-					{
-						std::string extension = get_file_extension(game.path);
-						if (!game.device && extension != "gdi" && extension != "chd"
-								&& extension != "cdi" && extension != "cue")
-							// Only dreamcast disks
-							continue;
-						if (game.path.empty())
-							// Dreamcast BIOS isn't a disk
-							continue;
-					}
 					std::string gameName = game.name;
 					bool passFilter = filter.PassFilter(gameName.c_str());
 					GameBoxart art;
@@ -4190,6 +4116,7 @@ static bool systemdir_selected_callback(bool cancelled, std::string selection)
 		// scan completed before the home folder was selected.
 		scanner.refresh();
 		config::Settings::instance().load(false);
+		gui_requestStyleReload();
 		// Make sure the renderer type doesn't change mid-flight
 		config::RendererType = RenderType::OpenGL;
 		gui_setState(GuiState::Main);
@@ -4809,12 +4736,16 @@ void gui_display_ui()
 	if (styleReloadRequested)
 		gui_updateStyle();
 	gui_newFrame();
+#ifdef __ANDROID__
+	const bool settingsAlreadyOpen = gui_state == GuiState::Settings;
+#endif
 	if (gui_state == GuiState::Settings)
 		SettingsNew::prepareControllerNavigation();
 	ImGui::NewFrame();
 	error_msg_shown = false;
 	bool gui_open = gui_is_open();
 	auto finishFrame = [&]() {
+		SettingsNew::renderShaderLoadingOverlay();
 		ImGui::Render();
 		gui_endFrame(gui_open);
 		uiThreadRunner.execTasks(std::chrono::steady_clock::now());
@@ -4883,6 +4814,13 @@ void gui_display_ui()
 	switch (gui_state)
 	{
 	case GuiState::Settings:
+#ifdef __ANDROID__
+		// A menu item can open Settings on release before this frame draws the panel.
+		// Consume that release here so the next touch can still interact immediately.
+		if (!settingsAlreadyOpen && ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen
+				&& ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+			ImGui::SetKeyOwner(ImGuiKey_MouseLeft, ImGuiKeyOwner_NoOwner, ImGuiInputFlags_LockThisFrame);
+#endif
 		// Settings now always use the new UI through the compatibility facade.
 		gui_display_settings();
 		break;
@@ -5013,8 +4951,9 @@ void gui_draw_osd()
 	if (!settings.raHardcoreMode)
 		lua::overlay();
 	SettingsNew::renderTextureFilterLiveTuneOverlay();
-	if (!SettingsNew::textureFilterLiveTuneActive())
+	if (!SettingsNew::liveTuneActive())
 		vgamepad::draw();
+	SettingsNew::renderShaderLiveTuneOverlay();
 	// Render menu bar on top during gameplay
 	GuiMenu::renderMainMenuBar();
 	app_updates::draw(false);
@@ -5025,6 +4964,7 @@ void gui_draw_osd()
 	vmu_window::drawInApp();
 #endif
 
+	SettingsNew::renderShaderLoadingOverlay();
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();
 
@@ -5097,16 +5037,7 @@ void gui_term()
 		librarySavestateCache.stop();
 		ImguiFileTexture::stopImageLoader();
 		clearThumbnailCache();
-#ifdef USE_HIKARU
-		// Hikaru may replace a GLES context when entering or leaving a game.
-		// Its old atlas must not survive that replacement through font globals.
-		if (settings.platform.isHikaru()
-				|| (GraphicsContext::Instance() != nullptr && GraphicsContext::Instance()->isHikaruContext()))
-		{
-			boldFont = largeFont = aboutAsciiFont = nullptr;
-			settingsTitleFont = settingsValueFont = settingsRightValueFont = settingsIconFont = nullptr;
-		}
-#endif
+		gui_resetFontReferences();
 		ImGui::DestroyContext();
 	    EventManager::unlisten(Event::Resume, emuEventCallback);
 		EventManager::unlisten(Event::Pause, emuEventCallback);
@@ -5294,6 +5225,8 @@ void gui_setState(GuiState newState)
 		resetLibraryGameInfoHover();
 	}
 	gui_state = newState;
+	if (newState != GuiState::Closed && newState != GuiState::Loading)
+		SettingsNew::closeShaderLiveTune();
 	if (newState == GuiState::Closed)
 	{
 		rewind_state::setButtonInputAllowed(true);

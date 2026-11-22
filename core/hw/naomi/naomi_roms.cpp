@@ -24,6 +24,19 @@
 #include "naomi_roms_eeprom.h"
 #include "naomi_roms_input.h"
 
+#include <string_view>
+
+int Game::platform() const
+{
+	if (cart_type == AW)
+		return DC_PLATFORM_ATOMISWAVE;
+	if (bios != nullptr && std::string_view(bios) == "naomi2")
+		return DC_PLATFORM_NAOMI2;
+	if (bios != nullptr && std::string_view(bios) == "segasp")
+		return DC_PLATFORM_SYSTEMSP;
+	return DC_PLATFORM_NAOMI;
+}
+
 const BIOS_t BIOS[] =
 {
 	{

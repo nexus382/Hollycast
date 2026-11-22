@@ -11,7 +11,10 @@
 #include "device.h"
 #include "shaders.h"
 #include "metal_test.h"
+#include "cfg/option.h"
 #include "rend/metal/metal_context.h"
+#include "rend/metal/metal_shader_chain.h"
+#include "ui/settings_new.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -26,13 +29,12 @@ namespace hikaru::graphics {
 namespace {
 static_assert(sizeof(Vertex) == sizeof(float) * 32, "Metal vertex ABI mismatch");
 
-MTLPixelFormat pixelFormat(GLenum format) {
-    switch (format) {
+MTLPixelFormat pixelFormat(const Texture& texture) {
+    if (texture.isDepth())
+        return MTLPixelFormatDepth32Float;
+    switch (texture.format) {
     case GL_RGB10_A2: return MTLPixelFormatRGB10A2Unorm;
     case GL_RG32UI: return MTLPixelFormatRG32Uint;
-    case GL_DEPTH_COMPONENT24:
-    case GL_DEPTH_COMPONENT32:
-    case GL_DEPTH_COMPONENT32F: return MTLPixelFormatDepth32Float;
     default: return MTLPixelFormatRGBA8Unorm;
     }
 }
@@ -43,11 +45,6 @@ MTLColorWriteMask metalColorWriteMask(uint8_t glMask) {
     if(glMask&0x4)mask|=MTLColorWriteMaskBlue;
     if(glMask&0x8)mask|=MTLColorWriteMaskAlpha;
     return mask;
-}
-bool isDepth(GLenum format) {
-    return format == GL_DEPTH_COMPONENT || format == GL_DEPTH_COMPONENT16 ||
-           format == GL_DEPTH_COMPONENT24 || format == GL_DEPTH_COMPONENT32 ||
-           format == GL_DEPTH_COMPONENT32F;
 }
 MTLBlendFactor blendFactor(GLenum value) {
     switch (value) {
@@ -111,9 +108,7 @@ MTLSamplerAddressMode addressMode(GLenum value) {
 struct TextureEntry {
     id<MTLTexture> texture = nil;
     Texture info{};
-    uint64_t revision = 0;
     unsigned levels = 0;
-    bool renderbuffer = false;
     std::vector<bool> initializedLevels;
 };
 struct PipelineKey {
@@ -121,9 +116,10 @@ struct PipelineKey {
     uint32_t format=0, metadataFormat=0, srcRGB=0, dstRGB=0, srcAlpha=0, dstAlpha=0;
     uint32_t eqRGB=0, eqAlpha=0, cullFace=0, frontFace=0;
     uint8_t colorMask=0;
+    DepthPass depthPass=DepthPass::None;
     bool operator<(const PipelineKey& b) const {
-        return std::tie(bitmap,familyResolve,peelComposite,blend,cull,depth,format,metadataFormat,srcRGB,dstRGB,srcAlpha,dstAlpha,eqRGB,eqAlpha,cullFace,frontFace,colorMask) <
-               std::tie(b.bitmap,b.familyResolve,b.peelComposite,b.blend,b.cull,b.depth,b.format,b.metadataFormat,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.eqRGB,b.eqAlpha,b.cullFace,b.frontFace,b.colorMask);
+        return std::tie(bitmap,familyResolve,peelComposite,blend,cull,depth,format,metadataFormat,srcRGB,dstRGB,srcAlpha,dstAlpha,eqRGB,eqAlpha,cullFace,frontFace,colorMask,depthPass) <
+               std::tie(b.bitmap,b.familyResolve,b.peelComposite,b.blend,b.cull,b.depth,b.format,b.metadataFormat,b.srcRGB,b.dstRGB,b.srcAlpha,b.dstAlpha,b.eqRGB,b.eqAlpha,b.cullFace,b.frontFace,b.colorMask,b.depthPass);
     }
 };
 struct SamplerKey {
@@ -137,8 +133,9 @@ struct SamplerKey {
 class MetalBackend final : public Backend {
 public:
     MetalBackend(id<MTLDevice> requestedDevice, id<MTLCommandQueue> requestedQueue,
-                 std::function<void(id<MTLTexture>,float)> presentFrame = {})
-        : presenter(std::move(presentFrame)) {
+                 std::function<void(id<MTLTexture>,id<MTLTexture>,float)> presentFrame = {},
+                 std::function<bool()> needsDepth = {})
+        : presenter(std::move(presentFrame)), depthRequest(std::move(needsDepth)) {
         @autoreleasepool {
             if (!requestedDevice || !requestedQueue) throw std::runtime_error("Hikaru Metal backend requires a Metal device and queue");
             initialize(requestedDevice, requestedQueue);
@@ -183,14 +180,14 @@ public:
         auto existing=textures.find(id);
         if(upload==TextureUpload::FullUpdate&&existing==textures.end())throw std::runtime_error("Hikaru Metal full texture update has no compatible allocation");
         auto& entry = upload==TextureUpload::FullUpdate?existing->second:textures[id];
-        const bool rb=(id & 0x80000000u)!=0;
-        const auto format=pixelFormat(info.format);
+        const auto format=pixelFormat(info);
         const unsigned geometric=1u+unsigned(std::floor(std::log2(std::max(info.width,info.height))));
         const unsigned levels=info.maxLevel==1000?geometric:std::max(1u,std::min(geometric,info.maxLevel+1));
-        const bool compatible=entry.texture&&entry.info.width==info.width&&entry.info.height==info.height&&entry.info.format==info.format&&entry.levels==levels;
+        const bool compatible = entry.texture && entry.info.width == info.width && entry.info.height == info.height
+            && entry.info.format == info.format && entry.info.renderbuffer == info.renderbuffer && entry.levels == levels;
         if(upload==TextureUpload::FullUpdate&&!compatible)throw std::runtime_error("Hikaru Metal full texture update has no compatible allocation");
         if(upload==TextureUpload::FullUpdate) {
-            if(!pixels||bytes==0||level!=0||isDepth(info.format))throw std::runtime_error("Hikaru Metal full texture update requires level-zero color pixel data");
+            if(!pixels||bytes==0||level!=0||info.isDepth())throw std::runtime_error("Hikaru Metal full texture update requires level-zero color pixel data");
             if(size_t(info.width)>SIZE_MAX/size_t(info.height)/4)throw std::runtime_error("Hikaru Metal full texture update is too large");
             if(bytes!=size_t(info.width)*info.height*4)throw std::runtime_error("Hikaru Metal texture upload has an invalid byte count");
         }
@@ -201,14 +198,14 @@ public:
             // Private storage supports renderable and sampleable depth textures
             // on discrete and Apple silicon GPUs alike.
             desc.storageMode=MTLStorageModePrivate;
-            desc.usage=isDepth(info.format) ? MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead : MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;
+            desc.usage=MTLTextureUsageRenderTarget;
+            if (!info.renderbuffer) desc.usage |= MTLTextureUsageShaderRead;
             entry.texture=[device newTextureWithDescriptor:desc];
             if (!entry.texture) throw std::runtime_error("Unable to allocate Hikaru Metal texture");
-            entry.info=info; entry.revision=info.revision; entry.levels=levels; entry.renderbuffer=rb;entry.initializedLevels.assign(levels,false);
-            if (isDepth(info.format)) clearDepthTexture(entry.texture);
-        } else {
-            entry.info=info; entry.revision=info.revision;
+            entry.levels=levels;entry.initializedLevels.assign(levels,false);
+            if (info.isDepth()) clearDepthTexture(entry.texture);
         }
+        entry.info=info;
         if (pixels && bytes) {
             const unsigned w=std::max(1u,info.width>>level), h=std::max(1u,info.height>>level);
             if (level>=entry.levels) throw std::runtime_error("Hikaru Metal texture upload exceeds allocated mip levels");
@@ -216,7 +213,7 @@ public:
             // The dispatch's unpack step expands legacy packed 16-bit/LA formats,
             // but intentionally preserves GL_UNSIGNED_INT_2_10_10_10_REV. Its
             // component bit order matches MTLPixelFormatRGB10A2Unorm exactly.
-            if (isDepth(info.format)) throw std::runtime_error("CPU upload to a Hikaru Metal depth texture is unsupported");
+            if (info.isDepth()) throw std::runtime_error("CPU upload to a Hikaru Metal depth texture is unsupported");
             // Private storage is updated through a blit on the same serial queue, keeping prior draws before writes and later draws after them.
             uploadColor(entry.texture,level,w,h,pixels);
         }
@@ -285,7 +282,7 @@ public:
         if (state.scissorEnabled) { x=state.scissor[0];y=state.color==0?(GLint)h-state.scissor[1]-state.scissor[3]:state.scissor[1];sw=state.scissor[2];sh=state.scissor[3]; }
         x=std::max<GLint>(0,x);y=std::max<GLint>(0,y);sw=std::max<GLint>(0,std::min<GLint>(sw,(GLint)w-x));sh=std::max<GLint>(0,std::min<GLint>(sh,(GLint)h-y));
         [enc setScissorRect:MTLScissorRect{(NSUInteger)x,(NSUInteger)y,(NSUInteger)sw,(NSUInteger)sh}];
-        PipelineKey key{}; key.format=colorTex ? (uint32_t)pixelFormat(textures[state.color].info.format) : MTLPixelFormatInvalid;
+        PipelineKey key{}; key.format=colorTex ? (uint32_t)pixelFormat(textures[state.color].info) : MTLPixelFormatInvalid;
         key.colorMask=0;if(mask&GL_COLOR_BUFFER_BIT)for(unsigned i=0;i<4;i++)if(state.colorMask[i])key.colorMask|=1u<<i;
         auto p=clearPipeline(key,depthTex!=nil); if (!p) { [enc endEncoding];commitCommandBuffer(cmd);return; }
         [enc setRenderPipelineState:p];
@@ -312,7 +309,8 @@ public:
         if(d.scissorEnabled){sx=d.scissor[0];sy=d.color==0?(GLint)h-d.scissor[1]-d.scissor[3]:d.scissor[1];sw=d.scissor[2];sh=d.scissor[3];}
         sx=std::max<GLint>(0,sx);sy=std::max<GLint>(0,sy);sw=std::max<GLint>(0,std::min<GLint>(sw,(GLint)w-sx));sh=std::max<GLint>(0,std::min<GLint>(sh,(GLint)h-sy));
         [enc setScissorRect:MTLScissorRect{(NSUInteger)sx,(NSUInteger)sy,(NSUInteger)sw,(NSUInteger)sh}];
-        PipelineKey key{};key.bitmap=d.bitmap;key.familyResolve=d.familyResolve;key.peelComposite=d.peelComposite;key.metadataFormat=metadata?(uint32_t)MTLPixelFormatRG32Uint:0;key.blend=d.blend;key.cull=d.cull;key.depth=depth!=nil;key.format=(uint32_t)pixelFormat(textures[d.color].info.format);
+        PipelineKey key{};key.bitmap=d.bitmap;key.familyResolve=d.familyResolve;key.peelComposite=d.peelComposite;key.metadataFormat=metadata?(uint32_t)MTLPixelFormatRG32Uint:0;key.blend=d.blend;key.cull=d.cull;key.depth=depth!=nil;key.format=(uint32_t)pixelFormat(textures[d.color].info);
+        key.depthPass=d.depthPass;
         key.srcRGB=d.srcRGB;key.dstRGB=d.dstRGB;key.srcAlpha=d.srcAlpha;key.dstAlpha=d.dstAlpha;key.eqRGB=d.equationRGB;key.eqAlpha=d.equationAlpha;key.cullFace=d.cullFace;key.frontFace=d.frontFace;
         for(unsigned i=0;i<4;i++)if(d.colorMask[i])key.colorMask|=1u<<i;
         id<MTLRenderPipelineState> pipeline=pipelineFor(key);if(!pipeline)return;
@@ -339,10 +337,10 @@ public:
                 if(d.textures[i]&&d.textures[i]!=d.metadata&&it!=textures.end()&&it->second.info.format==GL_RG32UI)t=it->second.texture;
                 [enc setFragmentTexture:t?:fallbackMetadata atIndex:i];
             } else if(meshDepthSlot){
-                if(d.textures[i] && it!=textures.end() && isDepth(it->second.info.format)) t=it->second.texture;
+                if(d.textures[i] && it!=textures.end() && !it->second.info.renderbuffer && it->second.info.isDepth()) t=it->second.texture;
                 [enc setFragmentTexture:t?:fallbackDepth atIndex:i];
             } else {
-                if(d.textures[i] && d.textures[i]!=d.color && d.textures[i]!=d.depth && d.textures[i]!=d.metadata && it!=textures.end() && !isDepth(it->second.info.format)) {
+                if(d.textures[i] && d.textures[i]!=d.color && d.textures[i]!=d.depth && d.textures[i]!=d.metadata && it!=textures.end() && !it->second.info.isDepth()) {
                     const auto& sampled=it->second;
                     const GLenum minFilter=d.sampling[i].minFilter;
                     const bool mipmapped=minFilter==GL_NEAREST_MIPMAP_NEAREST||minFilter==GL_NEAREST_MIPMAP_LINEAR||minFilter==GL_LINEAR_MIPMAP_NEAREST||minFilter==GL_LINEAR_MIPMAP_LINEAR;
@@ -386,16 +384,21 @@ public:
         }
       }
     }
+    bool needsSceneDepth() const override { return depthRequest&&depthRequest(); }
     void present(unsigned width,unsigned height) override {
       @autoreleasepool {
         flushDraws();
         auto t=target(0,false);if(!presenter||!t)return;
-        presenter(t,height?float(width)/float(height):0.f);
+        id<MTLTexture> depth=presentedDepthTexture?target(presentedDepthTexture,true):nil;
+        if(depth && (depth.width!=t.width || depth.height!=t.height))depth=nil;
+        presenter(t,depth,height?float(width)/float(height):0.f);
       }
     }
 
 private:
-    std::function<void(id<MTLTexture>,float)> presenter;id<MTLDevice> device=nil;id<MTLCommandQueue> queue=nil;id<MTLLibrary> library=nil;id<MTLTexture> fallback=nil,fallbackDepth=nil,fallbackMetadata=nil;
+    std::function<void(id<MTLTexture>,id<MTLTexture>,float)> presenter;
+    std::function<bool()> depthRequest;
+    id<MTLDevice> device=nil;id<MTLCommandQueue> queue=nil;id<MTLLibrary> library=nil;id<MTLTexture> fallback=nil,fallbackDepth=nil,fallbackMetadata=nil;
     dispatch_semaphore_t inFlight=nullptr;
     id<MTLCommandBuffer> activeCommand=nil;
     id<MTLRenderCommandEncoder> activeEncoder=nil;
@@ -445,7 +448,7 @@ private:
         id<MTLBuffer> buffer=[device newBufferWithBytes:vertices length:byteCount options:MTLResourceStorageModeShared];
         [encoder setVertexBuffer:buffer offset:0 atIndex:0];
     }
-    id<MTLTexture> target(unsigned id,bool depth){auto it=textures.find(id);if(it==textures.end()||!it->second.texture)return nil;return isDepth(it->second.info.format)==depth?it->second.texture:nil;}
+    id<MTLTexture> target(unsigned id,bool depth){auto it=textures.find(id);if(it==textures.end()||!it->second.texture)return nil;return it->second.info.isDepth()==depth?it->second.texture:nil;}
     void uploadColor(id<MTLTexture> texture,unsigned level,unsigned width,unsigned height,const void* pixels){
         const NSUInteger bpr=(NSUInteger(width)*4+255u)&~NSUInteger(255u);std::vector<uint8_t> bytes(bpr*height);
         const auto* source=static_cast<const uint8_t*>(pixels);for(unsigned y=0;y<height;y++)std::memcpy(bytes.data()+size_t(y)*bpr,source+size_t(y)*width*4,size_t(width)*4);
@@ -463,7 +466,14 @@ private:
     id<MTLRenderPipelineState> pipelineFor(const PipelineKey& k){
         auto found=pipelines.find(k);if(found!=pipelines.end())return found->second;
         NSString *vertex=k.bitmap?@"bitmapVertex":@"meshVertex";
-        NSString *fragment=k.familyResolve?@"familyResolveFragment":k.peelComposite?@"peelCompositeFragment":k.bitmap?@"bitmapFragment":k.metadataFormat?@"familyMeshFragment":@"meshFragment";
+        NSString *fragment;
+        if (k.depthPass == DepthPass::Capture) fragment = @"familyCaptureDepthFragment";
+        else if (k.depthPass == DepthPass::Compose) fragment = @"composeDepthFragment";
+        else if (k.familyResolve) fragment = @"familyResolveFragment";
+        else if (k.peelComposite) fragment = @"peelCompositeFragment";
+        else if (k.bitmap) fragment = @"bitmapFragment";
+        else if (k.metadataFormat) fragment = k.depth ? @"familyMeshFragment" : @"familyMeshColorFragment";
+        else fragment = k.depth ? @"meshFragment" : @"meshColorFragment";
         MTLRenderPipelineDescriptor *descriptor=[MTLRenderPipelineDescriptor new];
         descriptor.vertexFunction=[library newFunctionWithName:vertex];descriptor.fragmentFunction=[library newFunctionWithName:fragment];
         descriptor.colorAttachments[0].pixelFormat=(MTLPixelFormat)k.format;
@@ -483,7 +493,41 @@ private:
 std::unique_ptr<Backend> makeMetalBackend() {
     auto* context=dynamic_cast<MetalContext*>(GraphicsContext::Instance());
     if(!context||!context->GetDevice()||!context->GetQueue())return {};
-    return std::make_unique<MetalBackend>(context->GetDevice(),context->GetQueue(),[context](id<MTLTexture> texture,float aspect){context->PresentFrame(texture,aspect);});
+    id<MTLDevice> device = context->GetDevice();
+    id<MTLCommandQueue> queue = context->GetQueue();
+    struct ShaderState {
+        std::unique_ptr<MetalShaderChain> chain;
+        uint64_t generation = 0;
+    };
+    auto state = std::make_shared<ShaderState>();
+    auto shader = std::make_shared<const MetalContext::HikaruFrameShader>(
+        [device, queue, state](id<MTLTexture> source, id<MTLTexture> depth, int width, int height,
+                id<MTLTexture> __strong& output, bool& transformed) {
+            auto& chain = state->chain;
+            const bool selected = postprocess::hasConfiguredShaderSelection();
+            if (!selected && !chain)
+                return SettingsNew::shaderLiveTuneActive();
+            if (!chain)
+                chain = std::make_unique<MetalShaderChain>(device, queue);
+            const bool rotate = config::Rotate90;
+            const float aspect = (float)source.width / source.height;
+            postprocess::ShaderFrameInfo frame { (int)source.width, (int)source.height, width, height,
+                    0, rotate, rotate ? 1.f / aspect : aspect };
+            frame.presentation = { width, height, 0, 0, width, height, { 0, 0, 0, 1 } };
+            bool fullPresentation = false;
+            state->generation = postprocess::shaderChainReloadGeneration();
+            chain->render(source, depth, frame, output, transformed, fullPresentation);
+            if (!selected)
+                chain.reset();
+            return selected || SettingsNew::shaderLiveTuneActive();
+        });
+    return std::make_unique<MetalBackend>(device, queue, [context, shader](id<MTLTexture> texture, id<MTLTexture> depth, float aspect) {
+        context->PresentHikaruFrame(texture, depth, aspect, shader);
+    }, [state] {
+        return state->chain && postprocess::hasConfiguredShaderSelection()
+                && state->generation == postprocess::shaderChainReloadGeneration()
+                && state->chain->needsSceneDepth();
+    });
 }
 std::unique_ptr<Backend> makeMetalBackendForTesting(id<MTLDevice> device,id<MTLCommandQueue> queue) { return std::make_unique<MetalBackend>(device,queue); }
 } // namespace hikaru::graphics

@@ -15,7 +15,10 @@ target_sources(${PROJECT_NAME} PRIVATE
         net_handshake.h
         net_platform.h
         phone_vmu.cpp
+        phone_vmu_backup.cpp
+        phone_vmu_backup.h
         phone_vmu.h
+        phone_vmu_link.h
         phone_vmu_page.h
         phone_vmu_player.h
         phone_vmu_sync.h
@@ -28,6 +31,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         netservice.h
         dcnet.cpp
         dcnet.h
+        dcnet_endpoint.h
         ice.cpp
         ice.h
         ifaddrs.c

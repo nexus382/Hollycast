@@ -11,7 +11,7 @@
 #include "hw/naomi/card_reader.h"
 #include "hw/naomi/hopper.h"
 #include "hw/naomi/netdimm.h"
-#include "input/maplelink.h"
+#include "input/dreamlink/maplelink.h"
 #include "network/ice.h"
 #include "network/net_handshake.h"
 #include "network/phone_vmu.h"

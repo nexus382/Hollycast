@@ -76,7 +76,7 @@ public:
 			term();
 			return false;
 		}
-		pa_sample_spec spec{ PA_SAMPLE_S16LE, 44100, 2 };
+		pa_sample_spec spec{ PA_SAMPLE_S16LE, audio::OutputSampleRate, 2 };
 
 		stream = pa_stream_new(context, "audio", &spec, NULL);
 		if (!stream)
@@ -95,7 +95,7 @@ public:
 
 		pa_buffer_attr buffer_attr;
 		buffer_attr.maxlength = -1;
-		buffer_attr.tlength = pa_usec_to_bytes(config::AudioBufferSize * PA_USEC_PER_SEC / 44100, &spec);
+		buffer_attr.tlength = pa_usec_to_bytes(config::AudioBufferSize * PA_USEC_PER_SEC / audio::OutputSampleRate, &spec);
 		buffer_attr.prebuf = -1;
 		buffer_attr.minreq = -1;
 		buffer_attr.fragsize = -1;

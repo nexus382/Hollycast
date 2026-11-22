@@ -5,7 +5,7 @@
 #include "hw/flashrom/flashrom.h"
 #include "hw/maple/maple_if.h"
 #include "hw/naomi/card_reader.h"
-#include "input/maplelink.h"
+#include "input/dreamlink/maplelink.h"
 #include "network/net_handshake.h"
 #include "rewind.h"
 #include "serialize.h"

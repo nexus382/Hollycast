@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -20,9 +21,15 @@
 #include <d3d11.h>
 #include "dx11_shaders.h"
 
+#include <vector>
+
 class Quad
 {
 public:
+	// Post-processing may expose up to 256 scalar controls in addition to its
+	// eight frame-metadata scalars. Other quad users upload only their own prefix.
+	static constexpr size_t ConstantBufferBytes = sizeof(float) * 268;
+
 	void init(const ComPtr<ID3D11Device>& device, ComPtr<ID3D11DeviceContext> deviceContext, DX11Shaders *shaders)
 	{
 		this->device = device;
@@ -76,7 +83,9 @@ public:
 		// Constant buffer
 		{
 			D3D11_BUFFER_DESC desc{};
-			desc.ByteWidth = sizeof(float) * 4;
+			// Post-processing supplies 48 bytes of frame data and 256 floats of parameters;
+			// ordinary quad draws write their four-float color at the beginning.
+			desc.ByteWidth = ConstantBufferBytes;
 			desc.Usage = D3D11_USAGE_DYNAMIC;
 			desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 			desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -87,6 +96,62 @@ public:
 	void draw(ComPtr<ID3D11ShaderResourceView>& texView, ComPtr<ID3D11SamplerState> sampler, const float *color = nullptr,
 			float x = -1.f, float y = -1.f, float w = 2.f, float h = 2.f, bool rotate = false)
 	{
+		static const float white[] = { 1.f, 1.f, 1.f, 1.f };
+		drawInternal(texView, sampler, pixelShader, color == nullptr ? white : color, sizeof(white), x, y, w, h, rotate);
+	}
+
+	void drawWithPixelShader(ComPtr<ID3D11ShaderResourceView>& texView, ComPtr<ID3D11SamplerState> sampler,
+			ID3D11PixelShader *customPixelShader, const void *constants, size_t constantsSize)
+	{
+		drawInternal(texView, sampler, customPixelShader, constants, constantsSize, -1.f, -1.f, 2.f, 2.f, false);
+	}
+
+	void drawWithPixelShader(const std::vector<ComPtr<ID3D11ShaderResourceView>>& textureViews,
+			const std::vector<ComPtr<ID3D11SamplerState>>& samplers, ID3D11PixelShader *customPixelShader,
+			const void *constants, size_t constantsSize)
+	{
+		drawWithShaders(textureViews, samplers, nullptr, customPixelShader, constants, constantsSize);
+	}
+
+	void drawWithShaders(const std::vector<ComPtr<ID3D11ShaderResourceView>>& textureViews,
+			const std::vector<ComPtr<ID3D11SamplerState>>& samplers, ID3D11VertexShader *customVertexShader,
+			ID3D11PixelShader *customPixelShader, const void *constants, size_t constantsSize, UINT vertexCount = 4, ID3D11DepthStencilState *stencil = nullptr, UINT stencilReference = 0,
+			D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, bool generatedVertices = false)
+	{
+		if (textureViews.empty() || textureViews.size() != samplers.size()
+				|| textureViews.size() > D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT) {
+			WARN_LOG(RENDERER, "Quad requires matching non-empty texture and sampler lists");
+			return;
+		}
+		ID3D11ShaderResourceView *views[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] {};
+		ID3D11SamplerState *states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] {};
+		for (size_t index = 0; index < textureViews.size(); ++index) {
+			views[index] = textureViews[index];
+			states[index] = samplers[index];
+		}
+		drawInternal(views, states, static_cast<UINT>(textureViews.size()), customVertexShader, customPixelShader, constants, constantsSize,
+				-1.f, -1.f, 2.f, 2.f, false, vertexCount, stencil, stencilReference, topology, generatedVertices);
+	}
+
+private:
+	void drawInternal(ComPtr<ID3D11ShaderResourceView>& texView, ComPtr<ID3D11SamplerState> sampler,
+			ID3D11PixelShader *customPixelShader, const void *constants, size_t constantsSize,
+			float x, float y, float w, float h, bool rotate)
+	{
+		ID3D11ShaderResourceView *view = texView;
+		ID3D11SamplerState *state = sampler;
+		drawInternal(&view, &state, 1, nullptr, customPixelShader, constants, constantsSize, x, y, w, h, rotate);
+	}
+
+	void drawInternal(ID3D11ShaderResourceView *const *textureViews,
+			ID3D11SamplerState *const *samplers, UINT inputCount, ID3D11VertexShader *customVertexShader, ID3D11PixelShader *customPixelShader,
+			const void *constants, size_t constantsSize, float x, float y, float w, float h, bool rotate, UINT vertexCount = 4, ID3D11DepthStencilState *stencil = nullptr, UINT stencilReference = 0,
+			D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP, bool generatedVertices = false)
+	{
+		if (constantsSize > ConstantBufferBytes) {
+			WARN_LOG(RENDERER, "Quad constant data exceeds the allocated constant buffer");
+			return;
+		}
 		// Vertex buffer
 		Vertex vertices[4] {
 			{ x,     y,     0.f, 1.f },
@@ -95,41 +160,49 @@ public:
 			{ x + w, y + h, 1.f, 0.f },
 		};
 		D3D11_MAPPED_SUBRESOURCE mappedSubRes{};
-		deviceContext->Map(vertexBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubRes);
+		if (FAILED(deviceContext->Map(vertexBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubRes))) {
+			WARN_LOG(RENDERER, "Unable to map quad vertices");
+			return;
+		}
 		memcpy(mappedSubRes.pData, vertices, sizeof(vertices));
 		deviceContext->Unmap(vertexBuffer, 0);
 	    unsigned int stride = sizeof(Vertex);
 	    unsigned int offset = 0;
-		deviceContext->IASetInputLayout(inputLayout);
+		// Native effect stages generate their fullscreen triangle from SV_VertexID.
+		deviceContext->IASetInputLayout(generatedVertices ? nullptr : inputLayout.get());
 		deviceContext->IASetVertexBuffers(0, 1, &vertexBuffer.get(), &stride, &offset);
 
 		// Render states
-		deviceContext->OMSetDepthStencilState(depthStencilState, 0);
+		deviceContext->OMSetDepthStencilState(stencil != nullptr ? stencil : static_cast<ID3D11DepthStencilState *>(depthStencilState), stencilReference);
 		deviceContext->RSSetState(rasterizerState);
-		deviceContext->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-		deviceContext->VSSetShader(rotate ? rotateVertexShader : vertexShader, nullptr, 0);
-		deviceContext->PSSetShader(pixelShader, nullptr, 0);
+		deviceContext->IASetPrimitiveTopology(topology);
+		deviceContext->VSSetShader(customVertexShader != nullptr ? customVertexShader : (rotate ? rotateVertexShader : vertexShader), nullptr, 0);
+		deviceContext->PSSetShader(customPixelShader, nullptr, 0);
 		deviceContext->GSSetShader(nullptr, nullptr, 0);
 		deviceContext->HSSetShader(nullptr, nullptr, 0);
 		deviceContext->DSSetShader(nullptr, nullptr, 0);
 		deviceContext->CSSetShader(nullptr, nullptr, 0);
 
-		static const float white[] = { 1.f, 1.f, 1.f, 1.f };
-		if (color == nullptr)
-			color = white;
 		D3D11_MAPPED_SUBRESOURCE mappedSubres;
-		deviceContext->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubres);
-		memcpy(mappedSubres.pData, color, sizeof(float) * 4);
+		if (FAILED(deviceContext->Map(constantBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedSubres))) {
+			WARN_LOG(RENDERER, "Unable to map quad uniforms");
+			return;
+		}
+		memcpy(mappedSubres.pData, constants, constantsSize);
 		deviceContext->Unmap(constantBuffer, 0);
 		deviceContext->PSSetConstantBuffers(0, 1, &constantBuffer.get());
+		deviceContext->VSSetConstantBuffers(0, 1, &constantBuffer.get());
 
-		// Bind texture and draw
-        deviceContext->PSSetShaderResources(0, 1, &texView.get());
-        deviceContext->PSSetSamplers(0, 1, &sampler.get());
-        deviceContext->Draw(4, 0);
+		// Bind every declared shader input contiguously from slot zero. The shader-chain
+		// compiler assigns slots this way so resource views and samplers always agree.
+		deviceContext->PSSetShaderResources(0, inputCount, textureViews);
+		deviceContext->PSSetSamplers(0, inputCount, samplers);
+		// Custom post-processing vertex stages may sample the same graph resources.
+		// Binding both stages keeps Slang and ReShade behavior identical to Vulkan/GL.
+		deviceContext->VSSetShaderResources(0, inputCount, textureViews);
+		deviceContext->VSSetSamplers(0, inputCount, samplers);
+		deviceContext->Draw(vertexCount, 0);
 	}
-
-private:
 	struct Vertex {
 		float x, y, u, v;
 	};

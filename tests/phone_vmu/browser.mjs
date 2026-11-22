@@ -12,21 +12,51 @@ function classList() {
  const values=new Set();
  return {values,add:name=>values.add(name),remove:name=>values.delete(name),toggle(name,on){on=on??!values.has(name);if(on)values.add(name);else values.delete(name);return on;}};
 }
-function element() {return {callbacks:{},classList:classList(),dataset:{},addEventListener(event,cb){this.callbacks[event]=cb;},setAttribute(name,value){this[name]=value;},setPointerCapture(){},append(){},appendChild(){},pause(){},play(){return Promise.resolve();}};}
+function element() {return {callbacks:{},classList:classList(),dataset:{},addEventListener(event,cb){this.callbacks[event]=cb;},setAttribute(name,value){this[name]=value;},removeAttribute(name){delete this[name];},setPointerCapture(){},append(){},appendChild(){},pause(){},play(){return Promise.resolve();}};}
 const ids=Array.from(source.matchAll(/id="([^"]+)"/g),match=>match[1]);
 const elements=Object.fromEntries(ids.map(id=>[id,element()]));
 const hardware=Array.from({length:8},(_,index)=>Object.assign(element(),{dataset:{key:String(index)}}));
-const createdElements=[],frameRequests=[],localValues=new Map();
-let drawn,drawCount=0,blanks=0,nextPoll,hideOverlay,pending,requests=0,fail=false,animate,syncMode=false,remoteFlash,checkoutPending=false,settleCheckout;
+const createdElements=[],frameRequests=[],localValues=new Map(),timers=new Map(),qrRequests=[];
+let drawn,drawCount=0,blanks=0,nextPoll,pending,requests=0,fail=false,animate,syncMode=false,remoteFlash,checkoutPending=false,settleCheckout;
+let timerId=0;
+function runTimer(delay){
+ const matching=[...timers].filter(([,timer])=>timer.delay===delay);
+ assert.equal(matching.length,1,`Expected one active ${delay} ms timer`);
+ const [[id,timer]]=matching;
+ timers.delete(id);
+ timer.cb();
+}
 const ctx={createImageData:(w,h)=>({data:new Uint8ClampedArray(w*h*4)}),fillRect(){++blanks;},putImageData(image){drawn=[...image.data];++drawCount;}};
 elements.lcd.getContext=()=>ctx;
 elements.slot.value='0'; elements.slot.selectedOptions=[{text:'A1'}];
+elements['vmu-invite-label'].hidden=elements['vmu-invite-qr'].hidden=true;
 const document={hidden:false,documentElement:{},callbacks:{},addEventListener(event,cb){this.callbacks[event]=cb;},body:{classList:classList()},getElementById:id=>elements[id],querySelectorAll(selector){if(selector==='[data-key]')return hardware;if(selector==='[data-card-edit]')return createdElements.filter(node=>node.dataset.cardEdit!==undefined);return [];},createElement(){const node=element();createdElements.push(node);return node;},createTextNode:text=>({text})};
 const window={callbacks:{},localStorage:{getItem:key=>localValues.get(key)??null,setItem:(key,value)=>localValues.set(key,String(value))},addEventListener(event,cb){this.callbacks[event]=cb;}};
-const context=vm.createContext({document,window,navigator:{},crypto:webcrypto,btoa,atob,Uint8Array,AbortController,requestAnimationFrame:cb=>{animate=cb;},
- setTimeout(cb,delay){if(delay===100)queueMicrotask(cb);else if(delay===4000)hideOverlay=cb;else if(delay!==2500&&delay!==5000)nextPoll=cb;return 1;},clearTimeout(){},
+window.location={href:'http://192.168.1.2:8080/vmu/',hash:''};
+const tabValues=new Map();
+window.sessionStorage={getItem:key=>tabValues.get(key),setItem:(key,value)=>tabValues.set(key,value),removeItem:key=>tabValues.delete(key)};
+window.history={state:null,replaceState(state,title,url){this.state=state;window.location.href=url;window.location.hash=new URL(url).hash;}};
+let closeLocal=true;
+// The browser script owns the UI. Leave signaling pending until each case ends the session.
+class WaitingPeer {
+ createDataChannel(){return {close(){}};}
+ createOffer(){return new Promise(()=>{});}
+ close(){}
+}
+const context=vm.createContext({document,window,navigator:{},crypto:webcrypto,btoa,atob,Uint8Array,AbortController,RTCPeerConnection:WaitingPeer,
+ confirm:()=>closeLocal,requestAnimationFrame:cb=>{animate=cb;},
+ setTimeout(cb,delay){
+  const id=++timerId;
+  timers.set(id,{cb,delay});
+  const run=()=>{if(timers.delete(id))cb();};
+  if(delay===100)queueMicrotask(run);
+  else if(![2500,4000,5000,10000,120000].includes(delay))nextPoll=run;
+  return id;
+ },
+ clearTimeout(id){timers.delete(id);},
  fetch(path,options={}){
   ++requests;
+  if(path.startsWith('link/qr/'))return new Promise(resolve=>qrRequests.push({path,resolve}));
   if(!path.startsWith('frame/')){
    assert.ok(syncMode,'Local games must not send card requests');
    if(path.startsWith('card/'))return Promise.resolve({ok:true,headers:{get:()=> '"1"'},arrayBuffer:async()=>new Uint8Array(core.flash).buffer});
@@ -45,18 +75,25 @@ const frame=new Array(193).fill(0);frame[0]=1;frame[1]=1;frame[192]=128;
 pending(frame,200,'"a1-v1"');await flush();
 assert.equal(elements.status.textContent,'VMU A1 connected');
 assert.deepEqual(drawn.slice(0,8),[35,57,46,255,158,179,165,255]);
-const tapOutside=()=>document.callbacks.pointerdown({target:{closest:()=>null}});
+const outside={closest:()=>null};
+const pointerClick=target=>document.callbacks.click({target,detail:1});
 elements.lcd.closest=()=>null;
-tapOutside();assert.ok(elements.controls.hidden,'An outside tap must close controls before the timeout');
+document.callbacks.pointerdown({target:outside});
+assert.ok(!elements.controls.hidden,'Pressing outside controls must leave the panel open until click');
+document.callbacks.click({target:outside,detail:0});
+assert.ok(!elements.controls.hidden,'Keyboard activation outside controls must leave the panel open');
+pointerClick(outside);assert.ok(elements.controls.hidden,'An outside tap must close controls before the timeout');
 assert.equal(elements.menu['aria-expanded'],'false');
-document.callbacks.pointerdown({target:elements.lcd});assert.ok(!elements.controls.hidden,'An LCD tap must open hidden controls');
-document.callbacks.pointerdown({target:{closest:()=>elements.controls}});
+document.callbacks.pointerdown({target:elements.lcd});
+assert.ok(elements.controls.hidden,'Pressing the LCD must leave controls hidden until click');
+pointerClick(elements.lcd);assert.ok(!elements.controls.hidden,'An LCD tap must open hidden controls');
+pointerClick({closest:()=>elements.controls});
 assert.ok(!elements.controls.hidden,'Tapping a setting must leave the panel open');
-document.callbacks.pointerdown({target:{closest:()=>elements.menu}});
+pointerClick({closest:()=>elements.menu});
 assert.ok(!elements.controls.hidden,'The controls button must not dismiss its own panel');
-document.callbacks.pointerdown({target:elements.lcd});assert.ok(elements.controls.hidden,'An LCD tap must dismiss open controls without reopening');
+pointerClick(elements.lcd);assert.ok(elements.controls.hidden,'An LCD tap must dismiss open controls without reopening');
 elements.menu.callbacks.click();assert.ok(!elements.controls.hidden);
-hideOverlay();assert.ok(elements.controls.hidden,'The existing idle timeout must still close controls');
+runTimer(4000);assert.ok(elements.controls.hidden,'The existing idle timeout must still close controls');
 elements.layout.callbacks.click();assert.ok(document.body.classList.values.has('lcd-only'));
 elements.hide.callbacks.click();assert.ok(elements.controls.hidden);
 elements.rotate.callbacks.click();assert.equal(elements.rotate['aria-pressed'],'true');
@@ -113,12 +150,17 @@ assert.equal(vm.runInContext('player.speed',context),1);
 elements.speed.value='10';elements.speed.callbacks.change();
 const event=id=>({pointerId:id,preventDefault(){}});
 hardware[4].callbacks.pointerdown(event(10));hardware[5].callbacks.pointerdown(event(11));
-tapOutside();assert.ok(elements.controls.hidden,'Using VMU buttons must dismiss the settings panel');
 animate(1);animate(31);assert.equal(core.flash[0x3000],207,'Two fingers must hold A+B');
 hardware[4].callbacks.pointercancel(event(10));hardware[5].callbacks.lostpointercapture(event(11));
 animate(61);assert.equal(core.flash[0x3000],255,'Cancelled/lost touches must release input');
+assert.ok(!elements.controls.hidden,'Cancelled button touches must leave controls open');
+hardware[4].closest=outside.closest;
 const keyboard={key:'a',code:'KeyA',target:{closest:()=>null},preventDefault(){}};
-document.callbacks.keydown(keyboard);hardware[4].callbacks.pointerdown(event(12));hardware[4].callbacks.pointerup(event(12));
+document.callbacks.keydown(keyboard);hardware[4].callbacks.pointerdown(event(12));
+document.callbacks.pointerdown({target:hardware[4]});
+assert.ok(!elements.controls.hidden,'Holding a VMU button must leave controls open');
+hardware[4].callbacks.pointerup(event(12));
+pointerClick(hardware[4]);assert.ok(elements.controls.hidden,'A completed VMU button tap must dismiss controls');
 animate(91);assert.equal(core.flash[0x3000],239,'Releasing a touch must preserve a held keyboard key');
 window.callbacks.blur();animate(121);assert.equal(core.flash[0x3000],255,'Lost focus must release every input');
 hardware[7].callbacks.pointerdown(event(13));hardware[7].callbacks.pointerup(event(13));
@@ -126,7 +168,10 @@ assert.match(elements.status.textContent,/Sleeping/);
 hardware[7].callbacks.pointerdown(event(14));hardware[7].callbacks.pointerup(event(14));
 assert.match(elements.status.textContent,/resumed/);
 elements.ff.callbacks.click();assert.equal(vm.runInContext('player.speed',context),10);
-await elements.mirror.callbacks.click();assert.equal(elements.slot.disabled,false);assert.equal(elements.download.hidden,true);
+assert.equal(elements.mirror.textContent,'Close local game');
+closeLocal=false;await elements.mirror.callbacks.click();
+assert.equal(elements.download.hidden,false,'Cancelling a local close must leave the card available to download');
+closeLocal=true;await elements.mirror.callbacks.click();assert.equal(elements.slot.disabled,false);assert.equal(elements.download.hidden,true);
 assert.equal(vm.runInContext('player.speed',context),1,'Returning to the Dreamcast display must reset the FF toggle');
 assert.equal(elements.ff['aria-pressed'],'false');assert.equal(elements.ff.disabled,true);
 const Player=vm.runInContext('PhoneVmuPlayer',context),settingsCard=core.flash.slice();
@@ -199,5 +244,158 @@ assert.equal(vm.runInContext('cardSync.owner.ready',context),true,'Periodic sync
 assert.equal(elements.mirror.disabled,false,'Return should become available after ownership recovers');
 animate(440);animate(470);assert.equal(core.flash[0x3000],255,'Blocked input must not replay after retry');
 await elements.mirror.callbacks.click();assert.equal(vm.runInContext('player.active',context),false);
+vm.runInContext('openGame(settingsCard,"link-vmu.bin")',context);
+const createLink=()=>elements['create-vmu-link'].callbacks.click();
+const closeLink=()=>elements['close-vmu-link'].callbacks.click();
+const invite=elements['vmu-invite'],qr=elements['vmu-invite-qr'],qrPath=elements['vmu-invite-path'];
+const qrReply=url=>({ok:true,json:async()=>({url,size:29,path:'M0 0h1v1h-1z'})});
+const firstInvite=createLink();
+const firstQr=qrRequests.at(-1);
+assert.match(firstQr.path,/^link\/qr\/[0-9a-f]{32}$/);
+assert.equal(invite.value,window.location.href+'#vmu-link='+firstQr.path.split('/').at(-1));
+assert.equal(elements.controls.hidden,false);
+assert.equal(elements['vmu-invite-label'].hidden,false);
+elements.controls.callbacks.pointerdown();
+elements.controls.callbacks.focusin();
+runTimer(10000);
+elements.controls.callbacks.focusout?.();
+assert.equal(elements.controls.hidden,true,'A focused copy field must not pin the Controls panel');
+assert.ok(![...timers.values()].some(({delay})=>delay===10000),'Hiding a focused field must not start a new invite timer');
+const lanInvite=invite.value.replace('192.168.1.2','192.168.1.3');
+firstQr.resolve(qrReply(lanInvite));await firstInvite;
+assert.equal(elements.controls.hidden,true,'A delayed QR must not reopen Controls');
+assert.equal(qr.hidden,undefined);
+assert.equal(qr.viewBox,'-4 -4 37 37');
+assert.equal(qrPath.d,'M0 0h1v1h-1z');
+pointerClick(elements.lcd);
+assert.equal(elements.controls.hidden,false);
+assert.equal(invite.value,lanInvite);
+assert.equal(qrRequests.length,1,'LCD recall must retain the same invitation');
+elements.hide.callbacks.click();
+document.callbacks.keydown({key:'Tab'});
+elements.menu.callbacks.focus();
+let menuKeyPrevented=false;
+document.callbacks.keydown({key:'Enter',target:{closest:selector=>selector.includes('#menu')?elements.menu:null},preventDefault(){menuKeyPrevented=true;}});
+document.callbacks.keyup({key:' ',code:'Space',preventDefault(){menuKeyPrevented=true;}});
+assert.equal(menuKeyPrevented,false,'The Controls button must retain native keyboard activation');
+elements.menu.callbacks.click();
+assert.equal(elements.controls.hidden,false);
+assert.equal(invite.value,lanInvite);
+assert.equal(qrRequests.length,1,'Keyboard recall must retain the same invitation');
+vm.runInContext('vmuLink.session.channel.onopen()',context);
+assert.match(elements['vmu-link-status'].textContent,/linked/i);
+assert.equal(elements['close-vmu-link'].hidden,false);
+assert.equal(elements['vmu-invite-label'].hidden,true);
+assert.equal(invite.value,'');
+assert.equal(qr.hidden,'');
+assert.equal(qrPath.d,undefined);
+runTimer(4000);assert.equal(elements.controls.hidden,true);
+pointerClick(elements.lcd);
+assert.equal(elements['close-vmu-link'].hidden,false,'A linked VMU must still offer Disconnect on recall');
+closeLink();runTimer(4000);
+assert.equal(elements.controls.hidden,true,'The disconnection notice must use the short idle timeout');
+const staleInvite=createLink();
+const staleQr=qrRequests.at(-1);
+closeLink();
+const nextInvite=createLink();
+const nextQr=qrRequests.at(-1);
+const fallback=invite.value;
+staleQr.resolve(qrReply(lanInvite));await staleInvite;
+assert.equal(qr.hidden,'','An earlier room must not restore its QR');
+assert.equal(invite.value,fallback);
+nextQr.resolve({ok:false});await nextInvite;
+assert.equal(invite.value,fallback,'A failed QR request must retain the LAN invite');
+assert.equal(elements['vmu-invite-label'].hidden,false);
+runTimer(120000);
+assert.equal(invite.value,'','A timed-out room must clear the copy field');
+assert.equal(elements['vmu-invite-label'].hidden,true);
+// An invite opened in a second tab inherits a copy of the host's storage.
+// Only the tab holding the original lease may resume that VMU.
+await elements.mirror.callbacks.click();
+const pairing=window.location.href;
+const hostKey=vm.runInContext('cardSync.key',context);
+const lease='b'.repeat(32);
+const record=JSON.stringify({owner:{slot:'0',revision:'"1"',lease,ready:true,sequence:2},card:Buffer.from(settingsCard).toString('base64')});
+tabValues.set(hostKey,record);
+const room='c'.repeat(32);
+window.location.hash='#vmu-link='+room;window.location.href=pairing+window.location.hash;
+window.callbacks.hashchange();
+await vm.runInContext('recoverCard()',context);
+assert.equal(vm.runInContext('cardSync.owner',context),null,'A fresh invite must not restore the host card');
+const guestKey=vm.runInContext('cardSync.key',context);
+assert.notEqual(guestKey,hostKey);
+tabValues.set(guestKey,record);
+vm.runInContext('ownerChannel={postMessage({lease}){recoveryProbe.finish(lease===recoveryProbe.lease);}}',context);
+await vm.runInContext('recoverCard()',context);
+assert.equal(vm.runInContext('cardSync.owner',context),null,'A duplicate tab must not resume a lease held by its original tab');
+assert.ok(!tabValues.has(guestKey)&&tabValues.has(hostKey));
+tabValues.set(guestKey,record);
+vm.runInContext('ownerChannel={postMessage(){}}',context);
+const reload=vm.runInContext('recoverCard()',context);runTimer(350);await reload;
+assert.equal(vm.runInContext('cardSync.owner.slot',context),'0','A reload with no other live owner must recover the card');
+assert.equal(await vm.runInContext('cardSync.checkpoint()',context),true);
+assert.notEqual(vm.runInContext('cardSync.owner.lease',context),lease,'The restored tab must write under its own lease');
+vm.runInContext('changeInvite(undefined,true);updateMode()',context);
+assert.equal(window.location.hash,'');assert.equal(window.history.state.vmuRecoveryRoom,room);
+assert.equal(vm.runInContext('cardSync.key',context),guestKey,'Consuming the invite must preserve reload recovery');
+assert.equal(elements['create-vmu-link'].hidden,false,'Either player can create the next invite after disconnecting');
 assert.ok(blanks>=3);
+
+let pendingRoom;
+function pairedPage(hash,state=null){
+ const nodes=Object.fromEntries(ids.map(id=>[id,element()]));
+ nodes.lcd.getContext=()=>ctx;
+ nodes.slot.value='0';
+ Object.defineProperty(nodes.slot,'selectedOptions',{get(){return [{text:this.value==='1'?'A2':'A1'}];}});
+ const recoveryReads=[];
+ const page={...window,callbacks:{},location:{href:pairing+hash,hash},sessionStorage:{getItem(key){recoveryReads.push(key);return null;}}};
+ page.history={state,replaceState(nextState,title,url){this.state=nextState;page.location.href=url;page.location.hash=new URL(url).hash;}};
+ const pageDocument={...document,callbacks:{},getElementById:id=>nodes[id],querySelectorAll:()=>[]};
+ const pageContext=vm.createContext({...context,window:page,document:pageDocument,inputProgram,requestAnimationFrame:()=>{},setTimeout:()=>0,clearTimeout:()=>{},fetch(path){
+  if(path==='link/pending')return Promise.resolve({ok:!!pendingRoom,text:async()=>pendingRoom});
+  return new Promise(()=>{});
+ }});
+ engine(pageContext);
+ vm.runInContext(readAsset('../../core/network/phone_vmu_sync.h','VMUSYNC'),pageContext);
+ vm.runInContext(script,pageContext);
+ return {nodes,page,recoveryReads,run:code=>vm.runInContext(code,pageContext),navigate(fragment){
+  page.location.hash=fragment;page.location.href=pairing+fragment;page.callbacks.hashchange();
+ }};
+}
+const paired=pairedPage('#A2');
+assert.equal(paired.nodes.slot.value,'1','An A2 pairing link must select A2 on first load');
+const pairedKey=paired.run('cardSync.key');
+assert.equal(pairedKey,hostKey+'#A2');
+paired.navigate('#A1');
+assert.equal(paired.nodes.slot.value,'0','An idle pane must follow slot fragment navigation');
+assert.equal(paired.run('cardSync.key'),hostKey+'#A1');
+paired.navigate('#A2');
+paired.run('loading=true');
+paired.navigate('#A1');
+assert.equal(paired.page.location.hash,'#A2','Slot navigation must preserve a checkout in progress');
+paired.run('loading=false;openGame(inputProgram(),"paired-vmu.bin")');
+paired.navigate('#A1');
+assert.equal(paired.nodes.slot.value,'1');
+assert.equal(paired.page.location.hash,'#A2');
+assert.equal(paired.run('player.active && cardSync.key'),pairedKey,'An active game must keep its original recovery scope');
+assert.equal(paired.nodes['create-vmu-link'].hidden,true);
+assert.equal(paired.nodes['join-vmu-link'].hidden,false);
+assert.equal(paired.nodes['join-vmu-link'].disabled,true,'A2 must wait for A1 to create a room');
+pendingRoom=room;
+paired.run('poll()');await flush();
+assert.equal(paired.nodes['join-vmu-link'].disabled,false,'A2 must discover the pending A1 room');
+paired.nodes['join-vmu-link'].callbacks.click();
+assert.equal(paired.run('vmuLink.session.headers["X-VMU-Link"]'),room);
+paired.navigate('#A1');
+assert.equal(paired.run('vmuLink.state'),'waiting','Slot navigation must preserve a link in progress');
+paired.nodes['close-vmu-link'].callbacks.click();
+assert.equal(paired.nodes['join-vmu-link'].disabled,false,'A2 must be able to retry joining the pending room');
+paired.navigate('#vmu-link='+room);
+assert.equal(paired.run('cardSync.key'),pairedKey);
+assert.equal(paired.page.history.state.vmuRecoverySlot,'A2');
+const pairedReload=pairedPage(paired.page.location.hash,paired.page.history.state);
+assert.equal(pairedReload.nodes.slot.value,'1');
+assert.deepEqual(pairedReload.recoveryReads,[pairedKey],'Reloading an invite in a paired pane must read the same recovery key');
+pairedReload.run('changeInvite(undefined,true)');
+assert.equal(pairedReload.page.location.hash,'#A2','A consumed invite must restore the pairing fragment');
 console.log('Phone browser rendering, overlay, multi-touch, cancellation, and mini-game checks passed');

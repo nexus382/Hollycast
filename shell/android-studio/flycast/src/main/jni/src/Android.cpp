@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <jni.h>
+#include <mutex>
 #include <unistd.h>
 #include <exception>
 #include <stdexcept>
@@ -62,6 +63,8 @@ extern jmethodID showScreenKeyboardMid;
 static jmethodID onGameStateChangeMid;
 extern jmethodID setVGamepadEditModeMid;
 static jmethodID showAlertDialogMid;
+static jmethodID copySensitiveTextToClipboardMid;
+static std::mutex activityRegistrationMutex;
 
 static void emuEventCallback(Event event, void *)
 {
@@ -270,7 +273,6 @@ jmethodID getmicdata;
 jmethodID startRecordingMid;
 jmethodID stopRecordingMid;
 
-//stuff for audio
 jni::ShortArray jsamples;
 jmethodID writeBufferMid;
 jmethodID audioInitMid;
@@ -458,7 +460,6 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_postRest
 	}
 }
 
-// Audio Stuff
 class AndroidAudioBackend : AudioBackend
 {
 public:
@@ -474,7 +475,7 @@ public:
 	bool init() override
 	{
 		jint bufferSize = config::AutoLatency ? 0 : config::AudioBufferSize;
-		return jni::env()->CallBooleanMethod(g_audioBackend, audioInitMid, bufferSize);
+		return jni::env()->CallBooleanMethod(g_audioBackend, audioInitMid, bufferSize, audio::OutputSampleRate);
 	}
 
 	void term() override
@@ -519,7 +520,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_AudioBackend_s
     else {
         g_audioBackend = env->NewGlobalRef(instance);
         writeBufferMid = env->GetMethodID(env->GetObjectClass(g_audioBackend), "writeBuffer", "([SZ)I");
-        audioInitMid = env->GetMethodID(env->GetObjectClass(g_audioBackend), "init", "(I)Z");
+        audioInitMid = env->GetMethodID(env->GetObjectClass(g_audioBackend), "init", "(II)Z");
         audioTermMid = env->GetMethodID(env->GetObjectClass(g_audioBackend), "term", "()V");
         if (jsamples.isNull())
             jsamples = jni::ShortArray(SAMPLE_COUNT * 2).globalRef<jni::ShortArray>();
@@ -604,8 +605,30 @@ void SaveAndroidSettings()
     jni::env()->CallVoidMethod(g_emulator, saveAndroidSettingsMid, (jstring)homeDirectory);
 }
 
+void os_CopySensitiveTextToClipboard(const char *text)
+{
+    JNIEnv *env = jni::env();
+    jobject activity;
+    jmethodID copyMethod;
+    {
+        // Hold a local reference so unregistering the activity cannot invalidate this call.
+        std::lock_guard lock(activityRegistrationMutex);
+        if (g_activity == nullptr || copySensitiveTextToClipboardMid == nullptr)
+            return;
+        activity = env->NewLocalRef(g_activity);
+        copyMethod = copySensitiveTextToClipboardMid;
+    }
+    const jni::Object activityRef(activity);
+    if (activity == nullptr)
+        return;
+    jni::String value(text);
+    if (jstring clipboardText = static_cast<jstring>(value))
+        env->CallVoidMethod(activity, copyMethod, clipboardText);
+}
+
 extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_BaseGLActivity_register(JNIEnv *env, jobject obj, jobject activity)
 {
+    std::lock_guard lock(activityRegistrationMutex);
     if (g_activity != nullptr) {
         env->DeleteGlobalRef(g_activity);
         g_activity = nullptr;
@@ -618,6 +641,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_BaseGLActivity_reg
         onGameStateChangeMid = env->GetMethodID(actClass, "onGameStateChange", "(Z)V");
         setVGamepadEditModeMid = env->GetMethodID(actClass, "setVGamepadEditMode", "(Z)V");
         showAlertDialogMid = env->GetMethodID(actClass, "showAlertDialog", "(Ljava/lang/String;)V");
+        copySensitiveTextToClipboardMid = env->GetMethodID(actClass, "copySensitiveTextToClipboard", "(Ljava/lang/String;)V");
     }
 }
 

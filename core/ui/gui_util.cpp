@@ -18,6 +18,7 @@
     along with reicast.  If not, see <https://www.gnu.org/licenses/>.
  */
 #include "gui_util.h"
+#include "imgread/disc_image.h"
 #include "theme_artwork.h"
 #include "types.h"
 #include "stdclass.h"
@@ -37,7 +38,6 @@
 #include "imgui_stdlib.h"
 #include "gui_font.h"
 #include "IconsFontAwesome6.h"
-#include "stdclass.h"
 #include "rend/osd.h"
 #include "stbi.h"
 #include "util/worker_thread.h"
@@ -240,8 +240,7 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 			error_message.clear();
 
 			auto isSupportedGameExtension = [](const std::string& extension) {
-				return extension == "zip" || extension == "7z" || extension == "chd"
-						|| extension == "gdi" || extension == "cdi" || extension == "cue"
+				return extension == "zip" || extension == "7z" || discimage::supportsExtension(extension)
 						|| (!config::HideLegacyNaomiRoms
 								&& (extension == "bin" || extension == "lst" || extension == "dat"));
 			};
@@ -258,8 +257,11 @@ void select_file_popup(const char *prompt, const StringCallback& callback,
 						std::string extension = get_file_extension(entry.name);
 						if (selectFile)
 						{
+							// Semicolon-delimited filters let package pickers expose several
+							// entry-point types without changing the single-extension API.
 							if ((selectExtension.empty() && isSupportedGameExtension(extension))
-									|| extension == selectExtension)
+									|| extension == selectExtension
+									|| selectExtension.find(";" + extension + ";") != std::string::npos)
 								folderFiles.push_back(entry);
 						}
 						else
@@ -2360,7 +2362,7 @@ namespace SettingsUI {
 
 namespace Detail {
 
-// DuckStation-style layout constants
+// Layout constants
 namespace Layout {
     constexpr float SMALL_POPUP_PADDING = 20.0f;
     constexpr float MENU_BUTTON_PADDING = 8.0f;
@@ -2387,7 +2389,7 @@ static ImVec4 ReadablePopupDisabledTextColor(const ImVec4& bg)
     return ImVec4(text.x, text.y, text.z, std::max(text.w, bg.w));
 }
 
-// Helper: Apply DuckStation-style popup styling
+// Helper: Apply popup styling
 struct PopupStyleScope {
     PopupStyleScope(float padding = Layout::SMALL_POPUP_PADDING, float rounding = Layout::POPUP_ROUNDING) {
         // Popup colors are derived from the current surface so theme switches
@@ -2408,7 +2410,7 @@ struct PopupStyleScope {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, style.Colors[ImGuiCol_ButtonHovered]);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, style.Colors[ImGuiCol_FrameBg]);
 
-        // DuckStation-style window padding and rounding
+        // Window padding and rounding
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(uiScaled(padding), uiScaled(padding)));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, uiScaled(rounding));
         ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, uiScaled(rounding));
@@ -2423,7 +2425,7 @@ struct PopupStyleScope {
     }
 };
 
-// Helper: Begin menu button list (DuckStation-style)
+// Helper: Begin menu button list
 struct BeginMenuButtons {
     BeginMenuButtons() {
         // Apply proper spacing for menu buttons
@@ -2437,7 +2439,7 @@ struct BeginMenuButtons {
     }
 };
 
-// Helper: End menu button list (DuckStation-style)
+// Helper: End menu button list
 struct EndMenuButtons {
     EndMenuButtons() = default;
 };
@@ -2565,12 +2567,12 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
     // Render popup
     bool valueChanged = false;
 
-    // Configure popup window BEFORE opening (DuckStation-style)
+    // Configure popup window BEFORE opening
     centerNextWindow();
     float maxWidth = ImGui::GetIO().DisplaySize.x * (cfg.multiSelect ? 0.9f : 0.5f);
     float maxHeight = ImGui::GetIO().DisplaySize.y * (cfg.multiSelect ? 0.85f : 0.7f);
 
-    // Set fixed width for DuckStation-style choice dialog
+    // Set fixed width for choice dialog
     ImGui::SetNextWindowSizeConstraints(
         ImVec2(cfg.multiSelect ? std::min(uiScaled(Layout::POPUP_MIN_WIDTH), maxWidth) : uiScaled(Layout::POPUP_MIN_WIDTH), 0),
         ImVec2(maxWidth, maxHeight)
@@ -2620,7 +2622,7 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
             ImGui::Spacing();
         }
 
-        // DuckStation-style menu button layout
+        // Menu button layout
         {
             BeginMenuButtons menuButtons;
             int highlightedStorageIdx = -1;
@@ -2721,7 +2723,7 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
     return valueChanged;
 }
 
-// Internal helper to render slider popup (DuckStation-style)
+// Internal helper to render slider popup
 bool RenderSliderPopup(PopupSliderConfig& cfg)
 {
 	static ImGuiID editingPopup = 0;
@@ -2821,7 +2823,7 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
     // Render popup
     bool valueChanged = false;
 
-    // Configure popup window BEFORE opening (DuckStation-style)
+    // Configure popup window BEFORE opening
     centerNextWindow();
     float maxWidth = ImGui::GetIO().DisplaySize.x * 0.85f;
     float maxHeight = ImGui::GetIO().DisplaySize.y * 0.7f;
@@ -2865,7 +2867,7 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Display value range and default value (DuckStation-style)
+        // Display value range and default value
         char rangeText[128];
         snprintf(rangeText, sizeof(rangeText), "Value Range: %d - %d", cfg.minValue, cfg.maxValue);
         ImGui::PushFont(PopupEmphasisFont());
@@ -2888,7 +2890,7 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
         ImGui::Separator();
         ImGui::Spacing();
 
-        // DuckStation-style rounded slider with no border
+        // Rounded slider with no border
         const float frameRounding = 20.0f;
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(frameRounding));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);

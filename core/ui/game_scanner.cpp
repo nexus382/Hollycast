@@ -18,6 +18,8 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include "game_scanner.h"
+#include "hw/naomi/naomi_roms.h"
+#include "imgread/disc_image.h"
 #include "stdclass.h"
 #include "oslib/oslib.h"
 #include "oslib/storage.h"
@@ -431,7 +433,13 @@ void GameScanner::add_game_directory(const std::string& path, bool hideLegacy, s
 			gameName = it->second->description;
 			fileName = fileName + " (" + gameName + ")";
 			GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, true, false, getMediaSize(item));
-			game.system = arcadeSystemName(*it->second);
+			switch (it->second->platform())
+			{
+			case DC_PLATFORM_ATOMISWAVE: game.system = "Atomiswave"; break;
+			case DC_PLATFORM_NAOMI2: game.system = "Naomi 2"; break;
+			case DC_PLATFORM_SYSTEMSP: game.system = "System SP"; break;
+			default: game.system = "Naomi"; break;
+			}
 			result.push_back(std::move(game));
 			continue;
 		}
@@ -453,7 +461,7 @@ void GameScanner::add_game_directory(const std::string& path, bool hideLegacy, s
 			if (arcade_gdroms.count(basename) != 0)
 				continue;
 		}
-		else if (extension != "cdi" && extension != "cue")
+		else if (!discimage::supportsExtension(extension))
 			continue;
 		GameMedia game = makeGameMedia(fileName, item.path, item.name, gameName, false, false, getMediaSize(item));
 		result.push_back(std::move(game));

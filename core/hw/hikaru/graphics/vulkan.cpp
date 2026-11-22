@@ -25,6 +25,19 @@
 #include <limits>
 
 namespace hikaru::graphics {
+const char* vulkanFragmentListDeviceLimitation(VulkanContext& context) {
+    const auto physical = context.GetPhysicalDevice();
+    if (!physical.getFeatures().geometryShader)
+        return "Hikaru fragment-list primitive ordering requires Vulkan geometryShader for gl_PrimitiveID";
+    if (!context.hasPerPixel())
+        return "Hikaru fragment-list collection requires fragment stores and atomics";
+    const auto limits = physical.getProperties().limits;
+    if (limits.maxPerStageDescriptorStorageBuffers < 6 || limits.maxDescriptorSetStorageBuffers < 7
+            || limits.maxBoundDescriptorSets < 2 || limits.maxPushConstantsSize < sizeof(HikaruFragmentListParameters))
+        return "Vulkan device descriptor or push-constant limits do not fit the Hikaru fragment-list collector";
+    return nullptr;
+}
+
 namespace {
 bool diagnosticFlagEnabled(const char* name) {
     const char* value=std::getenv(name);
@@ -49,7 +62,7 @@ vk::Format depthFormat(GLenum format, bool sampled = false) {
     case GL_DEPTH_COMPONENT16: requested = vk::Format::eD16Unorm; break;
     case GL_DEPTH_COMPONENT24: requested = vk::Format::eD24UnormS8Uint; break;
     case GL_DEPTH24_STENCIL8: requested = vk::Format::eD24UnormS8Uint; break;
-    case GL_DEPTH_COMPONENT32F: case GL_DEPTH_COMPONENT: requested = vk::Format::eD32Sfloat; break;
+    case GL_DEPTH_COMPONENT32: case GL_DEPTH_COMPONENT32F: case GL_DEPTH_COMPONENT: requested = vk::Format::eD32Sfloat; break;
     default: requested = VulkanContext::Instance()->GetDepthFormat(); break;
     }
     if (supported(requested)) return requested;
@@ -58,6 +71,14 @@ vk::Format depthFormat(GLenum format, bool sampled = false) {
     for (vk::Format candidate : {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint, vk::Format::eD16Unorm})
         if ((format == GL_DEPTH_COMPONENT16 || candidate != vk::Format::eD16Unorm) && supported(candidate)) return candidate;
     throw std::runtime_error("No supported Hikaru Vulkan depth format");
+}
+vk::ImageAspectFlags imageAspects(vk::Format format, bool depth) {
+    if (!depth)
+        return vk::ImageAspectFlagBits::eColor;
+    auto aspects = vk::ImageAspectFlags(vk::ImageAspectFlagBits::eDepth);
+    if (format == vk::Format::eD24UnormS8Uint || format == vk::Format::eD32SfloatS8Uint)
+        aspects |= vk::ImageAspectFlagBits::eStencil;
+    return aspects;
 }
 vk::Filter filter(GLenum f) { return f == GL_LINEAR ? vk::Filter::eLinear : vk::Filter::eNearest; }
 vk::SamplerAddressMode address(GLenum w) {
@@ -105,7 +126,6 @@ class VulkanBackend final : public Backend {
         std::vector<bool> initializedLevels;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
         bool depth = false, sampleable = true;
-        uint64_t revision = 0;
     };
     static constexpr unsigned BatchDraws = 256, BatchSlots = 8;
     // Four-component UNORM fields include the neighboring alpha/selector bytes.
@@ -158,7 +178,8 @@ class VulkanBackend final : public Backend {
         vk::Format color, depth, metadata;
         std::array<int32_t,MeshShaderSpecializationCount> shader{};
         bool fragmentCollect=false;
-        auto values() const { return std::tie(bitmap,familyResolve,peelComposite,palette,packed,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader,fragmentCollect); }
+        DepthPass depthPass=DepthPass::None;
+        auto values() const { return std::tie(bitmap,familyResolve,peelComposite,palette,packed,depthTest,depthWrite,blend,cull,depthBias,depthFunc,cullFace,frontFace,srcRGB,dstRGB,srcAlpha,dstAlpha,equationRGB,equationAlpha,topology,colorMask,color,depth,metadata,shader,fragmentCollect,depthPass); }
         bool operator==(const PipelineKey& b) const { return values()==b.values(); }
         bool operator<(const PipelineKey& b) const { return values()<b.values(); }
     };
@@ -187,6 +208,7 @@ class VulkanBackend final : public Backend {
     vk::UniqueRenderPass colorOnlyPass;
     std::map<std::tuple<vk::Format,vk::Format,vk::Format>,vk::UniqueRenderPass> renderPasses;
     vk::UniqueShaderModule meshVertex, meshFragment, paletteVertex, paletteFragment, fixedTexturePaletteFragment, bitmapVertex, bitmapFragment, familyFragment, peelFragment;
+    vk::UniqueShaderModule captureDepthFragment, composeDepthFragment;
     struct FragmentListStorage {
         std::unique_ptr<BufferData> heads,status,readback;
         std::array<std::unique_ptr<BufferData>,4> nodes;
@@ -577,9 +599,7 @@ class VulkanBackend final : public Backend {
             src = vk::AccessFlagBits::eShaderRead;
             srcStage = vk::PipelineStageFlagBits::eFragmentShader;
         }
-        vk::ImageAspectFlags aspect = image.depth ? vk::ImageAspectFlags(vk::ImageAspectFlagBits::eDepth) : vk::ImageAspectFlags(vk::ImageAspectFlagBits::eColor);
-        if (image.format == vk::Format::eD24UnormS8Uint || image.format == vk::Format::eD32SfloatS8Uint)
-            aspect |= vk::ImageAspectFlagBits::eStencil;
+        const auto aspect = imageAspects(image.format, image.depth);
         vk::ImageMemoryBarrier b(src,dst,image.layout,next,VK_QUEUE_FAMILY_IGNORED,VK_QUEUE_FAMILY_IGNORED,*image.image,{aspect,0,image.levels,0,1});
         cmd.pipelineBarrier(srcStage,dstStage,{},nullptr,nullptr,b);
         image.layout=next;
@@ -647,7 +667,16 @@ class VulkanBackend final : public Backend {
         auto found=pipelines.find(k);
         if(found!=pipelines.end()){lastPipeline=found;found->second.touched=++pipelineClock;return *found->second.pipeline;}
         auto pass=renderPass(k.color,k.depth,k.metadata);
-        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.packed?(k.palette?*packedPaletteVertex:*packedMeshVertex):k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,k.fragmentCollect?*fragmentCollectShader:k.familyResolve?*familyFragment:k.peelComposite?*peelFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
+        vk::ShaderModule depthFragment;
+        if (k.depthPass != DepthPass::None) {
+            const bool capture = k.depthPass == DepthPass::Capture;
+            auto& cached = capture ? captureDepthFragment : composeDepthFragment;
+            if (!cached)
+                cached = ShaderCompiler::Compile(vk::ShaderStageFlagBits::eFragment,
+                    vulkanFragmentSource(true, capture, false, 1, false, false, k.depthPass));
+            depthFragment = *cached;
+        }
+        vk::PipelineShaderStageCreateInfo stages[2]={{ {},vk::ShaderStageFlagBits::eVertex,k.bitmap?*bitmapVertex:k.packed?(k.palette?*packedPaletteVertex:*packedMeshVertex):k.palette?*paletteVertex:*meshVertex,"main" },{{},vk::ShaderStageFlagBits::eFragment,depthFragment?depthFragment:k.fragmentCollect?*fragmentCollectShader:k.familyResolve?*familyFragment:k.peelComposite?*peelFragment:k.bitmap?*bitmapFragment:k.palette?(k.shader[8]?*paletteFragment:*fixedTexturePaletteFragment):*meshFragment,"main"}};
         std::array<vk::SpecializationMapEntry,MeshShaderSpecializationCount> entries{};
         for(unsigned i=0;i<entries.size();++i)entries[i]=vk::SpecializationMapEntry(i,uint32_t(i*sizeof(int32_t)),sizeof(int32_t));
         vk::SpecializationInfo specialization(entries.size(),entries.data(),sizeof(k.shader),k.shader.data());
@@ -1251,9 +1280,7 @@ public:
         packedVerticesSupported=std::all_of(PackedFormats.begin(),PackedFormats.end(),[&](vk::Format format) {
             return bool(physical.getFormatProperties(format).bufferFeatures&vk::FormatFeatureFlagBits::eVertexBuffer);
         });
-        fragmentListSupported=ctx->hasPerPixel()&&physical.getFeatures().geometryShader&&
-            limits.maxPerStageDescriptorStorageBuffers>=6&&limits.maxDescriptorSetStorageBuffers>=7&&
-            limits.maxBoundDescriptorSets>=2&&limits.maxPushConstantsSize>=sizeof(HikaruFragmentListParameters);
+        fragmentListSupported = vulkanFragmentListDeviceLimitation(*ctx) == nullptr;
         // The base texture aliases palette slot zero; the other three inputs
         // remain depth/metadata or bitmap layers. No descriptor-indexing feature
         // is needed, and small mobile sampler limits keep the scalar texture path.
@@ -1304,7 +1331,9 @@ public:
     void texture(unsigned id,const Texture& info,unsigned level,TextureUpload upload,const void* pixels,size_t bytes) override {
         if(timing.enabled)++timing.uploads;
         const bool fullUpdate=upload==TextureUpload::FullUpdate;
-        const bool depth=(id&0x80000000u)!=0||info.format==GL_DEPTH_COMPONENT16||info.format==GL_DEPTH_COMPONENT24||info.format==GL_DEPTH_COMPONENT32F||info.format==GL_DEPTH24_STENCIL8||info.format==GL_DEPTH_COMPONENT;
+        const bool depth = info.isDepth();
+        const bool sampleable = !info.renderbuffer;
+        const bool sampleDepth = depth && sampleable;
         if(fullUpdate&&(!info.width||!info.height||level!=0||!pixels||bytes==0||depth))throw std::runtime_error("Hikaru Vulkan full texture update requires level-zero color pixel data");
         unsigned levels=info.maxLevel==1000?1u+unsigned(std::floor(std::log2(std::max(info.width,info.height)))):std::max(1u,info.maxLevel+1);
         const unsigned uploadWidth=std::max(1u,info.width>>level),uploadHeight=std::max(1u,info.height>>level);
@@ -1313,12 +1342,15 @@ public:
             if(bytes!=size_t(uploadWidth)*uploadHeight*4)throw std::runtime_error("Hikaru Vulkan full texture update has an invalid byte count");
         }
         auto i=images.find(id);
-        auto fmt=depth?depthFormat(info.format,(id&0x80000000u)==0):colorFormat(info.format);
-        const bool compatible=i!=images.end()&&i->second.extent.width==info.width&&i->second.extent.height==info.height&&i->second.format==fmt&&i->second.levels==(depth?1:levels);
+        auto fmt=depth?depthFormat(info.format,sampleDepth):colorFormat(info.format);
+        const bool compatible = i != images.end() && i->second.extent.width == info.width
+            && i->second.extent.height == info.height && i->second.format == fmt
+            && i->second.sampleable == sampleable && i->second.levels == (depth ? 1 : levels);
         if(fullUpdate&&!compatible)throw std::runtime_error("Hikaru Vulkan full texture update has no compatible allocation");
         reapCompletedDraws();
         if(!compatible) {
-            retireImage(id); auto fresh=makeImage(info.width,info.height,fmt,depth?1:levels,depth,!depth,depth&&(id&0x80000000u)==0);fresh.revision=info.revision;images.emplace(id,std::move(fresh));
+            retireImage(id);
+            images.emplace(id,makeImage(info.width,info.height,fmt,depth?1:levels,depth,!depth,sampleDepth));
         }
         imageInfo[id]=info;
         Image& im=image(id); if(level>=im.levels)throw std::runtime_error("Hikaru Vulkan mip level exceeds allocated image");
@@ -1613,6 +1645,7 @@ public:
         const GLenum frontFace=(d.uniforms.inverted[2]!=0.f)?(d.frontFace==GL_CCW?GL_CW:GL_CCW):d.frontFace;
         PipelineKey key{d.bitmap,d.familyResolve,d.peelComposite,!d.palette.empty(),packed,bool(z&&d.depthTest),bool(z&&d.depthWrite),collecting?false:d.blend,d.cull,d.biasFactor!=0||d.biasUnits!=0,d.depthFunc,d.cullFace,frontFace,d.srcRGB,d.dstRGB,d.srcAlpha,d.dstAlpha,d.equationRGB,d.equationAlpha,d.topology,collecting?std::array<bool,4>{false,false,false,false}:d.colorMask,target.format,z?z->format:vk::Format::eUndefined,metadata?metadata->format:vk::Format::eUndefined,meshShaderSpecialization(d,specializeShaders)};
         key.fragmentCollect=collecting;
+        key.depthPass=d.depthPass;
         auto p=pipeline(key);
         if(boundPipeline!=p){cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,p);boundPipeline=p;}
         const float viewportY=d.color==0?float(target.extent.height)-d.viewport[1]-d.viewport[3]:float(d.viewport[1]);
@@ -1659,6 +1692,9 @@ public:
             else std::memcpy(dstPixel,src,4);
         }
     }
+    bool needsSceneDepth() const override {
+        return ctx->HikaruShaderNeedsSceneDepth();
+    }
     void present(unsigned w,unsigned h) override {
         Image& out=image(0);
         if(out.extent.width!=w||out.extent.height!=h){discardFrameGpuTiming();return;}
@@ -1668,7 +1704,17 @@ public:
         endFrameGpuTiming(cmd);
         flushBatch();
         frameGpu.attempted=false;fragmentGpu.claimed=false;
-        ctx->PresentFrame(*out.image,*out.view,out.extent,h?float(w)/float(h):1.f);
+        const Image* sceneDepth = nullptr;
+        if (presentedDepthTexture) {
+            const auto depth = images.find(presentedDepthTexture);
+            if (depth != images.end() && depth->second.depth && depth->second.sampleable
+                    && depth->second.extent == out.extent
+                    && depth->second.layout == vk::ImageLayout::eDepthStencilAttachmentOptimal)
+                sceneDepth = &depth->second;
+        }
+        ctx->PresentFrame(*out.image, *out.view, out.extent, h ? float(w) / float(h) : 1.f,
+            sceneDepth ? *sceneDepth->image : vk::Image {}, sceneDepth ? *sceneDepth->view : vk::ImageView {}, true,
+            sceneDepth ? imageAspects(sceneDepth->format, true) : vk::ImageAspectFlags {});
         ++geometryFrame;
         if(frameGpu.requested){reapCompletedDraws();pollFrameGpuTiming();}
         pollFragmentGpuTiming();

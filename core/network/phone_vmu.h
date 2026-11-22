@@ -9,16 +9,17 @@
 #include <vector>
 #include <functional>
 
-// The phone is a browser client; hosting is available in standalone desktop builds.
-#if !defined(LIBRETRO) && !defined(TARGET_UWP) && !defined(__ANDROID__) \
-	&& !defined(TARGET_IPHONE) && !defined(__SWITCH__) \
-	&& (defined(_WIN32) || defined(__linux__) || defined(__APPLE__))
+// The VMU page is a browser client; standalone desktop and Android builds can host it.
+#if !defined(LIBRETRO) && !defined(TARGET_UWP) && !defined(TARGET_IPHONE) && !defined(__SWITCH__) \
+	&& (defined(_WIN32) || defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__))
 #define HAVE_PHONE_VMU
 #endif
 
 namespace phone_vmu
 {
 #ifdef HAVE_PHONE_VMU
+constexpr std::size_t CardSize = 128 * 1024;
+
 struct Status
 {
 	bool running = false;

@@ -7,6 +7,10 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import os from 'node:os';
+import { publishJson, redactUiEvidence } from './evidence.mjs';
+import { summarizePerformance } from './telemetry.mjs';
+
+export { summarizePerformance };
 
 const BUTTONS = new Set(['A', 'B', 'C', 'D', 'X', 'Y', 'Z', 'START', 'UP', 'DOWN', 'LEFT', 'RIGHT',
   'UP2', 'DOWN2', 'LEFT2', 'RIGHT2', 'RELOAD', 'INSERT_CARD']);
@@ -17,6 +21,7 @@ const UI_EXPECTABLE_FIELDS = new Set(['semantic_id', 'semantic_label', 'kind', '
   'checkable', 'inputable', 'requires_apply', 'draft_value', 'active', 'text_input_focused', 'password', 'disabled', 'visible']);
 
 const UI_OBSERVATION_MAX_AGE_MS = 4000;
+const uiInspectionStarts = new WeakMap();
 
 export function agentInvocation(nodeExecutable, cli, directory, command, args = [], wsl = false) {
   check([nodeExecutable, cli, directory, command, ...args].every(value => typeof value === 'string' && !/[\r\n\0]/.test(value)),
@@ -50,18 +55,6 @@ async function readJson(file, maximum = 8 * 1024 * 1024) {
   const stat = await fs.lstat(file);
   check(stat.isFile() && !stat.isSymbolicLink() && stat.size <= maximum, `Invalid or oversized JSON: ${file}`);
   return JSON.parse(await fs.readFile(file, 'utf8'));
-}
-
-async function writeNewJson(file, value, beforePublish = null) {
-  const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
-  try {
-    await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
-    // Linking publishes the complete file atomically and refuses replacement,
-    // including when another process wins the race to this evidence path.
-    beforePublish?.();
-    try { await fs.link(temporary, file); }
-    catch (error) { if (error.code === 'EEXIST') throw new Error(`Refusing to overwrite evidence: ${file}`); throw error; }
-  } finally { await fs.rm(temporary, { force: true }); }
 }
 
 async function sha256(file) {
@@ -166,9 +159,13 @@ function uiRequestOptions(context = {}) {
   return { timeoutMs: Math.max(1, Math.min(10000, remaining)), signal: context.signal, deadline: context.deadline };
 }
 
+function isFreshUiObservation(observation) {
+  const started = uiInspectionStarts.get(observation);
+  return started !== undefined && performance.now() - started <= UI_OBSERVATION_MAX_AGE_MS;
+}
+
 function freshUiObservation(observation) {
-  const age = Date.now() - observation?.wall_ms;
-  check(Number.isFinite(age) && age >= 0 && age <= UI_OBSERVATION_MAX_AGE_MS, 'Native UI inspection is stale; inspect again');
+  check(isFreshUiObservation(observation), 'Native UI inspection is stale; inspect again');
   check(Array.isArray(observation.ui?.items), 'Native UI inspection has no item list');
 }
 
@@ -245,25 +242,6 @@ function sameUiValue(left, right) {
     : left === right;
 }
 
-function redactTextInputValues(observation, itemIds = []) {
-  const copy = structuredClone(observation);
-  const redactIds = new Set(itemIds.filter(Number.isInteger));
-  if (copy.ui?.text_input?.password === true && Number.isInteger(copy.ui.text_input.active_item_id))
-    redactIds.add(copy.ui.text_input.active_item_id);
-  for (const item of copy.ui?.items ?? []) {
-    const password = item.password === true;
-    const typedText = item.inputable === true && ['text', 'path', 'file'].includes(item.kind);
-    if (!redactIds.has(item.id) && !password && !typedText && item.text_input_focused !== true) continue;
-    for (const key of ['value', 'value_label', 'draft_value']) {
-      if (!Object.hasOwn(item, key)) continue;
-      if (password || (typeof item[key] === 'string' && (['value', 'draft_value'].includes(key) || typedText)))
-        item[key] = '[redacted]';
-    }
-    if (password || typedText || redactIds.has(item.id)) item.text_value_redacted = true;
-  }
-  return copy;
-}
-
 function auditArguments(op, args) {
   if (op !== 'ui' || args?.action !== 'text' || typeof args.text !== 'string') return args;
   const { text, ...safe } = args;
@@ -271,28 +249,13 @@ function auditArguments(op, args) {
 }
 
 function auditResult(op, args, result) {
-  return op === 'ui' && args?.action === 'text' ? { text_redacted: true } : result;
+  if (op === 'ui' && args?.action === 'text') return { text_redacted: true };
+  return op === 'inspect' ? redactUiEvidence(result) : result;
 }
 
 function safeResponseError(op, args, error) {
   return op === 'ui' && args?.action === 'text'
     ? (error === undefined || error === null ? null : 'Native UI text action rejected') : error ?? null;
-}
-
-export function summarizePerformance(result) {
-  check(result?.domain === 'host_present_interval_ms', 'Unexpected performance measurement domain');
-  check(Array.isArray(result.samples_ms) && result.samples_ms.length >= 2 && result.samples_ms.length <= 36000,
-    'Performance capture needs 2..36000 actual presentation intervals');
-  check(result.samples_ms.every(sample => Number.isFinite(sample) && sample > 0), 'Nonpositive or nonfinite frame interval');
-  check(typeof result.valid === 'boolean' && Array.isArray(result.invalid_reasons), 'Missing native validity evidence');
-  const sorted = [...result.samples_ms].sort((a, b) => a - b);
-  const percentile = fraction => sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)];
-  const mean = sorted.reduce((sum, sample) => sum + sample, 0) / sorted.length;
-  return { domain: result.domain, samples: sorted.length, mean_ms: mean, median_ms: percentile(0.5),
-    p95_ms: percentile(0.95), p99_ms: percentile(0.99), max_ms: sorted.at(-1),
-    presented_intervals_per_second: 1000 / mean, valid: result.valid && result.invalid_reasons.length === 0,
-    invalid_reasons: result.invalid_reasons, observations_during_capture: result.observations_during_capture,
-    gpu_timing_measured: false, physical_latency_measured: false };
 }
 
 function isolatedConfig(profile, game) {
@@ -370,7 +333,7 @@ export class HollycastHarness {
     const manifest = { version: 1, session: randomBytes(16).toString('hex'), executable: exe,
       executable_sha256: await sha256(exe), source_revision: revision, game: media, game_sha256: media ? await sha256(media) : null, seeds,
       profile, created_at: new Date().toISOString(), host: { platform: os.platform(), release: os.release(), arch: os.arch() } };
-    await writeNewJson(path.join(directory, 'session.json'), manifest);
+    await publishJson(path.join(directory, 'session.json'), manifest);
     return new HollycastHarness(directory, manifest);
   }
 
@@ -408,7 +371,7 @@ export class HollycastHarness {
       }
       const ready = await readJson(path.join(this.directory, 'ready.json'), 65536);
       check(ready.version === 1 && ready.session === this.manifest.session && ready.pid === child.pid, 'Readiness identity mismatch');
-      await writeNewJson(path.join(this.directory, 'launch.json'), { pid: child.pid, ready_at: new Date().toISOString(), capabilities: ready.capabilities });
+      await publishJson(path.join(this.directory, 'launch.json'), { pid: child.pid, ready_at: new Date().toISOString(), capabilities: ready.capabilities });
       child.unref();
       return ready;
     } catch (error) {
@@ -454,9 +417,11 @@ export class HollycastHarness {
       checkUiContext(context);
       check(Date.now() < request.expires_ms, 'Request deadline elapsed while waiting for the client lock');
       check(!await exists(commandPath), 'An earlier command is still pending; commands are never retried automatically');
-      await writeNewJson(commandPath, request, () => {
-        checkUiContext(context);
-        check(Date.now() < request.expires_ms, 'Request deadline elapsed before command publication');
+      await publishJson(commandPath, request, {
+        beforePublish() {
+          checkUiContext(context);
+          check(Date.now() < request.expires_ms, 'Request deadline elapsed before command publication');
+        },
       });
       while (!await exists(responsePath)) {
         check(Date.now() < request.expires_ms, 'Command timed out; outcome is unknown. Inputs expire within their lease on the next emulator UI tick');
@@ -565,13 +530,15 @@ export class HollycastHarness {
         controller_released: 'observed result', screenshots_used: 'whether fallback capture was needed' },
       bridge_delivery: { mode: 'explicit_send_and_pull', receiver: 'muse-terminal',
         auto_dispatch: false, live_data_transport: 'native_harness_not_conversation_bridge' } };
-    await writeNewJson(path.resolve(out), job);
+    await publishJson(path.resolve(out), job);
     return job;
   }
 
   async observe({ screenshot = false, signal, deadline, redactTextItemId } = {}) {
     check(typeof screenshot === 'boolean', 'Screenshot option must be boolean');
     const context = { signal, deadline };
+    // Use the client clock and count time spent waiting for the bridge response.
+    const started = performance.now();
     const result = await this.request('inspect', { screenshot }, uiRequestOptions(context));
     checkUiContext(context);
     check(ID.test(result.observation_id) && Array.isArray(result.ui?.items) && Number.isFinite(result.wall_ms), 'Invalid native UI inspection');
@@ -582,8 +549,9 @@ export class HollycastHarness {
       check(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 64 * 1024 * 1024, 'Invalid native screenshot artifact');
       result.screenshot.sha256 = await sha256(file);
     }
-    const evidence = redactTextInputValues(result, [redactTextItemId]);
+    const evidence = redactUiEvidence(result, redactTextItemId);
     await fs.appendFile(path.join(this.directory, 'observations.jsonl'), `${JSON.stringify(evidence)}\n`);
+    uiInspectionStarts.set(result, started);
     this.observation = result;
     return result;
   }
@@ -600,14 +568,14 @@ export class HollycastHarness {
       ?? (action === 'text' ? observation.ui.text_input?.active_item_id : undefined);
     const after = await this.observe({ ...context, redactTextItemId: textItemId });
     return action === 'text' && context.preserveTextReadback !== true
-      ? redactTextInputValues(after, [textItemId]) : after;
+      ? redactUiEvidence(after, textItemId) : after;
   }
 
   async click(target, options = {}, context = {}) {
     const selector = validateUiTarget(target);
     const clickOptions = validateUiClickOptions(options);
     checkUiContext(context);
-    if (!this.observation || Date.now() - this.observation.wall_ms < 0 || Date.now() - this.observation.wall_ms > UI_OBSERVATION_MAX_AGE_MS)
+    if (!isFreshUiObservation(this.observation))
       await this.observe(context);
     const { item } = findUiItem(this.observation, selector);
     return this.ui('click', { item_id: item.id, ...clickOptions,
@@ -815,7 +783,7 @@ export class HollycastHarness {
       result.summary_error = error.message;
     }
     const report = { ...result, summary, comparison_verdict: 'NOT_EVALUATED' };
-    await writeNewJson(path.join(this.directory, `performance-${Date.now()}-${randomBytes(4).toString('hex')}.json`), report);
+    await publishJson(path.join(this.directory, `performance-${Date.now()}-${randomBytes(4).toString('hex')}.json`), report);
     if (interruption) throw interruption;
     return report;
   }

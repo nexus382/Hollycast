@@ -3590,7 +3590,7 @@ draw_mesh (hikaru_renderer_t *hr, hikaru_mesh_t *mesh, int polytype, GLuint *bou
 	upload_viewport (hr, mesh);
     const bool family_test = polytype == HIKARU_POLYTYPE_TRANSLUCENT &&
         (hr->families.active || hr->families.depth[0] || hr->peel.enabled);
-    const bool family_write = hr->families.active && hr->families.depth_pass;
+    const bool family_write = (hr->families.active && hr->families.depth_pass) || hr->scene_depth.capture_writers;
     unsigned pass_rank = polytype == HIKARU_POLYTYPE_TRANSPARENT ? 0 :
         polytype == HIKARU_POLYTYPE_OPAQUE ? 1 : polytype == HIKARU_POLYTYPE_SHADOW_A ? 2 : 3;
     // The pass rank precedes the immutable guest mesh number. Both fit exactly
@@ -5143,6 +5143,37 @@ resolve_family_targets(hikaru_renderer_t *hr)
 }
 
 static void
+capture_viewport_depth(hikaru_renderer_t *hr, unsigned scene, GLuint first, GLuint second)
+{
+	/* Depth tests restart at each guest viewport. Keep earlier viewport pixels
+	 * wherever this viewport produced no depth-writing fragment. */
+	glBindFramebuffer(GL_FRAMEBUFFER, hr->scene_depth.capture_fb);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hr->scene_depth.retained[scene], 0);
+	glViewport(0, 0, hr->base.internal_width, hr->base.internal_height);
+	glDisable(GL_DEPTH_TEST);
+	glDisable(GL_BLEND);
+	glDisable(GL_CULL_FACE);
+	glUseProgram(hr->scene_depth.capture_program);
+	glBindVertexArray(hr->framebuffer.vao);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glActiveTexture(GL_TEXTURE0 + 1);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glActiveTexture(GL_TEXTURE0 + 2);
+	glBindTexture(GL_TEXTURE_2D, first);
+	glActiveTexture(GL_TEXTURE0 + 3);
+	glBindTexture(GL_TEXTURE_2D, second);
+	/* The RGB bytes encode an integer, so normalized-color dithering must
+	 * not perturb the least significant byte on GLES implementations. */
+	const bool dither = !hikaru_graphics_has_native_dispatch() && glIsEnabled(GL_DITHER);
+	if (dither) glDisable(GL_DITHER);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+	if (dither) glEnable(GL_DITHER);
+	glActiveTexture(GL_TEXTURE0);
+	glEnable(GL_CULL_FACE);
+}
+
+static void
 draw_scene (hikaru_renderer_t *hr)
 {
 	static const int sorted_polytypes[] = {
@@ -5163,6 +5194,15 @@ draw_scene (hikaru_renderer_t *hr)
 	hr->transparency_overflow_seen = false;
 	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &scene_binding);
 	if ((GLuint)scene_binding == hr->framebuffer.fb[1]) scene_index = 1;
+	if (hr->scene_depth.enabled && !hr->scene_depth.failed) {
+		glBindFramebuffer(GL_FRAMEBUFFER, hr->scene_depth.capture_fb);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hr->scene_depth.retained[scene_index], 0);
+		glDisable(GL_SCISSOR_TEST);
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		glClearColor(1, 1, 1, 0);
+		glClear(GL_COLOR_BUFFER_BIT);
+		glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)scene_binding);
+	}
 
 	/* Note that "the pixel ownership test, the scissor test, dithering,
 	 * and the buffer writemasks affect the operation of glClear". */
@@ -5198,8 +5238,21 @@ draw_scene (hikaru_renderer_t *hr)
         }
         hr->families.active=families==3;
         hr->families.depth_pass=false;
+		const bool capture_depth = hr->scene_depth.enabled && !hr->scene_depth.failed &&
+			(hr->num_meshes[vpi][HIKARU_POLYTYPE_TRANSPARENT] || hr->num_meshes[vpi][HIKARU_POLYTYPE_OPAQUE] ||
+			 hr->num_meshes[vpi][HIKARU_POLYTYPE_SHADOW_A] || hr->num_meshes[vpi][HIKARU_POLYTYPE_SHADOW_B]);
         if (!hr->families.active) {
             for (i=0;i<NUMELEM(sorted_polytypes);++i) {
+				if (capture_depth && i == 1) {
+					static const GLenum targets[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+					static const GLuint empty[4] = {0};
+					glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, hr->scene_depth.metadata, 0);
+					glDrawBuffers(2, targets);
+					glDisable(GL_SCISSOR_TEST);
+					glClearBufferuiv(GL_COLOR, 1, empty);
+					setup_scene_scissor(hr->base.internal_width, hr->base.internal_height);
+					hr->scene_depth.capture_writers = true;
+				}
                 if (hr->transparency_sorting==HIKARU_TRANSPARENCY_PER_PIXEL &&
                     sorted_polytypes[i]==HIKARU_POLYTYPE_TRANSLUCENT)
                     continue;
@@ -5207,6 +5260,14 @@ draw_scene (hikaru_renderer_t *hr)
                     hr->num_meshes[vpi][HIKARU_POLYTYPE_TRANSLUCENT])
                     bind_scene_color_target(hr,scene_index);
                 draw_meshes_for_polytype(hr,vpi,sorted_polytypes[i]);
+				if (capture_depth && sorted_polytypes[i] == HIKARU_POLYTYPE_SHADOW_B) {
+					static const GLenum target = GL_COLOR_ATTACHMENT0;
+					hr->scene_depth.capture_writers = false;
+					glDrawBuffers(1, &target);
+					glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, 0, 0);
+					capture_viewport_depth(hr, scene_index, hr->scene_depth.metadata, hr->scene_depth.metadata);
+					glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)scene_binding);
+				}
             }
             draw_transparency_peels(hr,vpi,(GLuint)scene_binding,scene_index);
         } else {
@@ -5227,6 +5288,10 @@ draw_scene (hikaru_renderer_t *hr)
             }
             hr->families.depth_pass=false;
             resolve_family_targets(hr);
+			if (capture_depth) {
+				capture_viewport_depth(hr, scene_index, hr->families.metadata[0], hr->families.metadata[1]);
+				glBindFramebuffer(GL_FRAMEBUFFER, hr->families.color_fb);
+			}
             if(hr->transparency_sorting!=HIKARU_TRANSPARENCY_PER_PIXEL)
                 draw_meshes_for_polytype(hr,vpi,HIKARU_POLYTYPE_TRANSLUCENT);
             draw_transparency_peels(hr,vpi,hr->families.color_fb,scene_index);
@@ -6126,6 +6191,14 @@ static const char *fb_vs_source =
 "	p_texcoords = i_fb_texcoords;						\n"
 "}										\n";
 
+#define BITMAP_COORDINATES \
+"	vec2 layer_uv = vec2((p_texcoords.x - 0.5) / u_layer_x_scale + 0.5, 1.0 - p_texcoords.y);\n" \
+"	float layer_visible = step(0.0, layer_uv.x) * step(layer_uv.x, 1.0);\n"
+
+#define BITMAP_COVERAGE \
+"	float cover_1 = layer_visible * (u_keyed_1 != 0 ? step(0.1, texel_1.a) : 1.0);\n" \
+"	float cover_2 = layer_visible * (u_keyed_2 != 0 ? step(0.1, texel_2.a) : 1.0);\n"
+
 static const char *fb_fs_source =
 "#version 150									\n"
 "										\n"
@@ -6151,8 +6224,7 @@ static const char *fb_fs_source =
 "void main (void) {								\n"
 /* Screen stretching belongs to the final output rectangle. Bitmap planes use
  * native pixel proportions, including their opaque/key-disabled coverage. */
-"\tvec2 layer_uv = vec2((p_texcoords.x - 0.5) / u_layer_x_scale + 0.5, 1.0 - p_texcoords.y);\n"
-"\tfloat layer_visible = step(0.0, layer_uv.x) * step(layer_uv.x, 1.0);\n"
+BITMAP_COORDINATES
 "	vec4 texel_f, texel_b;							\n"
 "										\n"
 "	if (u_invert_f == 0)							\n"
@@ -6176,8 +6248,7 @@ static const char *fb_fs_source =
  * unit 38 chooses that side and unit 3C enables each layer's alpha key. */
 "\tvec4 scene = mix (texel_f, texel_b, u_factor);\n"
 "\tvec4 color = vec4 (0.0);\n"
-"\tfloat cover_1 = layer_visible * (u_keyed_1 != 0 ? step (0.1, texel_1.a) : 1.0);\n"
-"\tfloat cover_2 = layer_visible * (u_keyed_2 != 0 ? step (0.1, texel_2.a) : 1.0);\n"
+BITMAP_COVERAGE
 "\tbool combined = (u_mult_1 != 0.0 && u_direct_1 == 0) || (u_mult_2 != 0.0 && u_direct_2 == 0);\n"
 "\tif (u_mult_2 != 0.0 && u_direct_2 == 0)\n"
 "\t\tcolor = mix (color, vec4 (texel_2.rgb * u_mult_2, 1.0), cover_2);\n"
@@ -6191,6 +6262,43 @@ static const char *fb_fs_source =
 "\tif (u_mult_1 != 0.0 && u_direct_1 != 0)\n"
 "\t\tcolor = mix (color, vec4 (texel_1.rgb * u_mult_1, 1.0), cover_1);\n"
 "	vk_frag_color = color;							\n"
+"}\n";
+
+/* Keep D24 exact without requiring float color attachments on GLES 3. */
+static const char *capture_depth_fs =
+"#version 150\n"
+"#define FAMILY_RESOLVE 1\n"
+"#define HIKARU_CAPTURE_DEPTH 1\n"
+"uniform sampler2D u_front;\n"
+"uniform usampler2D u_layer1, u_layer2;\n"
+"void main() {\n"
+"    ivec2 pixel = ivec2(gl_FragCoord.xy);\n"
+"    uvec2 a = texelFetch(u_layer1, pixel, 0).rg, b = texelFetch(u_layer2, pixel, 0).rg;\n"
+"    if (a.y == 0u && b.y == 0u) discard;\n"
+"    uint z = b.y == 0u || (a.y != 0u && (a.x < b.x || (a.x == b.x && a.y > b.y))) ? a.x : b.x;\n"
+"    vk_frag_color = vec4(float(z >> 16), float((z >> 8) & 255u), float(z & 255u), 255.0) / 255.0;\n"
+"}\n";
+
+static const char *compose_depth_fs =
+"#version 150\n"
+"#define HIKARU_COMPOSE_DEPTH 1\n"
+"uniform sampler2D u_front, u_back, u_layer1, u_layer2;\n"
+"uniform float u_factor, u_mult_1, u_mult_2, u_layer_x_scale;\n"
+"uniform int u_direct_1, u_direct_2, u_keyed_1, u_keyed_2, u_invert_f, u_invert_b;\n"
+"in vec2 p_texcoords;\n"
+"float unpack_depth(vec3 packed_rgb) {\n"
+"    return dot(round(packed_rgb * 255.0), vec3(65536.0, 256.0, 1.0));\n"
+"}\n"
+"void main() {\n"
+BITMAP_COORDINATES
+"    vec4 texel_1 = texture(u_layer1, layer_uv), texel_2 = texture(u_layer2, layer_uv);\n"
+BITMAP_COVERAGE
+"    float depth = 16777215.0;\n"
+"    if (u_invert_f == 0 && u_factor < 1.0) depth = unpack_depth(texture(u_front, p_texcoords).rgb);\n"
+"    if (u_invert_b == 0 && u_factor > 0.0) depth = min(depth, unpack_depth(texture(u_back, p_texcoords).rgb));\n"
+"    if ((u_mult_1 != 0.0 && u_direct_1 != 0 && cover_1 > 0.0) ||\n"
+"        (u_mult_2 != 0.0 && u_direct_2 != 0 && cover_2 > 0.0)) depth = 16777215.0;\n"
+"    gl_FragDepth = (16777215.0 - depth) / 16777215.0;\n"
 "}\n";
 
 /* A separate program keeps integer metadata off the bitmap program's active
@@ -6213,6 +6321,140 @@ static const char *peel_fs_source =
 #define OFFSET(member_) \
 	((const GLvoid *) offsetof (framebuffer_vertex_t, member_))
 
+static void
+locate_composite_uniforms(GLuint program, hikaru_composite_uniforms_t *locs)
+{
+	locs->u_front = get_uniform_loc(program, "u_front");
+	locs->u_back = get_uniform_loc(program, "u_back");
+	locs->u_layer1 = get_uniform_loc(program, "u_layer1");
+	locs->u_layer2 = get_uniform_loc(program, "u_layer2");
+	locs->u_factor = get_uniform_loc(program, "u_factor");
+	locs->u_mult_f = glGetUniformLocation(program, "u_mult_f");
+	locs->u_mult_b = glGetUniformLocation(program, "u_mult_b");
+	locs->u_mult_1 = get_uniform_loc(program, "u_mult_1");
+	locs->u_mult_2 = get_uniform_loc(program, "u_mult_2");
+	locs->u_direct_1 = get_uniform_loc(program, "u_direct_1");
+	locs->u_direct_2 = get_uniform_loc(program, "u_direct_2");
+	locs->u_keyed_1 = get_uniform_loc(program, "u_keyed_1");
+	locs->u_keyed_2 = get_uniform_loc(program, "u_keyed_2");
+	locs->u_invert_f = get_uniform_loc(program, "u_invert_f");
+	locs->u_invert_b = get_uniform_loc(program, "u_invert_b");
+	locs->u_layer_x_scale = get_uniform_loc(program, "u_layer_x_scale");
+}
+
+static void
+allocate_depth_image(GLuint texture, GLenum internal, GLenum format, GLenum type,
+                     unsigned width, unsigned height)
+{
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+	glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0, format, type, NULL);
+}
+
+static void release_scene_depth(hikaru_renderer_t *hr);
+
+static void
+prepare_scene_depth(hikaru_renderer_t *hr)
+{
+	const unsigned width = hr->base.internal_width, height = hr->base.internal_height;
+	if ((hr->scene_depth.failed || hr->scene_depth.capture_program) &&
+	    hr->scene_depth.width == width && hr->scene_depth.height == height &&
+	    hr->scene_depth.output_width == hr->base.width && hr->scene_depth.output_height == hr->base.height)
+		return;
+	if (!hr->scene_depth.capture_program) {
+		hr->scene_depth.width = hr->scene_depth.output_width = 0;
+		hr->scene_depth.capture_program = vk_renderer_compile_program(fb_vs_source, capture_depth_fs);
+		hr->scene_depth.compose_program = vk_renderer_compile_program(fb_vs_source, compose_depth_fs);
+		if (!hr->scene_depth.capture_program || !hr->scene_depth.compose_program)
+			goto failed;
+		glUseProgram(hr->scene_depth.capture_program);
+		glUniform1i(get_uniform_loc(hr->scene_depth.capture_program, "u_layer1"), 2);
+		glUniform1i(get_uniform_loc(hr->scene_depth.capture_program, "u_layer2"), 3);
+		locate_composite_uniforms(hr->scene_depth.compose_program, &hr->scene_depth.locs);
+		glGenTextures(2, hr->scene_depth.retained);
+		glGenTextures(1, &hr->scene_depth.metadata);
+		glGenTextures(1, &hr->scene_depth.output);
+		glGenFramebuffers(1, &hr->scene_depth.capture_fb);
+		if (!hikaru_graphics_has_native_dispatch()) glGenFramebuffers(1, &hr->scene_depth.output_fb);
+	}
+	if (hr->scene_depth.failed || hr->scene_depth.width != width || hr->scene_depth.height != height) {
+		allocate_depth_image(hr->scene_depth.metadata, GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT, width, height);
+		static const GLenum targets[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+		glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, hr->scene_depth.metadata, 0);
+		glDrawBuffers(2, targets);
+		const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+		glDrawBuffers(1, targets);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, 0, 0);
+		if (status != GL_FRAMEBUFFER_COMPLETE) goto failed;
+		glBindFramebuffer(GL_FRAMEBUFFER, hr->scene_depth.capture_fb);
+		glDisable(GL_SCISSOR_TEST);
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+		glClearColor(1, 1, 1, 0);
+		for (unsigned i = 0; i < 2; ++i) {
+			allocate_depth_image(hr->scene_depth.retained[i], GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, width, height);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hr->scene_depth.retained[i], 0);
+			if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+				goto failed;
+			glClear(GL_COLOR_BUFFER_BIT);
+		}
+		hr->scene_depth.width = width;
+		hr->scene_depth.height = height;
+	}
+	if (hr->scene_depth.failed || hr->scene_depth.output_width != hr->base.width || hr->scene_depth.output_height != hr->base.height) {
+		allocate_depth_image(hr->scene_depth.output, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT,
+		                     GL_UNSIGNED_INT, hr->base.width, hr->base.height);
+		if (hr->scene_depth.output_fb) {
+			/* A dedicated real-GL FBO also works when the host draws to framebuffer zero. */
+			static const GLenum none = GL_NONE;
+			glBindFramebuffer(GL_FRAMEBUFFER, hr->scene_depth.output_fb);
+			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, hr->scene_depth.output, 0);
+			glDrawBuffers(1, &none);
+			glReadBuffer(GL_NONE);
+			if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+				goto failed;
+		}
+		hr->scene_depth.output_width = hr->base.width;
+		hr->scene_depth.output_height = hr->base.height;
+	}
+	glBindTexture(GL_TEXTURE_2D, 0);
+	if (glGetError() != GL_NO_ERROR) goto failed;
+	hr->scene_depth.failed = false;
+	return;
+
+failed:
+	/* Keep the color frame available. Retry on a size or selection change. */
+	release_scene_depth(hr);
+	glBindFramebuffer(GL_FRAMEBUFFER, hr->base.target_fbo);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	(void)glGetError();
+	hr->scene_depth.enabled = hr->scene_depth.failed = true;
+	hr->scene_depth.width = width;
+	hr->scene_depth.height = height;
+	hr->scene_depth.output_width = hr->base.width;
+	hr->scene_depth.output_height = hr->base.height;
+	fprintf(stderr, "Hikaru scene depth unavailable at %ux%u (output %ux%u)\n",
+	        width, height, hr->base.width, hr->base.height);
+}
+
+static void
+release_scene_depth(hikaru_renderer_t *hr)
+{
+	if (hr->scene_depth.capture_fb) glDeleteFramebuffers(1, &hr->scene_depth.capture_fb);
+	if (hr->scene_depth.output_fb) glDeleteFramebuffers(1, &hr->scene_depth.output_fb);
+	glDeleteTextures(1, &hr->scene_depth.metadata);
+	glDeleteTextures(2, hr->scene_depth.retained);
+	glDeleteTextures(1, &hr->scene_depth.output);
+	vk_renderer_destroy_program(hr->scene_depth.capture_program);
+	vk_renderer_destroy_program(hr->scene_depth.compose_program);
+	memset(&hr->scene_depth, 0, sizeof(hr->scene_depth));
+}
+
 static int
 build_fb_state (hikaru_renderer_t *hr)
 {
@@ -6225,36 +6467,7 @@ build_fb_state (hikaru_renderer_t *hr)
 	if (!hr->framebuffer.program) return -1;
 	VK_ASSERT_NO_GL_ERROR ();
 
-	hr->framebuffer.locs.u_front =
-		get_uniform_loc (hr->framebuffer.program, "u_front");
-	hr->framebuffer.locs.u_back =
-		get_uniform_loc (hr->framebuffer.program, "u_back");
-	hr->framebuffer.locs.u_layer1 =
-		get_uniform_loc (hr->framebuffer.program, "u_layer1");
-	hr->framebuffer.locs.u_layer2 =
-		get_uniform_loc (hr->framebuffer.program, "u_layer2");
-	hr->framebuffer.locs.u_factor =
-		get_uniform_loc (hr->framebuffer.program, "u_factor");
-	hr->framebuffer.locs.u_mult_f =
-		get_uniform_loc (hr->framebuffer.program, "u_mult_f");
-	hr->framebuffer.locs.u_mult_b =
-		get_uniform_loc (hr->framebuffer.program, "u_mult_b");
-	hr->framebuffer.locs.u_mult_1 =
-		get_uniform_loc (hr->framebuffer.program, "u_mult_1");
-	hr->framebuffer.locs.u_mult_2 =
-		get_uniform_loc (hr->framebuffer.program, "u_mult_2");
-    hr->framebuffer.locs.u_direct_1 = get_uniform_loc(hr->framebuffer.program, "u_direct_1");
-    hr->framebuffer.locs.u_direct_2 = get_uniform_loc(hr->framebuffer.program, "u_direct_2");
-	hr->framebuffer.locs.u_keyed_1 =
-		get_uniform_loc (hr->framebuffer.program, "u_keyed_1");
-	hr->framebuffer.locs.u_keyed_2 =
-		get_uniform_loc (hr->framebuffer.program, "u_keyed_2");
-	hr->framebuffer.locs.u_invert_f =
-		get_uniform_loc (hr->framebuffer.program, "u_invert_f");
-	hr->framebuffer.locs.u_invert_b =
-		get_uniform_loc (hr->framebuffer.program, "u_invert_b");
-	hr->framebuffer.locs.u_layer_x_scale =
-		get_uniform_loc (hr->framebuffer.program, "u_layer_x_scale");
+	locate_composite_uniforms(hr->framebuffer.program, &hr->framebuffer.locs);
 	hr->framebuffer.peel_composite.program = vk_renderer_compile_program(fb_vs_source, peel_fs_source);
 	if (!hr->framebuffer.peel_composite.program) return -1;
 	hr->framebuffer.peel_composite.u_color = get_uniform_loc(hr->framebuffer.peel_composite.program, "u_front");
@@ -6356,6 +6569,7 @@ static void
 destroy_fb_state (hikaru_renderer_t *hr)
 {
 	glBindFramebuffer (GL_FRAMEBUFFER, 0);
+	if (hr->scene_depth.capture_program || hr->scene_depth.compose_program) release_scene_depth(hr);
 	if (hr->framebuffer.vao) glDeleteVertexArrays (1, &hr->framebuffer.vao);
 	if (hr->framebuffer.vbo) glDeleteBuffers (1, &hr->framebuffer.vbo);
 	glDeleteFramebuffers (NUM_FRAMEBUFFERS, hr->framebuffer.fb);
@@ -6591,14 +6805,16 @@ resize_3d_targets (hikaru_renderer_t *hr)
 static void
 composite_framebuffers (hikaru_renderer_t *hr, GLuint n1, GLuint n2,
                         GLuint layer1, GLuint layer2, float mult1, float mult2,
-                        float factor)
+                        float factor, bool depth_output)
 {
     hikaru_gpu_t *gpu = hr->gpu;
     const uint32_t direct = REG1AUNIT(0, 0x38);
-	GLuint f = n1 < 2 ? hr->framebuffer.cb[n1] : n1 == 2 ? layer1 : layer2;
-	GLuint b = n2 < 2 ? hr->framebuffer.cb[n2] : n2 == 2 ? layer1 : layer2;
+	const GLuint *scene = depth_output ? hr->scene_depth.retained : hr->framebuffer.cb;
+	const hikaru_composite_uniforms_t *locs = depth_output ? &hr->scene_depth.locs : &hr->framebuffer.locs;
+	GLuint f = n1 < 2 ? scene[n1] : n1 == 2 ? layer1 : layer2;
+	GLuint b = n2 < 2 ? scene[n2] : n2 == 2 ? layer1 : layer2;
 	/* Composite all the buffers (front, back, layers). */
-	glUseProgram (hr->framebuffer.program);
+	glUseProgram(depth_output ? hr->scene_depth.compose_program : hr->framebuffer.program);
 	VK_ASSERT_NO_GL_ERROR ();
 
 	/* Figure out the GPU framebuffer assignments. */
@@ -6618,25 +6834,25 @@ composite_framebuffers (hikaru_renderer_t *hr, GLuint n1, GLuint n2,
 	glBindTexture (GL_TEXTURE_2D, (f != layer2 && b != layer2) ? layer2 : 0);
 	VK_ASSERT_NO_GL_ERROR ();
 
-	glUniform1i (hr->framebuffer.locs.u_front,  0);
-	glUniform1i (hr->framebuffer.locs.u_back,   1);
-	glUniform1i (hr->framebuffer.locs.u_layer1, 2);
-	glUniform1i (hr->framebuffer.locs.u_layer2, 3);
-	glUniform1f (hr->framebuffer.locs.u_factor, factor);
-	glUniform1f(hr->framebuffer.locs.u_mult_f, n1 == 2 ? mult1 : n1 == 3 ? mult2 : 1.0f);
-	glUniform1f(hr->framebuffer.locs.u_mult_b, n2 == 2 ? mult1 : n2 == 3 ? mult2 : 1.0f);
+	glUniform1i (locs->u_front,  0);
+	glUniform1i (locs->u_back,   1);
+	glUniform1i (locs->u_layer1, 2);
+	glUniform1i (locs->u_layer2, 3);
+	glUniform1f (locs->u_factor, factor);
+	glUniform1f(locs->u_mult_f, n1 == 2 ? mult1 : n1 == 3 ? mult2 : 1.0f);
+	glUniform1f(locs->u_mult_b, n2 == 2 ? mult1 : n2 == 3 ? mult2 : 1.0f);
 	/* A layer selected by the combiner is already included in front/back. */
-	glUniform1f(hr->framebuffer.locs.u_mult_1,
+	glUniform1f(locs->u_mult_1,
 	            layer1 && f != layer1 && b != layer1 ? mult1 : 0.0f);
-	glUniform1f(hr->framebuffer.locs.u_mult_2,
+	glUniform1f(locs->u_mult_2,
 	            layer2 && f != layer2 && b != layer2 ? mult2 : 0.0f);
-    glUniform1i(hr->framebuffer.locs.u_direct_1, !!(direct & 1));
-    glUniform1i(hr->framebuffer.locs.u_direct_2, !!(direct & 2));
-	glUniform1i(hr->framebuffer.locs.u_keyed_1, !!(REG1AUNIT(0, 0x3C) & 2));
-	glUniform1i(hr->framebuffer.locs.u_keyed_2, !!(REG1AUNIT(0, 0x3C) & 4));
-	glUniform1i(hr->framebuffer.locs.u_invert_f, n1 >= 2);
-	glUniform1i(hr->framebuffer.locs.u_invert_b, n2 >= 2);
-	glUniform1f(hr->framebuffer.locs.u_layer_x_scale,
+    glUniform1i(locs->u_direct_1, !!(direct & 1));
+    glUniform1i(locs->u_direct_2, !!(direct & 2));
+	glUniform1i(locs->u_keyed_1, !!(REG1AUNIT(0, 0x3C) & 2));
+	glUniform1i(locs->u_keyed_2, !!(REG1AUNIT(0, 0x3C) & 4));
+	glUniform1i(locs->u_invert_f, n1 >= 2);
+	glUniform1i(locs->u_invert_b, n2 >= 2);
+	glUniform1f(locs->u_layer_x_scale,
 	    MIN2(1.0f, (hr->base.internal_height * 4.0f) / (hr->base.internal_width * 3.0f)));
 	VK_ASSERT_NO_GL_ERROR ();
 
@@ -6645,6 +6861,34 @@ composite_framebuffers (hikaru_renderer_t *hr, GLuint n1, GLuint n2,
 
 	glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
 	VK_ASSERT_NO_GL_ERROR ();
+}
+
+static void
+compose_output_depth(hikaru_renderer_t *hr, GLuint n1, GLuint n2, GLuint layer1, GLuint layer2,
+                     float mult1, float mult2, float factor)
+{
+	/* Native framebuffer zero represents its presentation image. Attaching
+	 * depth to it retains the color pass's native row orientation. */
+	if (hr->scene_depth.output_fb)
+		glBindFramebuffer(GL_FRAMEBUFFER, hr->scene_depth.output_fb);
+	else
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, hr->scene_depth.output, 0);
+	glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_ALWAYS);
+	glDepthMask(GL_TRUE);
+	vk_renderer_clear_depth(0.0f);
+	glClear(GL_DEPTH_BUFFER_BIT);
+	composite_framebuffers(hr, n1, n2, layer1, layer2, mult1, mult2, factor, true);
+	if (hr->scene_depth.output_fb)
+		glBindFramebuffer(GL_FRAMEBUFFER, hr->base.target_fbo);
+	else
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glDisable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	vk_renderer_clear_depth(1.0f);
+	hr->scene_depth.ready = true;
 }
 
 static void
@@ -6675,6 +6919,9 @@ draw (hikaru_renderer_t *hr)
 
 
 	resize_3d_targets (hr);
+	hr->scene_depth.ready = false;
+	if (hr->scene_depth.enabled) prepare_scene_depth(hr);
+	else if (hr->scene_depth.capture_program) release_scene_depth(hr);
 
 	/* We only care about unit 0 for now. (Unit 1 is probably only used
 	 * for the dual-monitor case.) */
@@ -6736,7 +6983,9 @@ draw (hikaru_renderer_t *hr)
 	VK_ASSERT_NO_GL_ERROR ();
 
 
-	composite_framebuffers (hr, n1, n2, layer1, layer2, mult1, mult2, factor);
+	composite_framebuffers(hr, n1, n2, layer1, layer2, mult1, mult2, factor, false);
+	if (hr->scene_depth.enabled && !hr->scene_depth.failed)
+		compose_output_depth(hr, n1, n2, layer1, layer2, mult1, mult2, factor);
 	/* Opt-in diagnosis for distinguishing a black composite from a host
 	 * presentation failure; disabled during normal gameplay. */
 	if (getenv ("HIKARU_TRACE_FRAME")) {
@@ -6910,6 +7159,8 @@ static void
 hikaru_renderer_reset (vk_renderer_t *renderer)
 {
 	hikaru_renderer_t *hr = (hikaru_renderer_t *)renderer;
+	hr->scene_depth.ready = hr->scene_depth.capture_writers = false;
+	hr->scene_depth.width = 0;
     hikaru_gl_diagnostics_end_frame(hr->diagnostics, false);
 	hikaru_gl_fragment_list_reset(hr->fragment_lists.state);
 	hr->fragment_lists.collecting = hr->fragment_lists.failed = false;
@@ -7412,7 +7663,8 @@ int hikaru_vendor_test_widescreen_pixels(void)
         mesh->alternate_mv_index = ~0u; mesh->num = i;
         for (unsigned v = 0; v < 6; ++v) {
             mesh->cpu_vertices[v].position[0] = centers[i] + corners[v][0];
-            mesh->cpu_vertices[v].position[1] = corners[v][1];
+            /* An asymmetric image detects a vertical flip of the depth output. */
+            mesh->cpu_vertices[v].position[1] = corners[v][1] + (i == 2 ? 60 : 0);
             mesh->cpu_vertices[v].position[2] = -1280;
             memcpy(mesh->cpu_vertices[v].diffuse, colors[i], 3);
             mesh->cpu_vertices[v].alpha = 255;
@@ -7428,11 +7680,14 @@ int hikaru_vendor_test_widescreen_pixels(void)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glGenTextures(1, &target); glBindTexture(GL_TEXTURE_2D, target);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 96, 48, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 96, 50, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glGenFramebuffers(1, &fbo); glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) goto cleanup;
     vk_renderer_depth_range(0, 1); vk_renderer_clear_depth(1);
+    hr->base.target_fbo = fbo;
+    hr->base.height = 50;
+    hr->scene_depth.enabled = true;
     static const unsigned widths[] = {64,86,96,64,96,96};
     ok = 1;
     for (unsigned pass = 0; pass < NUMELEM(widths); ++pass) {
@@ -7440,17 +7695,23 @@ int hikaru_vendor_test_widescreen_pixels(void)
         uint8_t pixels[96 * 48 * 4] = {0};
         unsigned counts[4] = {0}, minx[4] = {96,96,96,96}, miny[4] = {48,48,48,48};
         unsigned maxx[4] = {0}, maxy[4] = {0};
-        hr->base.internal_width = width;
+        hr->base.width = hr->base.internal_width = width;
+        hr->mesh_list[0][HIKARU_POLYTYPE_OPAQUE][1].depth_bias = pass & 1 ? 0x400 : 0;
         resize_3d_targets(hr);
-        glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[0]);
+        prepare_scene_depth(hr);
+        if (hr->scene_depth.failed) { ok = 0; goto cleanup; }
+        const unsigned slot = pass & 1;
+        const unsigned front = pass == 5 ? 2 : 0;
+        const float factor = pass == 5 ? 0 : (float)slot;
+        glBindFramebuffer(GL_FRAMEBUFFER, hr->framebuffer.fb[slot]);
         draw_scene(hr);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glViewport(0, 0, width, 48);
+        glViewport(0, 1, width, 48);
         glDisable(GL_SCISSOR_TEST); glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND);
         REG1AUNIT(0, 0x38) = 1;
         REG1AUNIT(0, 0x3c) = pass == 4 ? 0 : 2;
-        composite_framebuffers(hr, pass == 5 ? 2 : 0, 0, layer, 0, 1, 0, 0);
-        glReadPixels(0, 0, width, 48, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        composite_framebuffers(hr, front, 1, layer, 0, 1, 0, factor, false);
+        glReadPixels(0, 1, width, 48, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
         for (unsigned y = 0; y < 48; ++y) for (unsigned x = 0; x < width; ++x)
             for (unsigned c = 0; c < 4; ++c) if (!memcmp(pixels + (y * width + x) * 4, colors[c], 3)) {
                 ++counts[c]; minx[c] = MIN2(minx[c], x); miny[c] = MIN2(miny[c], y);
@@ -7467,6 +7728,31 @@ int hikaru_vendor_test_widescreen_pixels(void)
         }
         if (counts[3] && minx[3] != padding + 40) ok = 0;
         if (counts[2] && minx[2] != padding + 30) ok = 0;
+        compose_output_depth(hr, front, 1, layer, 0, 1, 0, factor);
+        /* GLES3 cannot portably read a depth attachment with glReadPixels.
+         * Sample the published D24 through the normal bitmap pass instead. */
+        const GLuint color = hr->framebuffer.cb[0];
+        hr->framebuffer.cb[0] = hr->scene_depth.output;
+        glViewport(0, 0, width, 50);
+        composite_framebuffers(hr, 0, 0, 0, 0, 0, 0, 0, false);
+        hr->framebuffer.cb[0] = color;
+        uint8_t depth_pixels[96 * 50 * 4];
+        glReadPixels(0, 0, width, 50, GL_RGBA, GL_UNSIGNED_BYTE, depth_pixels);
+        const int geometry_depth = (int)lroundf(255 * (1 - log2f(1281) / log2f(100001)));
+        for (unsigned y = 0; y < 50; ++y) for (unsigned x = 0; x < width; ++x) {
+            int expected_depth = 0;
+            if (y && y < 49) {
+                const uint8_t *rgb = pixels + ((y - 1) * width + x) * 4;
+                for (unsigned c = 0; c < 3; ++c)
+                    if (!memcmp(rgb, colors[c], 3)) expected_depth = geometry_depth;
+            }
+            const int actual = depth_pixels[(y * width + x) * 4];
+            if (abs(actual - expected_depth) > 1) {
+                fprintf(stderr, "widescreen depth pass %u at %u,%u: got %d expected %d\n", pass, x, y, actual, expected_depth);
+                ok = 0;
+                goto cleanup;
+            }
+        }
         ok &= glGetError() == GL_NO_ERROR;
     }
 cleanup:
@@ -7575,6 +7861,14 @@ int hikaru_vendor_test_depth_family_pixels(void)
             // Mixed -> single -> mixed and 8 -> 16 -> 8 reuse the same objects.
             unsigned size=test%3==0?16:8;
             hr->base.internal_width=hr->base.internal_height=size;resize_3d_targets(hr);
+            /* Check both sides of the pattern, then the single-family path after
+             * mixed routing. Seven subsequent empty viewports must retain them. */
+            hr->scene_depth.enabled = mode == 0 && (test == 8 || test == 9 || test == 12);
+            if (hr->scene_depth.enabled) {
+                hr->base.width = hr->base.height = size;
+                prepare_scene_depth(hr);
+                if (hr->scene_depth.failed) { ok = 0; goto cleanup; }
+            }
             vk_renderer_depth_range(test&1?0.2f:0.0f,test&1?0.7f:1.0f);
             unsigned order[4]={0,1,2,3};
             for(unsigned permutation=0;permutation<cases[test].permutations;++permutation){
@@ -7614,6 +7908,18 @@ int hikaru_vendor_test_depth_family_pixels(void)
                     }
                 }
                 ok&=glGetError()==GL_NO_ERROR;
+                if (hr->scene_depth.enabled) {
+                    uint8_t packed[4] = {0};
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER, hr->scene_depth.capture_fb);
+                    glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, packed);
+                    const float encoded = log2f(1 + (test == 9 ? 3.0f : 4.0f)) / log2f(100001);
+                    const float expected = test & 1 ? 0.2f + 0.5f * encoded : encoded;
+                    const int actual = (packed[0] << 16) | (packed[1] << 8) | packed[2];
+                    if (packed[3] != 255 || abs(actual - (int)lroundf(expected * 16777215)) > 3) {
+                        fprintf(stderr, "family scene depth %s got %06x, expected %f\n", cases[test].name, actual, expected);
+                        ok = 0;
+                    }
+                }
                 if(cases[test].permutations>1&&permutation+1<cases[test].permutations){
                     unsigned pivot=2;while(order[pivot]>=order[pivot+1])--pivot;
                     unsigned next=3;while(order[next]<=order[pivot])--next;
@@ -8164,7 +8470,7 @@ int hikaru_vendor_test_layer_pixels(vk_renderer_t *renderer, int format, int key
                            back == 3 ? layer_tex : second_tex,
                            back == 3 ? 0 : multiplier,
                            back == 3 ? multiplier : back == 4 ? 1.0f : 0,
-                           factor);
+                           factor, false);
     for (unsigned i = 0; i < 4; ++i)
         glReadPixels(i & 1, i < 2 ? 479 : 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels[i]);
     ok = glGetError() == GL_NO_ERROR && upload_mult == (format ? 4.0f : 1.0f);

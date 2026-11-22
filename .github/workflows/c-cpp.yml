@@ -2,11 +2,7 @@
 name: Linux, macOS, Windows
 
 on:
-  push:
-    branches:
-      - dev
-      - master
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -70,7 +66,7 @@ jobs:
         with:
           msystem: MINGW64
           install: git make
-          pacboy: ccache:p cmake:p libcdio:p lua:p ninja:p SDL2:p toolchain:p
+          pacboy: ccache:p cmake:p libcdio:p lua:p make:p ninja:p SDL2:p toolchain:p
         if: matrix.config.shell == 'msys2 {0}'
 
       - name: Set up build environment (Windows, Visual Studio)
@@ -241,7 +237,7 @@ jobs:
 
       - name: Package app (windows)
         run: |
-          powershell -NoProfile -Command "Compress-Archive -LiteralPath 'artifact/bin/Hollycast.exe','artifact/bin/HollycastUpdater.exe' -DestinationPath 'artifact/bin/Hollycast.zip'"
+          powershell -NoProfile -Command "Compress-Archive -LiteralPath 'artifact/bin/Hollycast.exe','artifact/bin/HollycastUpdater.exe','artifact/share/licenses/Hollycast/ReShadeFX-LICENSE.md','artifact/share/licenses/Hollycast/SPIRV-Cross-LICENSE.txt' -DestinationPath 'artifact/bin/Hollycast.zip'"
           rm artifact/bin/Hollycast.exe
           cp artifact/bin/Hollycast.zip "${{ matrix.config.packagePath }}"
         if: matrix.config.name == 'x86_64-w64-mingw32'

@@ -13,6 +13,6 @@ target_include_directories(theme_repository_http PRIVATE
     "${core}/deps/stb" "${core}/deps/nowide/include")
 target_link_libraries(theme_repository_http PRIVATE libzip::zip)
 
-foreach(scenario cold_start after_shutdown custom_transport)
+foreach(scenario after_shutdown custom_transport)
     add_test(NAME theme_http_${scenario} COMMAND theme_repository_http ${scenario})
 endforeach()

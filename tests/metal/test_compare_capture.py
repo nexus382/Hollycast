@@ -36,6 +36,7 @@ class CaptureComparisonTest(unittest.TestCase):
     def test_empty_reference_cannot_establish_success(self):
         result = self.compare(Image.new("RGB", (10, 10)), Image.new("RGB", (10, 10)))
         self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("no visible reference surfaces", result.stderr)
 
 
 if __name__ == "__main__":

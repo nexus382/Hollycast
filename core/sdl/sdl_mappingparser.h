@@ -20,7 +20,9 @@
 #pragma once
 #include <SDL.h>
 #include <cstdlib>
+#include <memory>
 #include <string>
+#include <utility>
 
 // Home-made version of SDL_GameControllerGetBindForAxis that returns additional information on axes
 
@@ -45,16 +47,16 @@ struct SDL_GameControllerButtonBind2
 class SDLControllerMappingParser
 {
 public:
+	explicit SDLControllerMappingParser(std::string mapping) : gcMapping(std::move(mapping)) {}
+
 	SDLControllerMappingParser(SDL_GameController *sdlController)
 	{
-		char *gcdb = SDL_GameControllerMapping(sdlController);
-		if (gcdb == nullptr)
-			return;
-		gcMapping = gcdb;
-		SDL_free(gcdb);
+		std::unique_ptr<char, decltype(&SDL_free)> mapping(SDL_GameControllerMapping(sdlController), &SDL_free);
+		if (mapping)
+			gcMapping = mapping.get();
 	}
 
-	SDL_GameControllerButtonBind2 getBindForAxis(SDL_GameControllerAxis sdl_axis, int direction = 0)
+	SDL_GameControllerButtonBind2 getBindForAxis(SDL_GameControllerAxis sdl_axis, int direction = 0) const
 	{
 		SDL_GameControllerButtonBind2 bind{};
 		const char *axisName = SDL_GameControllerGetStringForAxis(sdl_axis);
@@ -84,14 +86,12 @@ public:
 
 		if (mapping[valuePos] == 'b')
 		{
-			// Button
 			bind.bindType = SDL_CONTROLLER_BINDTYPE_BUTTON;
 			bind.value.button = atoi(mapping.substr(valuePos + 1).c_str());
 			return bind;
 		}
 		if (mapping[valuePos] == 'h')
 		{
-			// Hat
 			bind.value.hat.hat = atoi(mapping.substr(valuePos + 1).c_str());
 			auto dotPos = mapping.find('.');
 			if (dotPos == std::string::npos)
@@ -100,7 +100,6 @@ public:
 			bind.bindType = SDL_CONTROLLER_BINDTYPE_HAT;
 			return bind;
 		}
-		// Axis
 		bind.value.axis.axis = 0;
 		bind.value.axis.direction = 0;
 		if (mapping[valuePos] == '+') {
@@ -127,10 +126,8 @@ public:
 		{
 			// Full axis mapped to full axis
 			if (bind.value.axis.direction == 0)
-				// normal
 				bind.value.axis.direction = direction;
 			else
-				// reverse
 				bind.value.axis.direction = -direction;
 		}
 

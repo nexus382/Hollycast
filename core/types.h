@@ -225,7 +225,7 @@ struct settings_t
 
 	struct
 	{
-		std::atomic<bool> online{false}; // Network startup can complete on a worker.
+		std::atomic_bool online{false}; // The render thread also reads network transitions.
 		struct
 		{
 			u8 game[16];

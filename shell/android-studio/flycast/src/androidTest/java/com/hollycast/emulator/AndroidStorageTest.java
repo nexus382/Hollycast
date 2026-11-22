@@ -63,7 +63,6 @@ public class AndroidStorageTest {
                         assertEquals(file.getName(), info.getName());
                         assertTrue(info.isDirectory());
                         assertNotEquals(0, info.getUpdateTime());
-                        assertTrue(info.isDirectory());
 
                         // listContent (from folder)
                         FileInfo[] gdkids = storage.listContent(file.getPath());
@@ -85,7 +84,6 @@ public class AndroidStorageTest {
                                 info = storage.getFileInfo(sfile.getPath());
                                 assertEquals(info.getPath(), sfile.getPath());
                                 assertEquals(info.getName(), sfile.getName());
-                                assertEquals(info.isDirectory(), sfile.isDirectory());
                                 assertNotEquals(0, info.getUpdateTime());
                                 assertFalse(info.isDirectory());
                             } else {

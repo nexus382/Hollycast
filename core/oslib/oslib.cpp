@@ -42,107 +42,12 @@
 #endif
 #include "profiler/fc_profiler.h"
 #include "input/gamepad_device.h"
-#include "input/dreampotato.h"
+#include "input/dreamlink/dreampotato.h"
 #include "i18n.h"
 #include <algorithm>
 
 namespace hostfs
 {
-
-static bool getVmuSlotIndex(const std::string& port, int& bus, int& slot)
-{
-	if (port.size() != 2 || port[0] < 'A' || port[0] > 'D' || port[1] < '1' || port[1] > '2')
-		return false;
-	bus = port[0] - 'A';
-	slot = port[1] - '1';
-	return true;
-}
-
-bool isConfiguredVmuFileNameValid(const std::string& name)
-{
-	if (name.empty() || name.find_first_of("/\\:*?|<>\"") != std::string::npos)
-		return false;
-
-	std::string lower = name;
-	string_tolower(lower);
-	if (lower == "dc_nvmem.bin" || lower == "dc_flash.bin" || lower.size() < 4)
-		return false;
-
-	return lower.compare(lower.size() - 4, 4, ".bin") == 0
-		|| lower.compare(lower.size() - 4, 4, ".vmu") == 0;
-}
-
-std::string getVmuPath(const std::string& port, bool save)
-{
-	std::string vmuName;
-	
-	if (port == "A1" && config::PerGameVmu)
-	{
-		if (settings.platform.isConsole() && !settings.content.gameId.empty())
-		{
-			constexpr std::string_view INVALID_CHARS { " /\\:*?|<>\"" };
-			vmuName = settings.content.gameId;
-			for (char &c: vmuName)
-				if (INVALID_CHARS.find(c) != INVALID_CHARS.npos)
-					c = '_';
-			vmuName += "_vmu_save_A1.bin";
-		}
-		else if (!settings.content.path.empty())
-		{
-			return get_game_save_prefix() + "_vmu_save_A1.bin";
-		}
-	}
-
-	if (vmuName.empty())
-	{
-		int bus;
-		int slot;
-		if (getVmuSlotIndex(port, bus, slot))
-		{
-			// Manual VMU slot selections persist in config. Per-game A1 above is intentionally
-			// resolved first so a game-owned VMU can still override the shared A1 card.
-			const std::string selectedName = config::MapleVmuSlotFileNames[bus][slot].get();
-			if (isConfiguredVmuFileNameValid(selectedName))
-				vmuName = selectedName;
-		}
-	}
-	
-	if (vmuName.empty())
-		vmuName = "vmu_save_" + port + ".bin";
-	
-	// Check user-defined VMU path first
-	if (!config::VMUPath.get().empty())
-	{
-		try {
-			std::string fullpath = hostfs::storage().getSubPath(config::VMUPath, vmuName);
-			if (save || hostfs::storage().exists(fullpath))
-				return fullpath;
-		} catch (const hostfs::StorageException& e) {
-		}
-	}
-	
-	// Fall back to default paths
-	std::string wpath = get_writable_data_path(vmuName);
-	if (save || file_exists(wpath))
-		return wpath;
-	std::string rpath = get_readonly_data_path(vmuName);
-	if (hostfs::storage().exists(rpath))
-		return rpath;
-		
-	if (port == "A1" && config::PerGameVmu && !settings.content.path.empty())
-	{
-		// Legacy path using the rom file name
-		rpath = get_game_save_prefix() + "_vmu_save_A1.bin";
-		if (file_exists(rpath))
-			return rpath;
-	}
-	
-	// VMU saves used to be stored in .reicast, not in .reicast/data
-	rpath = get_readonly_config_path(vmuName);
-	if (file_exists(rpath))
-		return rpath;
-	return wpath;
-}
 
 #ifdef DREAMPOTATO_INTEGRATED_MODE
 std::string getDreamPotatoPath()

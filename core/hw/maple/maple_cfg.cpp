@@ -10,7 +10,7 @@
 #include "stdclass.h"
 #include "serialize.h"
 #include "rewind.h"
-#include "input/maplelinkregistry.h"
+#include "input/dreamlink/maplelinkregistry.h"
 #include "input/mouse.h"
 
 #include <initializer_list>

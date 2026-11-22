@@ -2,6 +2,7 @@
 	Created on: Oct 8, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -268,6 +269,7 @@ protected:
 	bool renderPassStarted = false;
 	std::vector<std::unique_ptr<FramebufferAttachment>> colorAttachments;
 	std::unique_ptr<FramebufferAttachment> depthAttachment;
+	bool preserveSceneDepth = false;
 	vk::Extent2D viewport;
 	vk::ImageView secAccumView {};
 
@@ -357,6 +359,7 @@ public:
 
 protected:
 	std::vector<vk::UniqueFramebuffer> framebuffers;
+	vk::ImageView framebufferDepthView;
 };
 
 class ScreenClassicRender : public ClassicRender
@@ -365,12 +368,11 @@ public:
 	void init(Drawer *drawer) override;
 	void term() override;
 	vk::RenderPass getRenderPass(bool load) override {
-		return load ? *renderPassLoad : *renderPassClear;
+		return *renderPasses[drawer->preserveSceneDepth][load];
 	}
 
 protected:
-	vk::UniqueRenderPass renderPassLoad;
-	vk::UniqueRenderPass renderPassClear;
+	std::array<std::array<vk::UniqueRenderPass, 2>, 2> renderPasses;
 };
 
 class TextureClassicRender : public ClassicRender

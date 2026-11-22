@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright 2026 The Hollycast Authors
 #include "audio_pacer.h"
+#include "audio/sample_rate.h"
 #include "SoundTouch.h"
 #include <algorithm>
 #include <chrono>
@@ -10,8 +11,7 @@
 
 namespace hikaru {
 namespace {
-constexpr double Rate = 44100.0;
-constexpr unsigned FadeFrames = 441;
+constexpr unsigned FadeFrames = audio::OutputSampleRate / 100;
 double steadyTime(void*) {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -24,7 +24,7 @@ AudioPacer::AudioPacer(Sink sink, void* opaque, Clock clock, void* clockOpaque)
       clock(clock ? clock : steadyTime), clockOpaque(clockOpaque)
 {
     auto& touch = processor->touch;
-    touch.setSampleRate(44100);
+    touch.setSampleRate(audio::OutputSampleRate);
     touch.setChannels(2);
     touch.setRate(1);
     touch.setPitch(1);
@@ -64,7 +64,7 @@ bool AudioPacer::beginFrame(bool enabled, unsigned queuedFrames, double totalBlo
             // Clamping each frame's instantaneous speed biases variable frame
             // times downward even when their average is exactly real-time.
             const double decay = haveRate ? std::exp(-elapsed / 0.5) : 0.0;
-            smoothedGuestTime = decay * smoothedGuestTime + frameSamples / Rate;
+            smoothedGuestTime = decay * smoothedGuestTime + static_cast<double>(frameSamples) / audio::OutputSampleRate;
             smoothedWallTime = decay * smoothedWallTime + elapsed;
             const double smoothedSpeed = smoothedGuestTime / smoothedWallTime;
             // Aim for ~59 ms, within the default 64 ms backend buffer. Below
@@ -109,7 +109,7 @@ void AudioPacer::submit(int16_t left, int16_t right)
     if (++inputFrames != input.size() / 2) return;
     processor->touch.putSamples(input.data(), inputFrames);
     inputFrames = 0;
-    constexpr unsigned MaxProcessedFrames = 4410; // 100 ms at 44.1 kHz
+    constexpr unsigned MaxProcessedFrames = audio::OutputSampleRate / 10;
     const unsigned ready = processor->touch.numSamples();
     if (ready > MaxProcessedFrames) {
         const unsigned excess = ready - MaxProcessedFrames;
@@ -117,7 +117,6 @@ void AudioPacer::submit(int16_t left, int16_t right)
         discarded += excess;
     }
     maxPending = std::max(maxPending, processor->touch.numSamples());
-    // Drain each input block immediately; no unbounded processed-output queue.
     std::array<float, 1024> output;
     unsigned n;
     while ((n = processor->touch.receiveSamples(output.data(), output.size() / 2)) != 0)

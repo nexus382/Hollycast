@@ -1,11 +1,12 @@
 // Portions Copyright 2026 The Hollycast Authors
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import os from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
+import { publishJson } from './evidence.mjs';
+import { hasFreshTelemetry, summarizePerformance } from './telemetry.mjs';
 
 const METRICS = {
   game_fps: 'Game FPS', output_fps: 'Output FPS', vblank_hz: 'Guest vblank Hz',
@@ -14,9 +15,6 @@ const METRICS = {
   frame_average_ms: 'OSD average frame time (ms)', process_resident_bytes: 'Resident memory (bytes)',
 };
 const check = (condition, message) => { if (!condition) throw new Error(message); };
-const hasFreshTelemetry = sample => sample?.telemetry?.sample_available === true
-  && sample.telemetry.stale === false && Number.isFinite(sample.telemetry.sample_age_ms)
-  && sample.telemetry.sample_age_ms >= 0 && sample.telemetry.sample_age_ms <= 500;
 
 export function benchmarkSettings(overrides = {}, scenario = 'current') {
   const config = { 'pvr.rend': 0, 'rend.Resolution': 480, 'rend.vsync': true, ...overrides.config };
@@ -61,15 +59,6 @@ export function auditConditions(samples, initial) {
   }
   return { conditions_stable: changes.length === 0, condition_changes: changes,
     warnings: changes.length ? ['Output dimensions or emulator settings changed during capture. Use fixed conditions for performance comparisons.'] : [] };
-}
-
-async function publishJson(file, value, replace = false) {
-  const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
-  try {
-    await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
-    if (replace) await fs.rename(temporary, file);
-    else await fs.link(temporary, file);
-  } finally { await fs.rm(temporary, { force: true }); }
 }
 
 export function renderBenchmarkReport(report) {
@@ -137,7 +126,7 @@ export async function runBenchmark(harness, { durationMs = 60000, warmupMs = 500
       requested_duration_ms: durationMs, scenario, control, game_id: latest?.state.game_id,
       game_state: latest?.telemetry.game_state, osd: latest?.telemetry.osd,
       telemetry_stale: latest?.telemetry.stale, sample_age_ms: latest?.telemetry.sample_age_ms, artifacts: report.artifacts };
-    await publishJson(report.artifacts.status, status, true);
+    await publishJson(report.artifacts.status, status, { replace: true });
     onProgress?.(status);
   };
   const gameplay = sample => {
@@ -270,8 +259,6 @@ export async function runBenchmark(harness, { durationMs = 60000, warmupMs = 500
     catch (error) { report.cleanup.release_error = error.message; }
   }
   if (report.native) {
-    // The existing presentation summarizer owns its domain/validity checks.
-    const { summarizePerformance } = await import('./hollytest.mjs');
     try {
       report.presentation = summarizePerformance(report.native);
       if (!report.presentation.valid) report.errors.push(...report.native.invalid_reasons);

@@ -401,7 +401,8 @@ bool OITDrawer::Draw(const Texture *fogTexture, const Texture *paletteTexture)
 
     	vk::Framebuffer targetFramebuffer = getFramebuffer(render_pass, rendContext->render_passes.size());
     	cmdBuffer.beginRenderPass(
-    			vk::RenderPassBeginInfo(pipelineManager->GetRenderPass(initialPass, finalPass, initialPass && rendContext->clearFramebuffer),
+				vk::RenderPassBeginInfo(pipelineManager->GetRenderPass(initialPass, finalPass,
+						initialPass && rendContext->clearFramebuffer, finalPass && preserveSceneDepth),
     					targetFramebuffer, viewport, clear_colors),
     			vk::SubpassContents::eInline);
 
@@ -517,8 +518,12 @@ void OITDrawer::MakeBuffers(int width, int height, vk::ImageUsageFlags colorUsag
 			commandPool->addToFlight(new Deleter(std::move(attachment)));
 		attachment = std::make_unique<FramebufferAttachment>(
 				GetContext()->GetPhysicalDevice(), device);
-		attachment->Init(maxWidth, maxHeight, GetContext()->GetDepthFormat(),
-				vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eInputAttachment,
+		vk::ImageUsageFlags depthUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eInputAttachment;
+#ifndef LIBRETRO
+		if (&attachment == &depthAttachments[0] && GetContext()->CanSampleDepth())
+			depthUsage |= vk::ImageUsageFlagBits::eSampled;
+#endif
+		attachment->Init(maxWidth, maxHeight, GetContext()->GetDepthFormat(), depthUsage,
 				"DEPTH ATTACHMENT" + std::to_string(&attachment - &depthAttachments[0]));
 	}
 	needAttachmentTransition = true;
@@ -711,6 +716,9 @@ vk::CommandBuffer OITScreenDrawer::NewFrame()
 {
 	if (!frameStarted)
 	{
+#ifndef LIBRETRO
+		preserveSceneDepth = GetContext()->ShouldPreserveSceneDepth();
+#endif
 		frameStarted = true;
 		frameRendered = false;
 		NewImage();
