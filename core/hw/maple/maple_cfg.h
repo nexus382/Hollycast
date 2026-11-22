@@ -121,6 +121,11 @@ struct MapleInputState
 extern MapleInputState mapleInputState[4];
 
 void mcfg_CreateDevices();
+// Snapshot of the created Maple device types, ordered bus * 6 + slot
+// (slot is MAPLE_MAIN_DEV_IDX for the main device). Empty slots report MDT_None.
+void mcfg_GetDeviceTypes(u8* deviceTypes);
+//! Recompute the GGPO VMU digest after device contents changed in memory
+void mcfg_UpdateVmuDigest();
 void mcfg_DestroyDevices(bool full = true);
 void mcfg_SerializeDevices(Serializer& ser);
 void mcfg_DeserializeDevices(Deserializer& deser);

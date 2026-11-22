@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -31,6 +32,13 @@ void stopSession();
 void getInput(MapleInputState inputState[4]);
 bool nextFrame();
 bool active();
+int reconnectSecondsRemaining();
+int reconnectUnpauseSecondsRemaining();
+void cancelReconnect();
+bool reconnectFramePending();
+bool holdSessionForLibrary();
+bool sessionHeldForLibrary();
+void returnToHeldSession();
 void displayStats();
 void endOfFrame();
 void sendChatMessage(int playerNum, const std::string& msg);

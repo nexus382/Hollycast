@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "build.h"
 
 #if FEAT_SHREC == DYNAREC_JIT && HOST_CPU == CPU_X64
@@ -425,6 +426,12 @@ public:
 
 			case shop_fmac:
 				{
+					// Use the interpreter's fused result across hosts, including x64 CPUs without FMA.
+					if (config::GGPOEnable)
+					{
+						shil_chf[op.op](&op);
+						break;
+					}
 					Xbyak::Xmm rs1 = regalloc.MapXRegister(op.rs1);
 					Xbyak::Xmm rs2 = regalloc.MapXRegister(op.rs2);
 					Xbyak::Xmm rs3 = regalloc.MapXRegister(op.rs3);
@@ -448,7 +455,7 @@ public:
 					{
 						movss(rd, rs1);
 					}
-					if (cpu.has(Cpu::tFMA) && !config::GGPOEnable)
+					if (cpu.has(Cpu::tFMA))
 						vfmadd231ss(rd, rs2, rs3);
 					else
 					{
