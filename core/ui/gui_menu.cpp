@@ -252,6 +252,12 @@ void pauseOrResume()
 {
 	if (!::game_started)
 		return;
+	if (gui_has_held_netplay_session())
+	{
+		if (gui_state == GuiState::Main)
+			gui_start_game(settings.content.path);
+		return;
+	}
 	if (gui_state == GuiState::Closed)
 	{
 		emu.stop();
@@ -266,7 +272,8 @@ void pauseOrResume()
 
 void restartGame()
 {
-	gui_request_restart_game();
+	if (!gui_has_held_netplay_session())
+		gui_request_restart_game();
 }
 
 void toggleFastForward()
@@ -551,7 +558,7 @@ void renderSystemMenu()
 #endif
 
 		// Restart
-		if (ImGui::MenuItem(T("Restart"), nullptr, false, ::game_started))
+		if (ImGui::MenuItem(T("Restart"), nullptr, false, ::game_started && !gui_has_held_netplay_session()))
 		{
 			restartGame();
 		}

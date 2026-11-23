@@ -10430,6 +10430,80 @@ void renderControlsTab()
 	}
 }
 
+#ifdef USE_GGPO
+static void renderGgpoAddress(const std::string& address)
+{
+	const std::string endpoint = address + ":" + std::to_string(ggpo::SERVER_PORT);
+	ImGui::PushID(endpoint.c_str());
+	ImGui::TextUnformatted(endpoint.c_str());
+	ImGui::SameLine();
+	if (ImGui::Button(T("Copy")))
+	{
+#ifdef __ANDROID__
+		os_CopySensitiveTextToClipboard(endpoint.c_str());
+#else
+		ImGui::SetClipboardText(endpoint.c_str());
+#endif
+	}
+	ImGui::PopID();
+}
+
+static void renderGgpoLocalAddresses()
+{
+	static std::vector<std::string> addresses;
+	static double refreshAt = 0;
+	const double now = ImGui::GetTime();
+	if (now >= refreshAt)
+	{
+		addresses = ggpo::localIPv4Addresses();
+		refreshAt = now + 3;
+	}
+
+	ImGui::TextUnformatted(T("Your address to share"));
+	ImGui::TextWrapped("%s", T("Same Wi-Fi or home network"));
+	if (addresses.empty())
+		ImGui::TextDisabled("%s", T("No local IPv4 address found."));
+	for (const std::string& address : addresses)
+		renderGgpoAddress(address);
+}
+
+static void renderGgpoInternetAddress()
+{
+	if (!ImGui::TreeNode("GGPOInternet", "%s", T("Playing over the internet?")))
+		return;
+
+#ifndef FEAT_NO_MINIUPNPC
+	static std::future<std::string> lookup;
+	static std::string address;
+	static bool checked = false;
+	if (lookup.valid() && lookup.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
+	{
+		address = lookup.get();
+		checked = true;
+	}
+	{
+		DisabledScope _(lookup.valid());
+		if (ImGui::Button(T("Check for internet address")))
+			lookup = std::async(std::launch::async, ggpo::routerPublicIPv4Address);
+	}
+	if (lookup.valid())
+		ImGui::TextDisabled("%s", T("Checking your router..."));
+	else if (checked && address.empty())
+		ImGui::TextWrapped("%s", T("Your router did not report a public IPv4 address."));
+	else if (!address.empty())
+	{
+		ImGui::TextUnformatted(T("Internet address to share"));
+		renderGgpoAddress(address);
+	}
+#else
+	ImGui::TextWrapped("%s", T("Internet address lookup is unavailable on this device."));
+#endif
+	ImGui::TextWrapped(T("For players on different networks, exchange reachable public IPv4 addresses. Allow UDP port %d on both devices. For Dreamcast, Player 1 also needs TCP port %d for the starting save data. Your router may need port forwarding."),
+		ggpo::SERVER_PORT, ggpo::SERVER_PORT + 1);
+	ImGui::TreePop();
+}
+#endif
+
 void renderNetworkTab()
 {
 	ScopedTwoLineRowStyle networkRowStyle(12.0f, true, 0.5f);
@@ -10509,22 +10583,36 @@ void renderNetworkTab()
 							"Deselect to connect as Player 2."
 						));
 
-					// Peer Address
+#ifdef USE_GGPO
+					renderGgpoLocalAddresses();
+#endif
+
 					RenderGeneralTextInputSettingRow(
 						"GGPONetPeerRow",
 						ICON_FA_NETWORK_WIRED,
-						T("Peer"),
-						T("Your peer IP address and optional port"),
+						T("Other player's address"),
+						T("Enter the address they shared with you."),
 						[]() {
 							InputText("##PeerInput", &config::NetworkServer.get(),
 								ImGuiInputTextFlags_CharsNoBlank | ImGuiInputTextFlags_CallbackCharFilter,
 								dnsCharFilter);
 						},
-						T(
-							"GGPO Peer\n"
-							"Enter your peer's IP address (and optional port).\n"
-							"Use this when connecting directly without matchmaking."
-						));
+						T("Enter the other player's IP address and optional port."));
+
+					ImGui::TextWrapped("%s", T("Exchange addresses, choose Player 1 on one device, then start the same game on both."));
+#ifdef USE_GGPO
+					renderGgpoInternetAddress();
+#endif
+
+					if (config::ActAsServer)
+						RenderGeneralToggleSettingRow(
+							"GGPOAutoDelay",
+							ICON_FA_CLOCK,
+							T("Test Connection and Set Delay"),
+							T("Measure the connection before play and adjust frame delay based on how often the game waits for peer inputs."),
+							static_cast<bool>(config::GGPOAutoDelay),
+							[](bool enabled) { config::GGPOAutoDelay = enabled; },
+							T("Player 1 controls this option. Each player keeps their saved manual delay for sessions that do not use the test."));
 
 					// Frame Delay
 					{
@@ -11372,7 +11460,7 @@ void renderAdvancedTab()
 				"When Rewind is available and enabled, it uses the shared emulation/rendering thread, so multi-threading is disabled.\n\n"
 				"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
 			),
-			rewindForcingShared);
+			rewindForcingShared || gui_has_held_netplay_session());
 
 		ImGui::Spacing();
 
@@ -12211,16 +12299,17 @@ void renderSettingsNew()
 		if (pushedSettingsFont)
 			ImGui::PushFont(settingsTitleFont);
 
+		const bool fromGame = game_started && !gui_has_held_netplay_session();
 		const std::function<void()> exitSettings = [&]() {
 			applyPendingSettings();
 
-			if (game_started)
+			if (fromGame)
 				gui_setState(GuiState::Commands);
 			else
 				gui_setState(GuiState::Main);
 		};
 
-		const char* backLabel = game_started ? T("Back to Game") : T("Back to library");
+		const char* backLabel = fromGame ? T("Back to Game") : T("Back to library");
 
 		// Split into left navigation rail and right content area
 		renderNavigationRail(exitSettings, backLabel);

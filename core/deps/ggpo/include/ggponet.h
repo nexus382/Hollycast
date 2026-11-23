@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -307,6 +308,8 @@ typedef struct GGPONetworkStats {
       int   recv_queue_len;
       int   ping;
       int   kbps_sent;
+      bool  auto_frame_delay;
+      int   startup_rtt_ms;
    } network;
    struct {
       int   local_frames_behind;
@@ -466,6 +469,14 @@ GGPO_API GGPOErrorCode __cdecl ggpo_set_frame_delay(GGPOSession *,
                                                     int frame_delay);
 
 /*
+ * Set the local automatic frame-delay policy for a peer-to-peer session
+ * before adding players. Network stats report whether either peer opted
+ * in once the first sync reply arrives. The startup RTT is the longest
+ * subsequent round trip in milliseconds, or -1 before one is measured.
+ */
+GGPO_API GGPOErrorCode __cdecl ggpo_set_auto_frame_delay(GGPOSession *, bool enabled);
+
+/*
  * ggpo_idle --
  * Should be called periodically by your application to give GGPO.net
  * a chance to do some work.  Most packet transmissions and rollbacks occur
@@ -518,6 +529,15 @@ GGPO_API GGPOErrorCode __cdecl ggpo_synchronize_input(GGPOSession *,
                                                       void *values,
                                                       int size,
                                                       int *disconnect_flags);
+
+/* Synchronizes input and reports a bit for each player whose input was predicted. */
+GGPO_API GGPOErrorCode __cdecl ggpo_synchronize_input_with_prediction(GGPOSession *,
+                                                                      void *values,
+                                                                      int size,
+                                                                      int *predicted_flags);
+
+/* Returns the last confirmed peer-to-peer frame, or -1 if unavailable. */
+GGPO_API int __cdecl ggpo_get_last_confirmed_frame(GGPOSession *);
 
 /*
  * ggpo_disconnect_player --

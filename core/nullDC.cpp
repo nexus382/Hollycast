@@ -207,7 +207,7 @@ bool dc_savestateAllowed() {
 
 void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 {
-	if (!dc_savestateAllowed())
+	if (!dc_savestateAllowed() || emu.isGgpoGuestGame())
 		return;
 
 	lastStateFile.clear();

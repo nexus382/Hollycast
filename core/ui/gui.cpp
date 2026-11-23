@@ -28,6 +28,7 @@
 #include "rend/osd.h"
 #include "cfg/cfg.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_stdlib.h"
 #include "network/net_handshake.h"
 #include "network/ice.h"
@@ -235,6 +236,8 @@ static void updateLibraryMediaProgress()
 
 static Chat chat;
 static std::recursive_mutex guiMutex;
+static std::string heldNetplayPath;
+static bool openingHeldNetplayLibrary;
 using LockGuard = std::lock_guard<std::recursive_mutex>;
 
 static Toast toast;
@@ -499,6 +502,8 @@ bool gui_is_menu_touch_target(float x, float y)
 {
 	// Reuse Android's gesture capture so virtual controls never consume panel taps.
 	return SettingsNew::liveTuneActive()
+			|| (!ggpo::sessionHeldForLibrary()
+					&& (ggpo::reconnectSecondsRemaining() >= 0 || ggpo::reconnectUnpauseSecondsRemaining() >= 0))
 			|| GuiMenu::isTouchTarget(std::round(x * settings.display.pointScale),
 			std::round(y * settings.display.pointScale));
 }
@@ -641,6 +646,8 @@ void gui_plot_render_time(int width, int height)
 
 bool gui_resume_game()
 {
+	if (gui_has_held_netplay_session())
+		return false;
 	if (custom_texture.needsRefresh())
 	{
 		gui_setState(GuiState::Loading);
@@ -736,6 +743,17 @@ void gui_start_game(const std::string& path)
 	if (gui_state != GuiState::Main && gui_state != GuiState::Closed && gui_state != GuiState::Commands
 			&& gui_state != GuiState::Pause)
 		return;
+	const bool returnToNetplay = !heldNetplayPath.empty() && path == heldNetplayPath
+			&& ggpo::sessionHeldForLibrary();
+	heldNetplayPath.clear();
+	openingHeldNetplayLibrary = false;
+	if (returnToNetplay)
+	{
+		cancelUiSound();
+		ggpo::returnToHeldSession();
+		gui_setState(GuiState::Closed);
+		return;
+	}
 	libraryLaunchMode = library::LaunchMode::Default;
 	libraryResumeStatePath.clear();
 	librarySavestateCacheInvalidated = true;
@@ -773,6 +791,8 @@ static void gui_start_library_game(const std::string& path, bool resume, const s
 void gui_stop_game(const std::string& message, bool allowAutoSave)
 {
 	const LockGuard lock(guiMutex);
+	heldNetplayPath.clear();
+	openingHeldNetplayLibrary = false;
 	libraryLaunchMode = library::LaunchMode::Default;
 	libraryResumeStatePath.clear();
 	showExitSaveDialog = false;
@@ -833,6 +853,8 @@ static void finish_exit_save_action(ExitSaveDialogAction action, bool saveFirst)
 
 	if (action == ExitSaveDialogAction::ExitEmulator && !commandLineStart)
 	{
+		heldNetplayPath.clear();
+		openingHeldNetplayLibrary = false;
 		emu.unloadGame(false);
 		mainui_stop();
 		return;
@@ -843,6 +865,17 @@ static void finish_exit_save_action(ExitSaveDialogAction action, bool saveFirst)
 
 static void request_exit_save_action(ExitSaveDialogAction action)
 {
+	const LockGuard lock(guiMutex);
+	if (!heldNetplayPath.empty())
+		return;
+	if (action == ExitSaveDialogAction::ReturnToLibrary && emu.running() && !settings.content.path.empty() && ggpo::holdSessionForLibrary())
+	{
+		heldNetplayPath = settings.content.path;
+		openingHeldNetplayLibrary = true;
+		// Keep pumping gameplay frames until GGPO acknowledges the hold at a frame boundary.
+		gui_setState(GuiState::Closed);
+		return;
+	}
 	const bool maySave = dc_savestateAllowed();
 	if (maySave && !config::AutoSaveState && config::SaveProtection)
 	{
@@ -856,6 +889,12 @@ static void request_exit_save_action(ExitSaveDialogAction action)
 void gui_request_exit_to_library()
 {
 	request_exit_save_action(ExitSaveDialogAction::ReturnToLibrary);
+}
+
+bool gui_has_held_netplay_session()
+{
+	const LockGuard lock(guiMutex);
+	return !heldNetplayPath.empty();
 }
 
 void gui_request_exit_emulator()
@@ -1383,11 +1422,70 @@ void error_popup()
 	}
 }
 
+static void render_reconnect_dialog()
+{
+	const char *popupId = "###GgpoReconnect";
+	const bool open = ImGui::IsPopupOpen(popupId);
+	const int waiting = ggpo::reconnectSecondsRemaining();
+	const int unpausing = ggpo::reconnectUnpauseSecondsRemaining();
+	// The player who opened the library must be able to select the game again.
+	if (!heldNetplayPath.empty() || (waiting < 0 && unpausing < 0))
+	{
+		// Clear the popup entry even when recovery happens while the window is clipped.
+		if (open)
+			ImGui::ClosePopupToLevel(GImGui->BeginPopupStack.Size, true);
+		return;
+	}
+	if (!open)
+	{
+		if (!error_msg.empty() || showExitSaveDialog || showAutoLoadDialog)
+			return;
+		ImGui::OpenPopup(popupId);
+	}
+
+	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	const std::string title = std::string(unpausing >= 0 ? T("Reconnected") : T("Reconnecting to peer")) + popupId;
+	if (ImGui::BeginPopupModal(title.c_str(), nullptr,
+			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings))
+	{
+		if (unpausing >= 0)
+		{
+			ImGui::PushFont(boldFont, uiScaled(20.f));
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + uiScaled(320.f));
+			ImGui::TextWrapped("%s", T("RECONNECTED, UNPAUSING IN..."));
+			ImGui::PopTextWrapPos();
+			ImGui::PopFont();
+			ImGui::PushFont(boldFont, uiScaled(40.f));
+			ImGui::Text("%d", unpausing);
+			ImGui::PopFont();
+		}
+		else
+		{
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + uiScaled(320.f));
+			ImGui::TextWrapped("%s", T("Connection lost. Waiting for the other player to reconnect."));
+			ImGui::PopTextWrapPos();
+			ImGui::Text(T("Time remaining: %d s"), waiting);
+		}
+		ImGui::Spacing();
+		const char *cancel = T("Cancel");
+		const float buttonWidth = std::max(uiScaled(100.f),
+				ImGui::CalcTextSize(cancel).x + 2.f * ImGui::GetStyle().FramePadding.x);
+		if (ImGui::Button(cancel, ImVec2(buttonWidth, uiScaled(40.f))))
+		{
+			ggpo::cancelReconnect();
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::SetItemDefaultFocus();
+		ImGui::EndPopup();
+	}
+}
+
 static void render_modal_dialogs()
 {
 	error_popup();
 	render_exit_save_dialog();
 	render_auto_load_dialog();
+	render_reconnect_dialog();
 }
 
 static void contentpath_warning_popup()
@@ -3224,6 +3322,18 @@ static void gui_display_content()
 		}
 	}
 
+	if (gui_state == GuiState::Main && !heldNetplayPath.empty())
+	{
+		ImGui::TextWrapped("%s", T("Netplay is paused. Select the same game to reconnect."));
+		if (ImGui::Button(T("End Session")))
+		{
+			gui_stop_game("", false);
+			ImGui::End();
+			return;
+		}
+		ImGui::Separator();
+	}
+
 	bool showDcnet = false;
 	if (!customChrome && gui_state == GuiState::Main && ImGui::BeginTabBar("mainTabs"))
 	{
@@ -4793,7 +4903,7 @@ void gui_display_ui()
 	// Scan library paths during the intro, but keep direct launches free of a
 	// worker that gui_start_game would have to join before loading the game.
 	if (gui_state == GuiState::SelectDisk || (gui_state == GuiState::Main
-			&& settings.content.path.empty() && !settings.naomi.slave))
+			&& (settings.content.path.empty() || !heldNetplayPath.empty()) && !settings.naomi.slave))
 		scanner.fetch_game_list();
 
 	if (gui_display_launch_screen())
@@ -4824,7 +4934,7 @@ void gui_display_ui()
 #endif
 
 	// Check for auto-start after menu bar is rendered
-	if (gui_state == GuiState::Main)
+	if (gui_state == GuiState::Main && heldNetplayPath.empty())
 	{
 		if (!settings.content.path.empty() || settings.naomi.slave)
 		{
@@ -5000,6 +5110,11 @@ void gui_draw_osd()
 	SettingsNew::renderShaderLoadingOverlay();
 	// Render modal dialogs (exit dialog, error popups)
 	render_modal_dialogs();
+	if (openingHeldNetplayLibrary && ggpo::sessionHeldForLibrary())
+	{
+		openingHeldNetplayLibrary = false;
+		gui_setState(GuiState::Main);
+	}
 
 	ImGui::Render();
 	uiThreadRunner.execTasks(std::chrono::steady_clock::now());
