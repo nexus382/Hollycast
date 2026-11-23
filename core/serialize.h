@@ -77,7 +77,9 @@ protected:
 class Deserializer : public SerializeBase
 {
 public:
-	Deserializer(const void *data, size_t limit, bool rollback = false);
+	Deserializer(const void *data, size_t limit, bool rollback = false, bool rewind = false);
+	// Full-format, in-memory restores keep live Maple devices open. This is not serialized.
+	bool rewind() const { return _rewind; }
 
 	template<typename T>
 	void deserialize(T& obj)
@@ -125,6 +127,7 @@ private:
 
 	Version _version;
 	const u8 *data;
+	bool _rewind;
 };
 
 class Serializer : public SerializeBase

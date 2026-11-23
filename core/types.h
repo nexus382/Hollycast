@@ -245,7 +245,7 @@ struct settings_t
 		int drivingSimSlave;
 	} naomi;
 
-	bool raHardcoreMode;
+	std::atomic<bool> raHardcoreMode{false}; // Updated by achievement server callbacks.
 };
 
 extern settings_t settings;

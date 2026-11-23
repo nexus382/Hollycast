@@ -1,5 +1,6 @@
 /*
 	Copyright 2023 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -24,6 +25,7 @@ namespace hopper
 
 void init();
 void term();
+bool active();
 
 void serialize(Serializer& ser);
 void deserialize(Deserializer& deser);

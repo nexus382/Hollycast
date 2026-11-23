@@ -15,6 +15,7 @@
 #include "wsi/gl_context.h"
 #include "hw/maple/maple_devs.h"
 #include "emulator.h"
+#include "rewind.h"
 
 #include "x11_keyboard.h"
 
@@ -208,6 +209,9 @@ void input_x11_handle()
 				if (capturing_mouse)
 					x11_uncapture_mouse();
 				capturing_mouse = false;
+				// X11 stops delivering key releases when the window loses focus.
+				x11Keyboard->releaseKeys();
+				rewind_state::releaseRequests();
 				break;
 
 			case ButtonPress:

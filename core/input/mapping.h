@@ -1,5 +1,6 @@
 /*
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of reicast.
 
@@ -293,6 +294,7 @@ public:
 		set_button(0, EMU_BTN_ESCAPE, EMU_BTN_ESCAPE);
 		set_button(0, EMU_BTN_PAUSE, EMU_BTN_PAUSE);
 		set_button(0, EMU_BTN_FFORWARD, EMU_BTN_FFORWARD);
+		set_button(0, EMU_BTN_REWIND, EMU_BTN_REWIND);
 		set_axis(0, DC_AXIS_LEFT, DC_AXIS_LEFT, true);
 		set_axis(0, DC_AXIS_RIGHT, DC_AXIS_RIGHT, true);
 		set_axis(0, DC_AXIS_UP, DC_AXIS_UP, true);

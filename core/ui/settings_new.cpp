@@ -63,6 +63,7 @@
 #include "hw/mem/addrspace.h"
 #include "settings.h"
 #include "emulator.h"
+#include "rewind.h"
 #include "gui.h"
 #include "boxart/boxart.h"
 #include "boxart/screenscraper.h"
@@ -1393,6 +1394,7 @@ static constexpr MappingEntry dcButtons_src[] = {
 	{ EMU_BTN_ESCAPE, Tnop("Exit") },
 	{ EMU_BTN_PAUSE, Tnop("Pause") },
 	{ EMU_BTN_FFORWARD, Tnop("Fast-forward") },
+	{ EMU_BTN_REWIND, Tnop("Rewind (hold)") },
 	{ EMU_BTN_LOADSTATE, Tnop("Load State") },
 	{ EMU_BTN_SAVESTATE, Tnop("Save State") },
 	{ EMU_BTN_LOADSTATE_RAM, Tnop("Load State in RAM") },
@@ -1450,6 +1452,7 @@ static constexpr MappingEntry arcadeButtons_src[] = {
 	{ EMU_BTN_ESCAPE, Tnop("Exit") },
 	{ EMU_BTN_PAUSE, Tnop("Pause") },
 	{ EMU_BTN_FFORWARD, Tnop("Fast-forward") },
+	{ EMU_BTN_REWIND, Tnop("Rewind (hold)") },
 	{ EMU_BTN_LOADSTATE, Tnop("Load State") },
 	{ EMU_BTN_SAVESTATE, Tnop("Save State") },
 	{ EMU_BTN_LOADSTATE_RAM, Tnop("Load State in RAM") },
@@ -2772,7 +2775,7 @@ static const char* kSettingsTabKeywords[] = {
 	"audio sound volume latency mixing output speakers",
 	"controls controller gamepad mapping keyboard buttons sensitivity input",
 	"network online server netplay match link dcnet",
-	"advanced debug underclock developer experimental power",
+	"advanced debug underclock developer experimental power rewind",
 	"about version credits license links",
 };
 
@@ -11159,6 +11162,89 @@ void renderAdvancedTab()
 			));
 	}
 
+	if (RenderCollapsingHeader("RewindSection", ICON_FA_BACKWARD, T("Rewind"), ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		RenderGeneralToggleSettingRow(
+			"RewindEnable",
+			ICON_FA_BACKWARD,
+			T("Enable Rewind"),
+			T("Keep recent gameplay in memory. Hold your mapped Rewind button to rewind (Backspace on a new keyboard mapping; assign it under Controls if your saved mapping has none)."),
+			static_cast<bool>(config::RewindEnable),
+			[](bool enabled) { config::RewindEnable.set(enabled); },
+			T("Rewind\n"
+				"This setting takes effect the next time a game starts and can only be changed while no game is running.\n\n"
+				"When available, Rewind uses the shared emulation/rendering thread and may reduce performance. It is unavailable for Hikaru, System SP, "
+				"Hardcore mode, online or multiboard play, NetDIMM cartridges, arcade card readers or medal hoppers, "
+				"host serial output, passthrough hardware, and phone sharing."),
+			game_started);
+
+		static constexpr int rewindIntervals[] = { 100, 250, 500, 1000 };
+		const char* rewindIntervalLabels[] = { T("0.1 s"), T("0.25 s"), T("0.5 s"), T("1 s") };
+		char customIntervalLabel[16];
+		SettingsUI::PopupConfig rewindIntervalCfg {};
+		rewindIntervalCfg.type = SettingsUI::PopupType::Options;
+		rewindIntervalCfg.options.label = T("Snapshot Interval");
+		rewindIntervalCfg.options.icon = ICON_FA_CLOCK;
+		rewindIntervalCfg.options.popupID = Tnop("RewindIntervalPopup");
+		rewindIntervalCfg.options.options = rewindIntervalLabels;
+		rewindIntervalCfg.options.optionCount = IM_ARRAYSIZE(rewindIntervalLabels);
+		rewindIntervalCfg.options.currentValue = &config::RewindInterval.get();
+		rewindIntervalCfg.options.storageIndexMap = [](int index) {
+			return index >= 0 && index < IM_ARRAYSIZE(rewindIntervals) ? rewindIntervals[index] : 250;
+		};
+		rewindIntervalCfg.options.valueToString = [&rewindIntervalLabels, &customIntervalLabel](int milliseconds) -> const char* {
+			// Match the effective interval used by rewind for hand-edited configurations.
+			milliseconds = std::clamp(milliseconds, rewindIntervals[0], rewindIntervals[IM_ARRAYSIZE(rewindIntervals) - 1]);
+			for (int i = 0; i < IM_ARRAYSIZE(rewindIntervals); ++i)
+				if (rewindIntervals[i] == milliseconds)
+					return rewindIntervalLabels[i];
+			std::snprintf(customIntervalLabel, sizeof(customIntervalLabel), "%d.%03d s",
+				milliseconds / 1000, milliseconds % 1000);
+			return customIntervalLabel;
+		};
+		rewindIntervalCfg.options.valueWidth = 170.0f;
+		RenderGeneralPopupSettingRow(
+			Tnop("RewindIntervalSetting"),
+			T("Time between snapshots in guest time."),
+			rewindIntervalCfg,
+			T("Choose the guest-time interval between rewind snapshots. Changes clear recorded history, so this can only be changed while no game is running."),
+			game_started);
+
+		const char* rewindCompressionLabels[] = { T("Fast"), T("Balanced"), T("Maximum") };
+		SettingsUI::PopupConfig rewindCompressionCfg {};
+		rewindCompressionCfg.type = SettingsUI::PopupType::Options;
+		rewindCompressionCfg.options.label = T("Compression");
+		rewindCompressionCfg.options.icon = ICON_FA_MEMORY;
+		rewindCompressionCfg.options.popupID = Tnop("RewindCompressionPopup");
+		rewindCompressionCfg.options.options = rewindCompressionLabels;
+		rewindCompressionCfg.options.optionCount = IM_ARRAYSIZE(rewindCompressionLabels);
+		rewindCompressionCfg.options.currentValue = &config::RewindCompression.get();
+		rewindCompressionCfg.options.valueWidth = 170.0f;
+		RenderGeneralPopupSettingRow(
+			Tnop("RewindCompressionSetting"),
+			T("Trade capture speed for memory. Higher compression can reduce memory use for the target history window, but costs more CPU per snapshot."),
+			rewindCompressionCfg,
+			T("Fast favors smooth gameplay. Balanced and Maximum reduce memory use and can cost performance. Changes clear recorded history, so this can only be changed while no game is running."),
+			game_started);
+
+		SettingsUI::PopupConfig rewindDurationCfg {};
+		rewindDurationCfg.type = SettingsUI::PopupType::Slider;
+		rewindDurationCfg.slider.label = T("History Duration");
+		rewindDurationCfg.slider.icon = ICON_FA_HOURGLASS_HALF;
+		rewindDurationCfg.slider.popupID = Tnop("RewindDurationPopup");
+		rewindDurationCfg.slider.description = T("Target length of recorded gameplay.");
+		rewindDurationCfg.slider.currentValue = &config::RewindDuration.get();
+		rewindDurationCfg.slider.minValue = 5;
+		rewindDurationCfg.slider.maxValue = 120;
+		rewindDurationCfg.slider.defaultValue = 30;
+		rewindDurationCfg.slider.format = "%d s";
+		rewindDurationCfg.slider.valueWidth = 170.0f;
+		RenderGeneralPopupSettingRow(
+			Tnop("RewindDurationSetting"),
+			T("How much gameplay to keep. Memory limits and skipped captures can shorten the recorded history."),
+			rewindDurationCfg, nullptr, game_started);
+	}
+
 	// CPU & Emulation Section
 	if (RenderCollapsingHeader("CPU&EmulationSection", ICON_FA_MICROCHIP, T("CPU & Emulation"), ImGuiTreeNodeFlags_DefaultOpen))
 	{
@@ -11357,7 +11443,8 @@ void renderAdvancedTab()
 				"If you encounter game-specific boot issues or unusual behavior, try disabling HLE BIOS (and using a real BIOS if available) for maximum compatibility."
 			));
 
-		ImGui::BeginDisabled(gui_has_held_netplay_session());
+		const bool rewindForcingShared = game_started && rewind_state::requiresSharedThread()
+			&& !config::ThreadedRendering;
 		RenderGeneralToggleSettingRow(
 			"MultiThreaded",
 			ICON_FA_GEAR,
@@ -11369,10 +11456,11 @@ void renderAdvancedTab()
 				"Multi-threading\n"
 				"Allows Hollycast to use more than one CPU thread for certain emulation/rendering work.\n\n"
 				"On modern multi-core devices this can improve performance or reduce stutter.\n"
-				"On some drivers/devices it can introduce instability or odd timing issues.\n\n"
+				"On some drivers/devices it can introduce instability or odd timing issues.\n"
+				"When Rewind is available and enabled, it uses the shared emulation/rendering thread, so multi-threading is disabled.\n\n"
 				"If you see new crashes, visual glitches, or inconsistent frame pacing after enabling it, try turning it off and re-testing."
-			));
-		ImGui::EndDisabled();
+			),
+			rewindForcingShared || gui_has_held_netplay_session());
 
 		ImGui::Spacing();
 

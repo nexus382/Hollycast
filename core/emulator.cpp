@@ -43,6 +43,7 @@
 #include "hw/mem/mem_watch.h"
 #include "network/net_handshake.h"
 #include "serialize.h"
+#include "rewind.h"
 #include "hw/pvr/pvr.h"
 #include "profiler/fc_profiler.h"
 #include "oslib/storage.h"
@@ -502,6 +503,7 @@ static void loadSpecialSettings()
 
 void Emulator::dc_reset(bool hard)
 {
+	rewind_state::invalidate();
 	if (hard)
 	{
 		NetworkHandshake::term();
@@ -650,6 +652,8 @@ int getGamePlatform(const std::string& filename)
 
 void Emulator::loadGame(const char *path, LoadProgress *progress)
 {
+	rewind_state::invalidate();
+	rewind_state::releaseRequests();
 	init();
 	assembly_debugger::reset();
 	try {
@@ -877,6 +881,8 @@ void Emulator::runInternal()
 
 void Emulator::unloadGame(bool allowAutoSave)
 {
+	rewind_state::invalidate();
+	rewind_state::releaseRequests();
 	bool skipAutoSaveThisUnload = skipAutoSaveOnNextUnload;
 	skipAutoSaveOnNextUnload = false;
 	try {
@@ -921,6 +927,9 @@ void Emulator::unloadGame(bool allowAutoSave)
 		settings.platform.system = DC_PLATFORM_DREAMCAST;
 		custom_texture.terminate();
 		state = Init;
+#ifndef LIBRETRO
+		sharedRewind = false;
+#endif
 		EventManager::event(Event::Terminate);
 	}
 }
@@ -958,6 +967,7 @@ void Emulator::term()
 
 void Emulator::stop()
 {
+	rewind_state::releaseRequests();
 	if (state != Running)
 		return;
 #ifdef USE_HIKARU
@@ -1011,6 +1021,25 @@ void Emulator::stop()
 		performance_overlay::clearSh4ThreadSample();
 #endif
 	}
+}
+
+bool Emulator::resetGame()
+{
+	stop();
+	finishPendingPause();
+	if (state != Loaded)
+		return false;
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru())
+	{
+		hikaru::frontend::requestReset();
+		return true;
+	}
+#endif
+	// The CPU has stopped and joined. Drop frames queued before the reset.
+	rend_reset();
+	dc_reset(false);
+	return true;
 }
 
 // Called on the emulator thread for soft reset
@@ -1073,6 +1102,8 @@ void Emulator::stepRange(u32 from, u32 to)
 
 void Emulator::loadstate(Deserializer& deser)
 {
+	if (!deser.rewind())
+		rewind_state::invalidate();
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru()) {
 		// Apply on the render thread; it owns native graphics and emits LoadState
@@ -1081,7 +1112,9 @@ void Emulator::loadstate(Deserializer& deser)
 		return;
 	}
 #endif
-	if (config::customTexturePreloadMode() == config::CustomTexturePreloadMode::Off)
+	// Rewind stays in this title. LoadState already invalidates the renderer's
+	// VRAM textures, so keep the on-demand replacement pack and its file index.
+	if (!deser.rewind() && config::customTexturePreloadMode() == config::CustomTexturePreloadMode::Off)
 		custom_texture.refresh();
 #if FEAT_AREC == DYNAREC_JIT
 	aica::arm::recompiler::flush();
@@ -1102,9 +1135,9 @@ void Emulator::loadstate(Deserializer& deser)
 
 void Emulator::setNetworkState(bool online)
 {
-	if (settings.network.online != online)
+	if (settings.network.online.exchange(online) != online)
 	{
-		settings.network.online = online;
+		rewind_state::invalidate();
 		DEBUG_LOG(NETWORK, "Network state %d", online);
 		if (online && settings.platform.isConsole()
 				&& config::Sh4Clock != 200)
@@ -1194,9 +1227,17 @@ void Emulator::start()
 	if (state == Running)
 		return;
 	if (state != Loaded) {
-		WARN_LOG(COMMON, "Unexpected emu state %d", state);
+		WARN_LOG(COMMON, "Unexpected emu state %d", state.load());
 		return;
 	}
+#ifndef LIBRETRO
+	// Network startup has finished. Select the layout before Android's render
+	// thread can observe Running on a resume from the UI thread.
+	if (rewind_state::requiresSharedThread())
+		config::ThreadedRendering.override(false);
+	sharedRewind = config::RewindEnable && !config::ThreadedRendering
+			&& !config::GGPOEnable && !settings.platform.isHikaru();
+#endif
 	state = Running;
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru()) {
@@ -1295,19 +1336,39 @@ void Emulator::pollHeldNetplay()
 	}
 }
 
-bool Emulator::render()
+bool Emulator::finishPendingPause()
 {
-	FC_PROFILE_SCOPE;
+	if (!stopRequested.load(std::memory_order_relaxed) || !stopRequested.exchange(false))
+		return false;
+	if (state != Loaded && state != Running)
+		return false;
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru())
 	{
-		if (stopRequested.exchange(false)) {
-			hikaru::frontend::pauseAudio();
-			TermAudio();
-			hikaruAudioActive = false;
-			EventManager::event(Event::Pause);
+		hikaru::frontend::pauseAudio();
+		TermAudio();
+		hikaruAudioActive = false;
+	}
+	else
+#endif
+	{
+		if (state != Loaded || config::ThreadedRendering)
 			return false;
-		}
+		TermAudio();
+		nvmem::saveFiles();
+	}
+	EventManager::event(Event::Pause);
+	return true;
+}
+
+bool Emulator::render()
+{
+	FC_PROFILE_SCOPE;
+	if (finishPendingPause())
+		return false;
+#ifdef USE_HIKARU
+	if (settings.platform.isHikaru())
+	{
 		if (state != Running) return false;
 #ifdef __ANDROID__
 		if (!hikaruAudioActive) {
@@ -1319,14 +1380,7 @@ bool Emulator::render()
 #endif
 		try {
 			const bool rendered = hikaru::frontend::render();
-			if (stopRequested.exchange(false)) {
-				hikaru::frontend::pauseAudio();
-				TermAudio();
-				hikaruAudioActive = false;
-				EventManager::event(Event::Pause);
-				return false;
-			}
-			return rendered;
+			return !finishPendingPause() && rendered;
 		}
 		catch (...) { state = Error; hikaru::frontend::pauseAudio(); TermAudio(); hikaruAudioActive = false; EventManager::event(Event::Pause); throw; }
 	}
@@ -1334,16 +1388,35 @@ bool Emulator::render()
 
 	if (!config::ThreadedRendering)
 	{
-		if (stopRequested)
-		{
-			stopRequested = false;
-			TermAudio();
-			nvmem::saveFiles();
-			EventManager::event(Event::Pause);
-			return false;
-		}
 		if (state != Running)
 			return false;
+#ifndef LIBRETRO
+		if (usesSharedRewind())
+		{
+			const auto action = rewind_state::beforeFrame();
+			if (action == rewind_state::FrameAction::Hold || state != Running)
+				return false;
+			if (action == rewind_state::FrameAction::Restore)
+			{
+				const bool previousMute = settings.aica.muteAudio;
+				settings.aica.muteAudio = true;
+				try {
+					run();
+				} catch (...) {
+					settings.aica.muteAudio = previousMute;
+					throw;
+				}
+				settings.aica.muteAudio = previousMute;
+			}
+			else
+			{
+				run();
+				if (state == Running)
+					rewind_state::afterFrame();
+			}
+			return true;
+		}
+#endif
 		run();
 		return true;
 	}
@@ -1417,6 +1490,7 @@ void Emulator::openGdrom()
 
 void Emulator::diskChange()
 {
+	rewind_state::invalidate();
 	config::Settings::instance().reset();
 	config::Settings::instance().load(false);
 	if (!settings.content.path.empty())

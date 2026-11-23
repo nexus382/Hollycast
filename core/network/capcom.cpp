@@ -29,8 +29,10 @@
 #include "oslib/i18n.h"
 #include "oslib/oslib.h"
 #include "reios/reios.h"
+#include "rewind.h"
 #include <juice/juice.h>
 #include <stdlib.h>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -123,6 +125,12 @@ private:
 };
 
 static CapcomDirect capcom;
+static std::atomic<bool> capcomDirectActive{false};
+
+bool isCapcomDirectActive()
+{
+	return capcomDirectActive.load();
+}
 
 class CapcomIceNetService : public Service
 {
@@ -739,6 +747,9 @@ void CapcomDirect::startCapcomDirectService()
 {
 	INFO_LOG(NETWORK, "Capcom network service started");
 	capcomService = std::make_unique<CapcomIceNetService>();
+	// Matchmaking can begin before the modem reports an online connection.
+	capcomDirectActive.store(true);
+	rewind_state::invalidate();
 	setCustomService(capcomService.get());
 	capcomService->realStart();
 	std::string battleCode = getBattleCode();
@@ -774,12 +785,17 @@ void CapcomDirect::startCapcomDirectService()
 void CapcomDirect::stopCapcomDirectService()
 {
 	if (active)
+	{
 		resetModemCallbacks();
+		rewind_state::invalidate();
+	}
 	if (capcomService != nullptr)
 	{
 		setCustomService(nullptr);
 		capcomService->realStop();
 		capcomService.reset();
+		rewind_state::invalidate();
+		capcomDirectActive.store(false);
 		INFO_LOG(NETWORK, "Capcom network service stopped");
 	}
 }
@@ -790,6 +806,8 @@ void CapcomDirect::onNetworkChange()
 		return;
 	if (!settings.network.online && capcomService == nullptr)
 	{
+		// These host callbacks are outside the guest snapshot.
+		rewind_state::invalidate();
 		// detect answering mode
 		modemOnAnswerMode([this]() {
 			caller = false;
@@ -828,7 +846,9 @@ void CapcomDirect::onEvent(Event event, void *arg)
 		self->onNetworkChange();
 		break;
 	case Event::LoadState:
-		self->stopCapcomDirectService();
+		// Offline snapshots can still have dial and answer hooks armed for a future match.
+		if (!rewind_state::restoring() || self->capcomService != nullptr)
+			self->stopCapcomDirectService();
 		break;
 	default:
 		break;

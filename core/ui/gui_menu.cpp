@@ -272,15 +272,8 @@ void pauseOrResume()
 
 void restartGame()
 {
-	if (::game_started && !gui_has_held_netplay_session())
-	{
-		emu.stop();
-#ifdef USE_HIKARU
-		if (settings.platform.isHikaru())
-			emu.requestReset();
-#endif
-		emu.start();
-	}
+	if (!gui_has_held_netplay_session())
+		gui_request_restart_game();
 }
 
 void toggleFastForward()

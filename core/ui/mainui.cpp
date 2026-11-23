@@ -20,11 +20,13 @@
 
 #include "audio/ui_sound.h"
 #include "mainui.h"
+#include "rewind.h"
 #include "test_harness.h"
 #include "debug/assembly_debugger.h"
 #include "hw/pvr/Renderer_if.h"
 #include "hw/sh4/sh4_core.h"
 #include "gui.h"
+#include "settings.h"
 #include "gui_debugger.h"
 #include "gui_menu.h"
 #include "settings_new.h"
@@ -67,9 +69,12 @@ bool mainui_rend_frame()
 {
 	FC_PROFILE_SCOPE;
 
+	// Apply the confirmed choice before the next poll of Android lifecycle events.
+	gui_apply_pending_restart();
 	SettingsNew::processShaderLoading();
 	os_DoEvents();
 	os_UpdateInputState();
+	rewind_state::poll(gui_state == GuiState::Loading && !game_started);
 	test_harness::poll();
 	gui_poll_debugger();
 #ifdef USE_HIKARU
@@ -100,6 +105,10 @@ bool mainui_rend_frame()
 			}
 		}
 		try {
+#ifdef __ANDROID__
+			// A menu hotkey can open Commands before the lifecycle pause is acknowledged.
+			emu.finishPendingPause();
+#endif
 			gui_display_ui();
 		} catch (const FlycastException& e) {
 			// Assume this is a graphics API issue

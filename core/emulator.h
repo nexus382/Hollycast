@@ -161,6 +161,12 @@ public:
 	 * Does nothing if the game isn't running.
 	 */
 	void stop();
+	// Soft-reset the loaded title from the frontend between render frames.
+	bool resetGame();
+#ifndef LIBRETRO
+	// Android controls must use the render thread even during a save-state's temporary stop.
+	bool usesSharedRewind() const { return sharedRewind.load(std::memory_order_relaxed); }
+#endif
 	/**
 	 * Execute a single instruction.
 	 */
@@ -180,6 +186,8 @@ public:
 	 */
 	bool render();
 	void pollHeldNetplay();
+	// Consume a frontend pause on the render thread, including while a menu is open.
+	bool finishPendingPause();
 	/**
 	 * Set the network state.
 	 */
@@ -263,7 +271,7 @@ private:
 		Error,
 		Terminated,
 	};
-	State state = Uninitialized;
+	std::atomic<State> state{Uninitialized};
 	std::shared_future<void> threadResult;
 	bool resetRequested = false;
 	bool singleStep = false;
@@ -273,6 +281,9 @@ private:
 	u32 stepRangeTo = 0;
 	std::atomic<bool> stopRequested{false};
 	std::atomic<bool> ggpoGuestGame{false};
+#ifndef LIBRETRO
+	std::atomic<bool> sharedRewind{false};
+#endif
 #ifdef USE_HIKARU
 	bool hikaruAudioActive = false; // Android render thread only
 #endif

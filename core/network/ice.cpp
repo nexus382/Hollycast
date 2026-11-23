@@ -647,7 +647,7 @@ private:
 	std::string username;
 	std::vector<std::string> userlist;
 	std::string opponent;
-	State state = Offline;
+	std::atomic<State> state{Offline};
 	std::string statusText;
 	TsQueue<u8> recvQueue;
 	std::vector<std::string> chat;
