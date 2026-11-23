@@ -94,6 +94,8 @@ endif()
 
 if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
+        src/RewindTest.cpp
+        src/util/RewindBufferTest.cpp
         src/oslib/VmuPathTest.cpp
         src/DcnetProbeTest.cpp
         src/network/HttpTimeoutTest.cpp

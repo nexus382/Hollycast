@@ -6,6 +6,7 @@
 		http://www.ludd.luth.se/~jlo/dc/bootROM.h
 		http://www.ludd.luth.se/~jlo/dc/security_stuff.c
 	Bits and pieces from redream (https://github.com/inolen/redream)
+	Portions Copyright 2026 The Hollycast Authors
 */
 
 #include "reios.h"
@@ -29,6 +30,7 @@
 #include "oslib/oslib.h"
 #include "oslib/i18n.h"
 #include "cfg/option.h"
+#include "rewind.h"
 
 #include <map>
 
@@ -304,6 +306,9 @@ static void reios_sys_flashrom() {
 
 				debugf("reios_sys_flashrom: FLASHROM_WRITE offs %x src %08x size %x", offs, src, size);
 
+				// HLE writes directly to the flash backing store, bypassing the chip write hook.
+				if (size != 0)
+					rewind_state::invalidateStorageWrite();
 				for (u32 i = 0; i < size; i++)
 					flashrom->data[offs + i] &= ReadMem8(src + i);
 
@@ -332,6 +337,7 @@ static void reios_sys_flashrom() {
 					if (offset == (u32)part_offset)
 					{
 						found = true;
+						rewind_state::invalidateStorageWrite();
 						memset(flashrom->data + offset, 0xFF, size);
 					}
 				}

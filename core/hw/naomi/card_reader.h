@@ -46,6 +46,7 @@ void barcodeTerm();
 bool barcodeAvailable();
 std::string barcodeGetCard();
 void barcodeSetCard(const std::string& card);
+bool serialReaderActive();
 
 void insertCard(int playerNum);
 void ejectCard();

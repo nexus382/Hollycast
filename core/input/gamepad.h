@@ -1,5 +1,6 @@
 /*
 	This file is part of reicast.
+	Portions Copyright 2026 The Hollycast Authors
 
     reicast is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -58,6 +59,7 @@ enum DreamcastKey
 	EMU_BTN_BYPASS_KB,
 	EMU_BTN_SCREENSHOT,
 	EMU_BTN_SRVMODE,		// used internally by virtual gamepad
+	EMU_BTN_REWIND,
 
 	// Real axes
 	DC_AXIS_TRIGGERS	= 0x1000000,

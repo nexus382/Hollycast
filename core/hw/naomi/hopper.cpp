@@ -1,5 +1,6 @@
 /*
 	Copyright 2023 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -1264,6 +1265,11 @@ private:
 };
 
 static BaseHopper *hopper;
+
+bool active()
+{
+	return hopper != nullptr;
+}
 
 void init()
 {
