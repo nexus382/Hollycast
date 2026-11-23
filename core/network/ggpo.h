@@ -20,12 +20,17 @@
 #pragma once
 #include <future>
 #include <string>
+#include <vector>
 
 struct MapleInputState;
 
 namespace ggpo
 {
 
+inline constexpr int SERVER_PORT = 19713;
+
+std::vector<std::string> localIPv4Addresses();
+std::string routerPublicIPv4Address();
 std::future<bool> startNetwork();
 void startSession(int localPort, int localPlayerNum);
 void stopSession();

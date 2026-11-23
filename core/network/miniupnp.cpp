@@ -1,5 +1,6 @@
 /*
 	Copyright 2020 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -53,6 +54,22 @@ bool MiniUPnP::Init()
 	}
 	initialized = true;
 	return true;
+}
+
+std::string MiniUPnP::GetExternalIPv4Address()
+{
+	// Use an independent gateway handle so discovery cannot affect active mappings.
+	MiniUPnP gateway;
+	if (!gateway.Init())
+	{
+		// Discovery can populate URLs even when it finds no connected gateway.
+		FreeUPNPUrls(&gateway.urls);
+		return {};
+	}
+	char address[16]{}; // MiniUPnPc requires room for an IPv4 address and terminator.
+	const int result = UPNP_GetExternalIPAddress(gateway.urls.controlURL, gateway.data.first.servicetype, address);
+	gateway.Term();
+	return result == 0 ? std::string(address) : std::string();
 }
 
 void MiniUPnP::Term()

@@ -119,12 +119,99 @@ static void getLocalInput(MapleInputState inputState[4])
 #include "ggpo_adaptive_delay.h"
 #include "ggpo_resume_barrier.h"
 
+#if !defined(_WIN32) && !defined(__SWITCH__) && !defined(__HAIKU__)
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
+
 namespace ggpo
 {
 using namespace std::chrono;
 
 constexpr int MAX_PLAYERS = 2;
-constexpr int SERVER_PORT = 19713;
+
+static bool usableInterfaceIPv4(u32 ip)
+{
+	return (ip >> 24) != 0 && (ip >> 24) != 127 && (ip >> 16) != 0xa9fe && (ip >> 28) < 14;
+}
+
+std::vector<std::string> localIPv4Addresses()
+{
+	std::vector<std::string> addresses;
+	auto add = [&](const sockaddr_in& address) {
+		if (!usableInterfaceIPv4(ntohl(address.sin_addr.s_addr)))
+			return;
+		char ip[INET_ADDRSTRLEN];
+		if (inet_ntop(AF_INET, &address.sin_addr, ip, sizeof(ip)) != nullptr
+				&& std::find(addresses.begin(), addresses.end(), ip) == addresses.end())
+			addresses.emplace_back(ip);
+	};
+
+	const sock_t routeSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (VALID(routeSocket))
+	{
+		// An unbound UDP connect selects a source address without sending a packet.
+		sockaddr_in destination{};
+		destination.sin_family = AF_INET;
+		destination.sin_port = htons(9);
+		destination.sin_addr.s_addr = htonl(0x01010101);
+		sockaddr_in source{};
+		socklen_t size = sizeof(source);
+		const bool routeFound = connect(routeSocket, reinterpret_cast<const sockaddr *>(&destination), sizeof(destination)) == 0
+				&& getsockname(routeSocket, reinterpret_cast<sockaddr *>(&source), &size) == 0;
+		closesocket(routeSocket);
+		if (routeFound && source.sin_family == AF_INET)
+			add(source);
+	}
+
+#if defined(_WIN32) && !defined(TARGET_UWP)
+	const sock_t interfaceSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (VALID(interfaceSocket))
+	{
+		INTERFACE_INFO interfaces[64];
+		DWORD bytes = 0;
+		const int result = WSAIoctl(interfaceSocket, SIO_GET_INTERFACE_LIST, nullptr, 0, interfaces,
+				sizeof(interfaces), &bytes, nullptr, nullptr);
+		closesocket(interfaceSocket);
+		if (result == 0)
+			for (std::size_t i = 0; i < bytes / sizeof(INTERFACE_INFO); ++i)
+				if ((interfaces[i].iiFlags & IFF_UP) && interfaces[i].iiAddress.Address.sa_family == AF_INET)
+					add(interfaces[i].iiAddress.AddressIn);
+	}
+#elif !defined(_WIN32) && !defined(__SWITCH__) && !defined(__HAIKU__)
+	ifaddrs *interfaces = nullptr;
+	if (getifaddrs(&interfaces) == 0)
+	{
+		for (const ifaddrs *it = interfaces; it != nullptr; it = it->ifa_next)
+			if (it->ifa_addr != nullptr && (it->ifa_flags & IFF_UP) && it->ifa_addr->sa_family == AF_INET)
+				add(*reinterpret_cast<const sockaddr_in *>(it->ifa_addr));
+		freeifaddrs(interfaces);
+	}
+#endif
+	return addresses;
+}
+
+std::string routerPublicIPv4Address()
+{
+	const std::string address = MiniUPnP::GetExternalIPv4Address();
+	in_addr parsed{};
+	if (inet_pton(AF_INET, address.c_str(), &parsed) != 1)
+		return {};
+	const u32 ip = ntohl(parsed.s_addr);
+	auto inNetwork = [ip](u32 first, u32 second, u32 third, unsigned prefixLength) {
+		const u32 network = (first << 24) | (second << 16) | (third << 8);
+		const unsigned hostBits = 32 - prefixLength;
+		return (ip >> hostBits) == (network >> hostBits);
+	};
+	// Exclude private, shared, protocol, documentation and benchmarking ranges.
+	if (!usableInterfaceIPv4(ip)
+			|| inNetwork(10, 0, 0, 8) || inNetwork(172, 16, 0, 12) || inNetwork(192, 168, 0, 16)
+			|| inNetwork(100, 64, 0, 10) || inNetwork(192, 0, 0, 24) || inNetwork(198, 18, 0, 15)
+			|| inNetwork(192, 0, 2, 24) || inNetwork(198, 51, 100, 24) || inNetwork(203, 0, 113, 24)
+			|| inNetwork(192, 88, 99, 24)) // Deprecated 6to4 relay space.
+		return {};
+	return address;
+}
 
 constexpr u32 BTN_TRIGGER_LEFT	= DC_BTN_BITMAPPED_LAST << 1;
 constexpr u32 BTN_TRIGGER_RIGHT	= DC_BTN_BITMAPPED_LAST << 2;

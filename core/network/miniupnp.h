@@ -1,5 +1,6 @@
 /*
 	Copyright 2020 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -17,12 +18,13 @@
     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
 */
 #pragma once
+#include <string>
+
 #ifndef FEAT_NO_MINIUPNPC
 #include <cstddef>
 #include <miniupnpc.h>
 
 #include <cstring>
-#include <string>
 #include <utility>
 #include <vector>
 #include <mutex>
@@ -39,6 +41,7 @@ public:
 	void Term();
 	bool AddPortMapping(int port, bool tcp);
 	bool isInitialized() const { return initialized; }
+	static std::string GetExternalIPv4Address();
 
 private:
 	UPNPUrls urls;
@@ -58,6 +61,7 @@ public:
 	void Term() {}
 	bool AddPortMapping(int port, bool tcp) { return true; }
 	bool isInitialized() const { return false; }
+	static std::string GetExternalIPv4Address() { return {}; }
 };
 
 #endif
