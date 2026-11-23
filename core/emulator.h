@@ -185,12 +185,14 @@ public:
 	 * Wait for the next frame and render it. If in single-thread mode, it will run the emulator until a frame is rendered.
 	 */
 	bool render();
+	void pollHeldNetplay();
 	// Consume a frontend pause on the render thread, including while a menu is open.
 	bool finishPendingPause();
 	/**
 	 * Set the network state.
 	 */
 	void setNetworkState(bool online);
+	bool isGgpoGuestGame() const { return ggpoGuestGame.load(); }
 	/**
 	 * Called internally to reset the emulator.
 	 */
@@ -278,6 +280,7 @@ private:
 	u32 stepRangeFrom = 0;
 	u32 stepRangeTo = 0;
 	std::atomic<bool> stopRequested{false};
+	std::atomic<bool> ggpoGuestGame{false};
 #ifndef LIBRETRO
 	std::atomic<bool> sharedRewind{false};
 #endif

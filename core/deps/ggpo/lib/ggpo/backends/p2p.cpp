@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -80,6 +81,7 @@ Peer2PeerBackend::AddRemotePlayer(char *ip,
    _endpoints[queue].Init(&_udp, _poll, queue, ip, port, _local_connect_status);
    _endpoints[queue].SetDisconnectTimeout(_disconnect_timeout);
    _endpoints[queue].SetDisconnectNotifyStart(_disconnect_notify_start);
+   _endpoints[queue].SetAutoFrameDelay(_auto_frame_delay);
    _endpoints[queue].Synchronize();
 }
 
@@ -259,6 +261,7 @@ Peer2PeerBackend::AddPlayer(GGPOPlayer *player,
       return GGPO_ERRORCODE_PLAYER_OUT_OF_RANGE;
    }
    *handle = QueueToPlayerHandle(queue);
+   _registered_players |= 1 << queue;
 
    if (player->type == GGPO_PLAYERTYPE_REMOTE) {
       AddRemotePlayer(player->u.remote.ip_address, player->u.remote.port, queue);
@@ -294,18 +297,35 @@ Peer2PeerBackend::AddLocalInput(GGPOPlayerHandle player,
       return GGPO_ERRORCODE_PREDICTION_THRESHOLD;
    }
 
-   if (input.frame != GameInput::NullFrame) { // xxx: <- comment why this is the case
+   // Reducing the delay can drop an input until the queue catches up.
+   if (input.frame == GameInput::NullFrame) {
+      return GGPO_OK;
+   }
+
+   // The peer fills leading frames with neutral input when it receives our
+   // first frame. Later padding repeats the last input and must be sent.
+   const int last_frame = _local_connect_status[queue].last_frame;
+   const int first_frame = last_frame == GameInput::NullFrame ? input.frame : last_frame + 1;
+   for (int frame = first_frame; frame <= input.frame; frame++) {
+      GameInput padding;
+      GameInput *queued_input = &input;
+      if (frame != input.frame) {
+         const bool found = _sync.GetConfirmedInput(queue, frame, &padding);
+         ASSERT(found);
+         queued_input = &padding;
+      }
+
       // Update the local connect status state to indicate that we've got a
       // confirmed local frame for this player.  this must come first so it
       // gets incorporated into the next packet we send.
 
-      Log("setting local connect status for local queue %d to %d", queue, input.frame);
-      _local_connect_status[queue].last_frame = input.frame;
+      Log("setting local connect status for local queue %d to %d", queue, frame);
+      _local_connect_status[queue].last_frame = frame;
 
       // Send the input to all the remote players.
       for (int i = 0; i < _num_players; i++) {
          if (_endpoints[i].IsInitialized()) {
-            _endpoints[i].SendInput(input);
+            _endpoints[i].SendInput(*queued_input);
          }
       }
    }
@@ -319,16 +339,28 @@ Peer2PeerBackend::SyncInput(void *values,
                             int size,
                             int *disconnect_flags)
 {
-   int flags;
+   return SyncInput(values, size, disconnect_flags, nullptr);
+}
 
+GGPOErrorCode
+Peer2PeerBackend::SyncInputWithPrediction(void *values, int size, int *predicted_flags)
+{
+   return SyncInput(values, size, nullptr, predicted_flags);
+}
+
+GGPOErrorCode
+Peer2PeerBackend::SyncInput(void *values, int size, int *disconnect_flags, int *predicted_flags)
+{
    // Wait until we've started to return inputs.
    if (_synchronizing) {
       return GGPO_ERRORCODE_NOT_SYNCHRONIZED;
    }
-   flags = _sync.SynchronizeInputs(values, size);
+   int flags = _sync.SynchronizeInputs(values, size, predicted_flags);
    if (disconnect_flags) {
       *disconnect_flags = flags;
    }
+   if (predicted_flags)
+      *predicted_flags &= _registered_players;
    return GGPO_OK;
 }
 
@@ -549,6 +581,15 @@ Peer2PeerBackend::GetNetworkStats(GGPONetworkStats *stats, GGPOPlayerHandle play
    _endpoints[queue].GetNetworkStats(stats);
    stats->sync.predicted_frames = _sync.GetPredictedFrames();
 
+   return GGPO_OK;
+}
+
+GGPOErrorCode
+Peer2PeerBackend::SetAutoFrameDelay(bool enabled)
+{
+   if (_registered_players != 0 || _num_spectators != 0)
+      return GGPO_ERRORCODE_INVALID_REQUEST;
+   _auto_frame_delay = enabled;
    return GGPO_OK;
 }
 

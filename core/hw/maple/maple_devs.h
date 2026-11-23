@@ -428,6 +428,8 @@ struct maple_sega_vmu: maple_base
 		((48*32) - sizeof(serialize_magic) - sizeof(accessed_blocks) - sizeof(loaded_us_since_write));
 	//! When true, the entire flash_data must be written to file on next operation
 	bool fullSaveNeeded = false;
+	//! GGPO guest cards keep changes in memory for the lifetime of the device
+	bool memoryOnly = false;
 
 	MapleDeviceType get_device_type() override;
 	void serialize(Serializer& ser) const override;

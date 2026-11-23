@@ -37,6 +37,7 @@ struct maple_sega_vmu : maple_base {
  int bus_id = 1, bus_port = 0;
  char logical_port[3] = "B1";
  bool fullSaveNeeded = false, accessed_blocks_valid = false;
+ bool memoryOnly = false;
  u64 last_write_tick = 0;
  bool fullSave();
  bool linkStatus() override;

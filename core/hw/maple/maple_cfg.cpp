@@ -494,11 +494,22 @@ static void createDreamcastDevices()
 
 	for (int bus = 0; bus < MAPLE_PORTS; ++bus)
 	{
-		switch (config::MapleMainDevices[bus])
+		// A GGPO session emulates one console shared by two players, so ports
+		// A and B must both carry a standard pad. Port B defaults to None, which
+		// leaves player 2 without a controller. Upgrade an empty A/B slot for
+		// this session only: the persisted device configuration is never
+		// modified, so offline play keeps the user's own choices.
+		MapleDeviceType mainDevice = config::MapleMainDevices[bus];
+		if (config::GGPOEnable && bus < 2 && mainDevice == MDT_None)
+		{
+			mainDevice = MDT_SegaController;
+			INFO_LOG(MAPLE, "GGPO session: standard controller assigned to port %c", 'A' + bus);
+		}
+		switch (mainDevice)
 		{
 		case MDT_SegaController:
 		case MDT_SegaControllerXL:
-			mcfg_Create(config::MapleMainDevices[bus], bus, MAPLE_MAIN_DEV_IDX);
+			mcfg_Create(mainDevice, bus, MAPLE_MAIN_DEV_IDX);
 			if (config::MapleExpansionDevices[bus][0] != MDT_None)
 				mcfg_Create(config::MapleExpansionDevices[bus][0], bus, 0);
 			if (config::MapleExpansionDevices[bus][1] != MDT_None)
@@ -513,8 +524,8 @@ static void createDreamcastDevices()
 		case MDT_DenshaDeGoController:
 		case MDT_Dreameye:
 		case MDT_DreamParaParaController:
-			mcfg_Create(config::MapleMainDevices[bus], bus, MAPLE_MAIN_DEV_IDX);
-			if (config::MapleMainDevices[bus] == MDT_FishingController)
+			mcfg_Create(mainDevice, bus, MAPLE_MAIN_DEV_IDX);
+			if (mainDevice == MDT_FishingController)
 				// integrated vibration pack
 				mcfg_Create(MDT_PurupuruPack, bus, 4);
 			break;
@@ -523,7 +534,7 @@ static void createDreamcastDevices()
 		case MDT_TwinStick:
 		case MDT_AsciiStick:
 		case MDT_RacingController:
-			mcfg_Create(config::MapleMainDevices[bus], bus, MAPLE_MAIN_DEV_IDX);
+			mcfg_Create(mainDevice, bus, MAPLE_MAIN_DEV_IDX);
 			if (config::MapleExpansionDevices[bus][0] != MDT_None)
 				mcfg_Create(config::MapleExpansionDevices[bus][0], bus, 0);
 			break;
@@ -532,7 +543,7 @@ static void createDreamcastDevices()
 			break;
 
 		default:
-			WARN_LOG(MAPLE, "Invalid device type %d for port %d", (MapleDeviceType)config::MapleMainDevices[bus], bus);
+			WARN_LOG(MAPLE, "Invalid device type %d for port %d", (MapleDeviceType)mainDevice, bus);
 			break;
 		}
 	}
@@ -594,6 +605,20 @@ void mcfg_CreateDevices()
 		die("Unknown system");
 		break;
 	}
+	vmuDigest();
+}
+
+void mcfg_GetDeviceTypes(u8 deviceTypes[MAPLE_PORTS * 6])
+{
+	for (int bus = 0; bus < MAPLE_PORTS; bus++)
+		for (int port = 0; port < 6; port++)
+			deviceTypes[bus * 6 + port] = MapleDevices[bus][port] != nullptr
+				? static_cast<u8>(MapleDevices[bus][port]->get_device_type())
+				: static_cast<u8>(MDT_None);
+}
+
+void mcfg_UpdateVmuDigest()
+{
 	vmuDigest();
 }
 
