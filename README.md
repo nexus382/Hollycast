@@ -1,8 +1,10 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 
-# Hollycast
+# Hollycast — Sega Dreamcast and arcade emulator
 
 [Meet the people behind Hollycast — contributors, sources, and special thanks.](CREDITS.md)
+
+Hollycast is an open-source emulator for Sega Dreamcast, NAOMI, NAOMI 2 and Atomiswave games. Built on Flycast, it lets you browse your collection by its cover art, find other players on DCnet and use your phone as a Dreamcast Visual Memory Unit (VMU).
 
 ![Hollycast](banner.png)
 
@@ -15,19 +17,7 @@
 
 [![Latest Dev](https://img.shields.io/badge/latest%20dev-download-orange)](https://github.com/nexus382/Hollycast/releases/tag/latest-dev)
 
-The [latest development release](https://github.com/nexus382/Hollycast/releases/tag/latest-dev) updates when Android, Windows, Linux, macOS, Switch and Xbox / UWP downloads are all ready for the same `dev` commit. If a platform is still building or fails, the previous complete build stays available. These builds may be unstable.
-
-
-**Hollycast is a multi-platform Sega Dreamcast, Naomi, Naomi 2, and Atomiswave emulator.** It is built on [Flycast](https://github.com/flyinghead/flycast): it follows the upstream emulation core and adds a modern interface, more front-end features, and controls for power users.
-
-- [Download](#download)
-- [What Hollycast adds](#what-hollycast-adds)
-- [Why a fork?](#why-a-fork)
-- [Contributing](#contributing)
-- [Building from source](#building-from-source)
-- [Debugging](#debugging)
-- [Support the project](#support-the-project)
-- [License and credits](#license-and-credits)
+[Downloads](#download) · [Emulator features](#what-hollycast-adds) · [Build from source](#building-from-source) · [Contributing](#contributing) · [Contributors and credits](CREDITS.md)
 
 ## Download
 
@@ -43,21 +33,35 @@ Prebuilt binaries for every platform are on the **[latest release page](https://
 | Nintendo Switch | `Hollycast-<version>-switch.nro` |
 | RetroArch (libretro core) | `windows-libretro-x64.zip`, `linux-libretro-x64.zip`, `linux-libretro-arm64.zip`, `switch-libretro.zip` |
 
-Releases tagged `-dev` are built from the `dev` branch and contain the newest, less-tested changes. Other releases are built from `master`.
+Stable releases are built from `master`. The [latest development build](https://github.com/nexus382/Hollycast/releases/tag/latest-dev) contains newer, less-tested changes from `dev`. It updates once Android, Windows, Linux, macOS, Switch and Xbox / UWP downloads are all ready for the same commit. Until then, the previous complete build stays available.
+
+In standalone Hollycast, open **Help → Check for Updates** to read release notes and check for a new build. Startup checks are available in Settings. GitHub builds let you choose the stable or development track. Google Play manages updates for Play installations.
 
 ## What Hollycast adds
 
-- **Modern interface.** A redesigned UI with a game library that shows box art and VMU icons.
-- **Continue Playing and favourites.** Continue Playing lists every game with a save state, newest first, and Resume loads that title's newest manual state or autosave. Start Fresh boots without loading a state. Use the star on a game to keep it in Favourites. These choices do not change your automatic save-state settings.
-- **Library theme packages.** Install themes with custom palettes and library layouts, including Art Book Next, Iconic and Linear ports. See the [theme author guide](docs/Themes.md).
-- **Ready to play.** Sensible defaults let new players start a game straight away, and the advanced settings are still there for power users.
-- **Performance overlay.** A configurable on-screen display with frame timing plus RAM and texture VRAM usage.
-- **Real hardware and VMU support.** [DreamLink](docs/DreamLink.md) connects Hollycast to DreamConn and DreamPicoPort controllers and to the [DreamPotato](docs/DreamPotato%20Integrated%20Mode.md) VMU emulator.
-- **Phone VMU.** Use **Connect Phone** in the on-screen display settings to mirror the VMU LCD or play standalone VMU mini-games with touch buttons in your phone's browser. See the [phone VMU guide](docs/Phone%20VMU.md).
-- **Editable virtual controller.** The on-screen touch controls can be rearranged and resized on mobile.
-- **Frequent quality-of-life updates.** Old components are kept up to date, and new features come from requests by people who play every day.
+Hollycast builds on Flycast's RetroAchievements, resolution upscaling and widescreen support. The standalone app adds its own library, online dashboard and tools for players. RetroArch users can download the libretro core.
 
-Everything Flycast offers is still included: the full Dreamcast, Naomi, Naomi 2 and Atomiswave core, RetroAchievements, upscaling and widescreen options, and the libretro core.
+### Game library, artwork and themes
+
+- **First-run setup.** The Ready to Play checklist helps you add a game folder, pick a library theme, locate BIOS files and check your controller. Use the search box in Settings to find an option later.
+- **Continue Playing and favourites.** Resume a game's newest manual save state or autosave from **Continue Playing**, or choose **Start Fresh** for a normal boot. Star games to keep them in **Favourites**. In list view, sort your collection by title, region, play time or file size.
+- **Box art and game media.** Show covers or VMU save icons in the library. Download missing covers automatically, choose extra media such as screenshots or disc scans, or reuse your existing ES-DE media folders. Available artwork varies by provider. [ScreenScraper](docs/screenscraper.md) · [LaunchBox](docs/launchbox-artwork.md) · [TheGamesDB](docs/thegamesdb.md)
+- **Library themes.** Choose from eight bundled layouts, including the default Demo Disc, the jewel-case shelves of CD Rack and the VMU-style Pocket Dimension. Preview and install community themes under **Settings → Library → Browse themes**. [All eight library themes](themes/README.md) · [Library theme guide](docs/Themes.md)
+- **UI theme editor.** Start from a preset, preview changes to colours, fonts and backgrounds, then export your theme with its assets or import one to use. [Custom UI theme guide](docs/Custom%20UI%20themes.md)
+
+### Online play, Dreamcast controllers and VMUs
+
+- **DCnet Buddy.** Open **DCnet** from the library to see online players, active games and lobby counts. Filter to games you own and launch your copy directly from the dashboard.
+- **Phone VMU.** On Windows, macOS or Linux, open **Settings → On-screen display → Phone VMU → Connect Phone** and scan the QR code with a phone on the same network. Mirror the VMU screen or play a mini-game with touch controls in the browser. While connected, saved mini-game progress syncs back to the virtual memory card. [Phone VMU guide](docs/Phone%20VMU.md)
+- **Virtual memory cards and touch controls.** Create and rename VMU cards. On Windows desktop, macOS, Linux and Android, you can move the on-screen VMU displays and adjust their size and transparency. On mobile, you can also move and resize the virtual controller buttons.
+- **DreamLink hardware support.** Connect DreamConn and DreamPicoPort controllers or use a DreamPotato as a VMU emulator. [DreamLink setup](docs/DreamLink.md) · [DreamPotato integrated mode](docs/DreamPotato%20Integrated%20Mode.md)
+
+### Graphics, performance and debugging
+
+- **Graphics presets and live texture filtering.** Choose a quality preset for your hardware. During a game, open **Texture Filtering Live Tune** to compare reconstruction filters on the current scene. Standalone macOS builds also include an experimental native Metal renderer. [Metal renderer support](#native-metal-renderer-on-macos)
+- **Performance overlay and fast-forward.** Monitor frame timing, RAM and texture VRAM in the on-screen overlay. Set a fast-forward speed limit and choose whether audio plays during fast-forward.
+- **Custom texture packs.** Enable **Split Texture Sheets** when dumping textures to extract individual sprites or texture regions. Edit or upscale the pieces and Hollycast rebuilds the sheet when it loads the replacement pack. [Texture sheet replacement guide](docs/texture-sheet-replacements.md)
+- **SH4 assembly debugger.** During offline play, open **Tools → Assembly Debugger** to pause the Dreamcast CPU, step through instructions and set breakpoints. [Assembly debugger guide](docs/assembly-debugger.md)
 
 ## Why a fork?
 
