@@ -11,15 +11,27 @@ Hollycast is an open-source emulator for Sega Dreamcast, NAOMI, NAOMI 2 and Atom
 <sub>Logo credit: [@ruva](https://artistree.io/ruva)</sub>
 
 <p align="center">
-  <a href="https://github.com/nexus382/Hollycast/releases/latest"><img src="https://img.shields.io/github/v/release/nexus382/Hollycast?label=release" alt="Latest release"></a>
-  <a href="https://github.com/nexus382/Hollycast/releases/tag/latest-dev"><img src="https://img.shields.io/badge/latest%20dev-download-orange" alt="Latest development build"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv2-blue.svg" alt="License: GPL v2"></a>
+  <a href="https://github.com/nexus382/Hollycast/releases/latest">
+    <img src="https://img.shields.io/github/v/release/nexus382/Hollycast?style=for-the-badge&amp;label=stable&amp;logo=github&amp;logoColor=white&amp;labelColor=24292F&amp;color=23734D" alt="Download the latest stable Hollycast release">
+  </a>
+  <a href="https://github.com/nexus382/Hollycast/releases/tag/latest-dev">
+    <img src="https://img.shields.io/badge/Dev_build-344B68?style=for-the-badge&amp;logo=git&amp;logoColor=white" alt="Download the latest Hollycast development build">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/GPL_v2-454D57?style=for-the-badge&amp;logo=gnu&amp;logoColor=white" alt="Read the GNU GPL v2 license">
+  </a>
 </p>
 
 <p align="center">
-  <a href="https://hollycast.org"><img src="https://img.shields.io/badge/web-hollycast.org-orange" alt="Hollycast website"></a>
-  <a href="https://discord.gg/8s8Ecc2BxR"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&amp;logoColor=white" alt="Discord"></a>
-  <a href="https://www.reddit.com/r/Hollycast/"><img src="https://img.shields.io/badge/Reddit-r%2FHollycast-FF4500?logo=reddit&amp;logoColor=white" alt="Join r/Hollycast on Reddit"></a>
+  <a href="https://hollycast.org">
+    <img src="https://img.shields.io/badge/hollycast.org-AD451C?style=for-the-badge" alt="Visit the Hollycast website">
+  </a>
+  <a href="https://discord.gg/8s8Ecc2BxR">
+    <img src="https://img.shields.io/badge/Discord-5159C9?style=for-the-badge&amp;logo=discord&amp;logoColor=white" alt="Join the Hollycast Discord">
+  </a>
+  <a href="https://www.reddit.com/r/Hollycast/">
+    <img src="https://img.shields.io/badge/r%2FHollycast-A83A16?style=for-the-badge&amp;logo=reddit&amp;logoColor=white" alt="Visit r/Hollycast on Reddit">
+  </a>
 </p>
 
 [Downloads](#download) · [Emulator features](#what-hollycast-adds) · [Build from source](#building-from-source) · [Contributing](#contributing) · [Contributors and credits](CREDITS.md)
