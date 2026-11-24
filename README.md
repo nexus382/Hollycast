@@ -13,6 +13,7 @@ Hollycast is an open-source emulator for Sega Dreamcast, NAOMI, NAOMI 2 and Atom
 [![Latest release](https://img.shields.io/github/v/release/nexus382/Hollycast?label=release)](https://github.com/nexus382/Hollycast/releases/latest)
 [![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/8s8Ecc2BxR)
+[![Join r/Hollycast on Reddit](https://img.shields.io/badge/Reddit-r%2FHollycast-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/Hollycast/)
 [![Website](https://img.shields.io/badge/web-hollycast.org-orange)](https://hollycast.org)
 
 [![Latest Dev](https://img.shields.io/badge/latest%20dev-download-orange)](https://github.com/nexus382/Hollycast/releases/tag/latest-dev)
