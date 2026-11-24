@@ -326,6 +326,7 @@ static float g_twoLineRowEndScreenX = 0.0f;
 static float g_twoLineRowEndScreenY = 0.0f;
 static bool g_mapleDevicesChangedInSettings = false;
 static bool g_scrollToBoxArtSection = false;
+static bool g_resetSettingsContentScroll = false;
 static bool g_focusSettingsNavigation = false;
 static bool g_focusSettingsContent = false;
 static bool g_focusSettingsBack = false;
@@ -604,6 +605,16 @@ static void ResetSettingsFooter()
 	g_settingsFooterText = GetTabHelpText(g_state.currentTab);
 }
 
+static void SelectSettingsTab(SettingsTab tab)
+{
+	if (g_state.currentTab != tab)
+	{
+		g_state.currentTab = tab;
+		g_resetSettingsContentScroll = true;
+	}
+	ResetSettingsFooter();
+}
+
 static void SetSettingsFooterText(const char* text)
 {
 	if (text != nullptr && text[0] != '\0')
@@ -617,6 +628,7 @@ static bool IsAnySettingsPopupOpen()
 
 void prepareControllerNavigation()
 {
+	SettingsUI::PrepareSliderPopupNavigation();
 	ImGuiContext& g = *GImGui;
 	// Capture before NewFrame closes popups: one B press must perform one step.
 	g_controllerPopupWasOpen = !g.OpenPopupStack.empty();
@@ -644,6 +656,33 @@ void prepareControllerNavigation()
 			for (ImGuiKey key : {ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadDpadRight,
 					ImGuiKey_GamepadLStickLeft, ImGuiKey_GamepadLStickRight})
 				ImGui::SetKeyOwner(key, owner);
+	}
+}
+
+static void ScrollSettingsFromController()
+{
+	ImGuiContext& g = *GImGui;
+	ImGuiWindow* focused = g.NavWindow;
+	if (focused == nullptr || focused->ScrollMax.y > 0.f || g.NavWindowingTarget != nullptr
+			|| !(g.IO.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad) || !(g.IO.BackendFlags & ImGuiBackendFlags_HasGamepad))
+		return;
+	const float vertical = ImGui::GetKeyData(ImGuiKey_GamepadLStickDown)->AnalogValue
+			- ImGui::GetKeyData(ImGuiKey_GamepadLStickUp)->AnalogValue;
+	if (vertical == 0.f)
+		return;
+
+	// ImGui scrolls the focused window itself. A non-scrolling card inside
+	// a pane should use the same left-stick motion on its nearest scrollable parent.
+	for (ImGuiWindow* window = focused; (window->Flags & ImGuiWindowFlags_ChildWindow)
+			&& !(window->Flags & ImGuiWindowFlags_Popup);)
+	{
+		window = window->ParentWindow;
+		if (window->ScrollMax.y > 0.f && !(window->Flags & ImGuiWindowFlags_NoNavInputs))
+		{
+			const float speed = std::round(focused->FontRefSize * 100.f * g.IO.DeltaTime);
+			ImGui::SetScrollY(window, std::trunc(window->Scroll.y + vertical * speed));
+			break;
+		}
 	}
 }
 
@@ -1226,7 +1265,10 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 				openingSaturation = gamepad->get_saturation();
 			}
 		}
-		if (ControllerPopupCancelPressed())
+		const bool done = ImGui::Button(T("Done"), ScaledVec2(100, 30));
+		ImGui::SameLine();
+		if (ImGui::Button(T("Cancel"), ScaledVec2(100, 30)) || ControllerPopupCancelPressed()
+				|| ImGui::IsKeyPressed(ImGuiKey_Escape, false))
 		{
 			gamepad->set_rumble_power(openingRumble);
 			if (gamepad->has_analog_stick())
@@ -1238,7 +1280,7 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			ImGui::EndPopup();
 			return;
 		}
-		if (ImGui::Button(T("Done"), ScaledVec2(100, 30)))
+		if (done)
 		{
 			gamepad->save_mapping();
 			// Update both console and arcade profile/mapping
@@ -1282,7 +1324,7 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			header(gamepad->has_force_feedback() ? T("Force Feedback") : T("Rumble"));
 			int power = gamepad->get_rumble_power();
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			const bool powerChanged = ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%");
+			const bool powerChanged = allowSettingsTouchDrag(ImGui::SliderInt(T("Power"), &power, 0, 100, "%d%%"));
 #ifdef HOLLYCAST_TEST_HARNESS
 			if (test_harness::ui::collectingInspection())
 				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".rumble_power").c_str(), T("Power"), power, 0, 100);
@@ -1297,7 +1339,7 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			header(T("Thumbsticks"));
 			int deadzone = std::round(gamepad->get_dead_zone() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			const bool deadzoneChanged = ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%");
+			const bool deadzoneChanged = allowSettingsTouchDrag(ImGui::SliderInt(T("Dead zone"), &deadzone, 0, 100, "%d%%"));
 #ifdef HOLLYCAST_TEST_HARNESS
 			if (test_harness::ui::collectingInspection())
 				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".dead_zone").c_str(), T("Dead zone"), deadzone, 0, 100);
@@ -1308,7 +1350,7 @@ static void gamepadSettingsPopup(const std::shared_ptr<GamepadDevice>& gamepad)
 			ShowFooterHelpMarker(T("Minimum deflection to register as input"));
 			int saturation = std::round(gamepad->get_saturation() * 100.f);
 			ImGui::SetNextItemWidth(SettingsLayoutScaled(300));
-			const bool saturationChanged = ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%");
+			const bool saturationChanged = allowSettingsTouchDrag(ImGui::SliderInt(T("Saturation"), &saturation, 50, 200, "%d%%"));
 #ifdef HOLLYCAST_TEST_HARNESS
 			if (test_harness::ui::collectingInspection())
 				annotateTestInteger("controls.gamepad", (gamepad->unique_id() + ".saturation").c_str(), T("Saturation"), saturation, 50, 200);
@@ -1534,6 +1576,12 @@ static UILanguageChangeHandler uiLanguageHandler;
 
 static void buttonListener(int port, DreamcastKey key, bool pressed);
 
+static constexpr std::array<int, 2> kMappingSystems { DC_PLATFORM_DREAMCAST, DC_PLATFORM_NAOMI };
+static std::array<std::optional<GamepadDevice::MappingDraft>, kMappingSystems.size()> g_mappingDrafts;
+static bool g_deletePerGameMapping = false;
+static bool g_mappingSaveFailed = false;
+static std::vector<std::pair<int, bool>> g_savedPerGameDrafts;
+
 static void ResetControllerMappingRuntime()
 {
 	if (g_currentGamepadForMapping != nullptr)
@@ -1544,6 +1592,24 @@ static void ResetControllerMappingRuntime()
 	}
 	g_mapped_codes.clear();
 	g_buttonState.clear();
+	g_mappingDrafts = {};
+	g_deletePerGameMapping = false;
+	g_mappingSaveFailed = false;
+	g_savedPerGameDrafts.clear();
+}
+
+static void CloseDeviceSettingsPopup(const char* name)
+{
+	const ImGuiID windowId = ImHashStr(name);
+	const auto& popups = GImGui->OpenPopupStack;
+	for (int level = 0; level < popups.Size; ++level)
+	{
+		if (popups[level].Window != nullptr && popups[level].Window->ID == windowId)
+		{
+			ImGui::ClosePopupToLevel(level, true);
+			break;
+		}
+	}
 }
 
 static void unmapControl(const std::shared_ptr<InputMapping>& mapping, u32 gamepad_port, DreamcastKey key)
@@ -1589,7 +1655,7 @@ static void displayLabelOrCode(const char* label, u32 code, const char* suffix =
 		ImGui::Text("[%d]%s", code, suffix);
 }
 
-static void detect_input_popup(const MappingEntry* mapping)
+static void detect_input_popup(const MappingEntry* mapping, const std::shared_ptr<InputMapping>& input_mapping)
 {
 	ImVec2 padding = ScaledVec2(20, 20);
 	ImguiStyleVar _(ImGuiStyleVar_WindowPadding, padding);
@@ -1598,6 +1664,15 @@ static void detect_input_popup(const MappingEntry* mapping)
 	if (ImGui::BeginPopupModal(mapControlTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
 	{
 		ImGui::Text(T("Waiting for control '%s'..."), mapping->name);
+		// Gamepad B remains available as an input to map here.
+		if (ImGui::Button(T("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+		{
+			g_currentGamepadForMapping->cancel_detect_input();
+			g_mapped_codes.clear();
+			ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+			return;
+		}
 		u64 now = getTimeMs();
 
 		if (now >= g_map_start_time)
@@ -1640,7 +1715,6 @@ static void detect_input_popup(const MappingEntry* mapping)
 
 			if (remaining <= 0)
 			{
-				std::shared_ptr<InputMapping> input_mapping = g_currentGamepadForMapping->get_input_mapping();
 				if (input_mapping != nullptr && !g_mapped_codes.empty())
 				{
 					unmapControl(input_mapping, g_gamepad_port_for_mapping, mapping->key);
@@ -1674,9 +1748,9 @@ static void detect_input_popup(const MappingEntry* mapping)
 	}
 }
 
-static void displayMappedControl(const std::shared_ptr<GamepadDevice>& gamepad, DreamcastKey key)
+static void displayMappedControl(const std::shared_ptr<GamepadDevice>& gamepad,
+		const std::shared_ptr<InputMapping>& input_mapping, DreamcastKey key)
 {
-	std::shared_ptr<InputMapping> input_mapping = gamepad->get_input_mapping();
 	if (input_mapping == nullptr)
 		return;
 
@@ -1798,26 +1872,57 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 		- (ImGui::CalcTextSize(T("Map")).x + style.FramePadding.x * 2.0f + style.ItemSpacing.x)
 		- (ImGui::CalcTextSize(T("Unmap")).x + style.FramePadding.x * 2.0f + style.ItemSpacing.x)) / 3;
 
-	static int map_system = DC_PLATFORM_DREAMCAST;
 	static int item_current_map_idx = 0;
-	static int last_item_current_map_idx = 2;
-	if (g_currentGamepadForMapping == nullptr)
-	{
-		g_currentGamepadForMapping = gamepad;
-		g_currentGamepadForMapping->listenButtons(buttonListener);
-	}
+	if (!g_mappingDrafts[0] && !g_mappingDrafts[1] && game_started)
+		item_current_map_idx = settings.platform.isArcade() ? 1 : 0;
+	const auto currentDraft = [&]() -> GamepadDevice::MappingDraft& {
+		auto& draft = g_mappingDrafts[item_current_map_idx];
+		if (!draft)
+			draft = gamepad->createMappingDraft(kMappingSystems[item_current_map_idx], !g_deletePerGameMapping);
+		return *draft;
+	};
 
-	std::shared_ptr<InputMapping> input_mapping = gamepad->get_input_mapping();
-	if (input_mapping == nullptr || ImGui::Button(T("Done"), ScaledVec2(100, 30)))
+	const bool done = ImGui::Button(T("Done"), ScaledVec2(100, 30));
+	ImGui::SetItemDefaultFocus();
+	ImGui::SameLine();
+	const bool cancel = ImGui::Button(T("Cancel"), ScaledVec2(0, 30))
+			|| ControllerPopupCancelPressed()
+			|| (GImGui->BeginPopupStack.Size == g_controllerPopupDepth && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
+	const float cancelWidth = ImGui::GetItemRectSize().x + style.ItemSpacing.x;
+	if (done && !cancel)
+	{
+		g_mappingSaveFailed = false;
+		bool changed = false;
+		for (size_t i = 0; i < g_mappingDrafts.size(); ++i)
+		{
+			auto& draft = g_mappingDrafts[i];
+			if (draft && draft->mapping != nullptr && draft->mapping->is_dirty())
+			{
+				if (gamepad->saveMappingDraft(kMappingSystems[i], *draft))
+				{
+					changed = true;
+					if (draft->perGame && g_deletePerGameMapping)
+						g_savedPerGameDrafts.emplace_back(kMappingSystems[i], draft->instance);
+				}
+				else
+					g_mappingSaveFailed = true;
+			}
+		}
+		if (!g_mappingSaveFailed && g_deletePerGameMapping)
+		{
+			g_mappingSaveFailed = !gamepad->deletePerGameMappingsExcept(g_savedPerGameDrafts);
+			changed = true;
+		}
+		if (changed)
+			gamepad->reloadEditedMappings();
+	}
+	if (cancel || (done && !g_mappingSaveFailed))
 	{
 		ImGui::CloseCurrentPopup();
-		gamepad->save_mapping(map_system);
-		last_item_current_map_idx = 2;
 		ImGui::EndPopup();
 		ResetControllerMappingRuntime();
 		return;
 	}
-	ImGui::SetItemDefaultFocus();
 
 	float portWidth = 0.0f;
 	if (gamepad->maple_port() == MAPLE_PORTS)
@@ -1847,32 +1952,33 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 	float gameConfigWidth = 0.0f;
 	if (!settings.content.gameId.empty())
 	{
-		gameConfigWidth = ImGui::CalcTextSize(gamepad->isPerGameMapping() ? T("Delete Game Config") : T("Make Game Config")).x
+		gameConfigWidth = ImGui::CalcTextSize(currentDraft().perGame ? T("Delete Game Config") : T("Make Game Config")).x
 			+ ImGui::GetStyle().ItemSpacing.x + ImGui::GetStyle().FramePadding.x * 2;
 	}
 
-	ImGui::SameLine(0, ImGui::GetContentRegionAvail().x - comboWidth - gameConfigWidth
-		- ImGui::GetStyle().ItemSpacing.x - SettingsLayoutScaled(100) * 2 - portWidth);
+	const float controlsOffset = ImGui::GetContentRegionAvail().x - comboWidth - gameConfigWidth
+		- style.ItemSpacing.x - SettingsLayoutScaled(100) * 2 - portWidth - cancelWidth;
+	if (controlsOffset >= style.ItemSpacing.x)
+		ImGui::SameLine(0, controlsOffset);
 	ImGui::AlignTextToFramePadding();
 
 	if (!settings.content.gameId.empty())
 	{
-		if (gamepad->isPerGameMapping())
+		if (currentDraft().perGame)
 		{
 			if (ImGui::Button(T("Delete Game Config"), ScaledVec2(0, 30)))
 			{
-				gamepad->setPerGameMapping(false);
-				if (!gamepad->find_mapping(map_system))
-				{
-					if (map_system == DC_PLATFORM_DREAMCAST || !gamepad->find_mapping(DC_PLATFORM_DREAMCAST))
-						gamepad->resetMappingToDefault(g_arcade_button_mode, true);
-				}
+				g_deletePerGameMapping = true;
+				g_savedPerGameDrafts.clear();
+				for (auto& draft : g_mappingDrafts)
+					if (draft && draft->perGame)
+						draft.reset();
 			}
 		}
-		else
+		else if (ImGui::Button(T("Make Game Config"), ScaledVec2(0, 30)))
 		{
-			if (ImGui::Button(T("Make Game Config"), ScaledVec2(0, 30)))
-				gamepad->setPerGameMapping(true);
+			currentDraft().perGame = true;
+			currentDraft().mapping->set_dirty();
 		}
 		ImGui::SameLine();
 	}
@@ -1914,8 +2020,9 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 				ImguiStyleVar framePadding(ImGuiStyleVar_FramePadding, ScaledVec2(10, 10));
 				if (ImGui::Button(T("Yes")))
 				{
-					gamepad->resetMappingToDefault(g_arcade_button_mode, !hitbox);
-					gamepad->save_mapping(map_system);
+					auto& draft = currentDraft();
+					draft.mapping = gamepad->createDefaultMapping(g_arcade_button_mode, !hitbox);
+					draft.mapping->set_dirty();
 					ImGui::CloseCurrentPopup();
 				}
 				ImGui::SameLine();
@@ -1928,8 +2035,6 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 
 	ImGui::SameLine();
 	const char* items[] = { T("Dreamcast Controls"), T("Arcade Controls") };
-	if (last_item_current_map_idx == 2 && game_started)
-		item_current_map_idx = settings.platform.isArcade() ? 1 : 0;
 
 	ImGui::SetNextItemWidth(comboWidth);
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
@@ -1947,33 +2052,11 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 	}
 #endif
 	ImGui::PopStyleVar();
-	if (last_item_current_map_idx != 2 && item_current_map_idx != last_item_current_map_idx)
-		gamepad->save_mapping(map_system);
-
-	const MappingEntry* systemMapping = dcButtons;
-	if (item_current_map_idx == 0)
-	{
-		g_arcade_button_mode = false;
-		map_system = DC_PLATFORM_DREAMCAST;
-		systemMapping = dcButtons;
-	}
-	else
-	{
-		g_arcade_button_mode = true;
-		map_system = DC_PLATFORM_NAOMI;
-		systemMapping = arcadeButtons;
-	}
-
-	if (item_current_map_idx != last_item_current_map_idx)
-	{
-		if (!gamepad->find_mapping(map_system))
-		{
-			if (map_system == DC_PLATFORM_DREAMCAST || !gamepad->find_mapping(DC_PLATFORM_DREAMCAST))
-				gamepad->resetMappingToDefault(g_arcade_button_mode, true);
-		}
-		input_mapping = gamepad->get_input_mapping();
-		last_item_current_map_idx = item_current_map_idx;
-	}
+	g_arcade_button_mode = item_current_map_idx != 0;
+	const MappingEntry* systemMapping = g_arcade_button_mode ? arcadeButtons : dcButtons;
+	const auto& input_mapping = currentDraft().mapping;
+	if (g_mappingSaveFailed)
+		ImGui::TextWrapped("%s", T("Some controller mapping changes could not be saved. Check that the mappings folder is writable, then choose Done to retry."));
 
 	char key_id[32];
 	ImGui::BeginChild(ImGui::GetID("buttons"), ImVec2(0, 0),
@@ -2008,7 +2091,7 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 			ImGui::Text("%s", systemMapping->name);
 
 		ImGui::NextColumn();
-		displayMappedControl(gamepad, systemMapping->key);
+		displayMappedControl(gamepad, input_mapping, systemMapping->key);
 
 		ImGui::NextColumn();
 		if (dynamic_cast<KeyboardDevice*>(gamepad.get()) == nullptr && dynamic_cast<Mouse*>(gamepad.get()) == nullptr)
@@ -2046,13 +2129,10 @@ static void controller_mapping_popup(const std::shared_ptr<GamepadDevice>& gamep
 					g_mapped_codes.insert_back(InputMapping::InputDef::from_button(code));
 			});
 		}
-		detect_input_popup(systemMapping);
+		detect_input_popup(systemMapping, input_mapping);
 		ImGui::SameLine();
 		if (ImGui::Button(T("Unmap")))
-		{
-			input_mapping = gamepad->get_input_mapping();
 			unmapControl(input_mapping, g_gamepad_port_for_mapping, systemMapping->key);
-		}
 		ImGui::NextColumn();
 	}
 	ImGui::Columns(1, nullptr, false);
@@ -2491,19 +2571,17 @@ void renderTextureFilterLiveTuneOverlay()
 // Reset state when entering settings screen
 void resetState()
 {
-	g_state.currentTab = SettingsTab::General;
+	SelectSettingsTab(SettingsTab::General);
 	g_focusSettingsNavigation = true;
 	g_focusSettingsContent = g_focusSettingsBack = false;
 	g_tabSlideStart = -1.0;
-	ResetSettingsFooter();
 }
 
 void openTab(SettingsTab tab)
 {
-	g_state.currentTab = tab;
+	SelectSettingsTab(tab);
 	g_tabSlideStart = -1.0;
 	g_scrollToBoxArtSection = false;
-	ResetSettingsFooter();
 }
 
 void focusBoxArtSection()
@@ -2648,7 +2726,7 @@ static bool BeginSettingsCardSurface(const char* id)
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
 		ImVec2(SettingsLayoutScaled(18.0f), SettingsLayoutScaled(14.0f)));
 	return ImGui::BeginChild(id, ImVec2(0.0f, 0.0f),
-		ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize);
+		ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_NavFlattened);
 }
 
 static void EndSettingsCardSurface()
@@ -3009,11 +3087,7 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 			}
 		}
 		if (tabClicked)
-		{
-			g_state.currentTab = tab;
-			g_tabSlideStart = -1.0;
-			ResetSettingsFooter();
-		}
+			openTab(tab);
 #ifdef HOLLYCAST_TEST_HARNESS
 		if (tabItemId != 0)
 			test_harness::ui::annotateItem(tabItemId, {{"semantic_id", "settings.tab." + std::to_string(i)},
@@ -3030,9 +3104,8 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 				|| ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)
 				|| ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)))
 		{
-			g_state.currentTab = tab;
+			openTab(tab);
 			g_focusSettingsContent = true;
-			ResetSettingsFooter();
 		}
 	}
 
@@ -3048,9 +3121,6 @@ static void renderNavigationRail(const std::function<void()>& exitSettings, cons
 		}
 	}
 
-	// Keep touch swipes that begin over a tab row as scrolling. This is the
-	// same path used by the content pane, so taps and controller activation
-	// retain their existing Selectable behavior.
 	scrollWhenDraggingOnVoid();
 	windowDragScroll();
 	ImGui::PopFont();
@@ -3073,6 +3143,11 @@ static void renderContentArea()
 	// No width specified means it takes all remaining space
 	if (focusContent)
 		ImGui::SetNextWindowFocus();
+	if (g_resetSettingsContentScroll)
+	{
+		ImGui::SetNextWindowScroll(ImVec2(-1.f, 0.f));
+		g_resetSettingsContentScroll = false;
+	}
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, ImGui::GetStyle().ItemSpacing.y * density));
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, ImGui::GetStyle().FramePadding.y * density));
 	ImGui::BeginChild("ContentArea", ImVec2(0, -(footerHeight + footerGap)),
@@ -3160,9 +3235,6 @@ static void renderContentArea()
 		}
 	}
 
-	// The content pane uses drag scrolling, but Android swipes often begin on
-	// selectable rows. Keep this after rendering rows so the helper can turn
-	// those finger drags into scrolling instead of row activation.
 	scrollWhenDraggingOnVoid();
 #if defined(__ANDROID__)
 	windowDragScroll(false);
@@ -4050,6 +4122,17 @@ static void renderSettingsContentTab(SettingsTab tab)
 				if (ImGui::BeginTabItem(T("Colors"))) {
 					const float editorHeight = std::max(1.0f, ImGui::GetContentRegionAvail().y - editorFooterReserve);
 					if (ImGui::BeginChild("ThemeColorsList", ImVec2(0, editorHeight), ImGuiChildFlags_Borders)) {
+						const auto editColor = [](const char* label, ImVec4& value) {
+							const ImGuiStyle& style = ImGui::GetStyle();
+							const float height = ImGui::GetFrameHeight();
+							const float swatchWidth = height + style.ItemInnerSpacing.x;
+							const float inputWidth = std::max(1.f, ImGui::CalcItemWidth() - swatchWidth);
+							ImVec2 inputPos = ImGui::GetCursorScreenPos();
+							if (style.ColorButtonPosition == ImGuiDir_Left)
+								inputPos.x += swatchWidth;
+							const ImRect inputs(inputPos, inputPos + ImVec2(inputWidth, height));
+							return allowSettingsTouchDrag(ImGui::ColorEdit4(label, &value.x, ImGuiColorEditFlags_AlphaBar), &inputs);
+						};
 						if (ImGui::CollapsingHeader(T("Key colors"), ImGuiTreeNodeFlags_DefaultOpen)) {
 							ImGui::TextWrapped("%s", T("Choose which colors to override. Unchecked colors use the theme defaults."));
 							const char* roles[] = {"accent", "success", "warning", "error"};
@@ -4075,7 +4158,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 								found = g_themeEditor.draft.roles.find(role);
 								if (found != g_themeEditor.draft.roles.end()) {
 									ImVec4 value = found->second;
-									const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+									const bool colorChanged = editColor("##color", value);
 #ifdef HOLLYCAST_TEST_HARNESS
 									annotateTestColor("theme.role.color", role, labels[i], "##color", &value.x);
 #endif
@@ -4104,7 +4187,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 								std::transform(searchable.begin(), searchable.end(), searchable.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 								if (!query.empty() && searchable.find(query) == std::string::npos) continue;
 								ImVec4 value = previewStyle.Colors[i];
-								const bool colorChanged = ImGui::ColorEdit4(name, &value.x, ImGuiColorEditFlags_AlphaBar);
+								const bool colorChanged = editColor(name, value);
 #ifdef HOLLYCAST_TEST_HARNESS
 								annotateTestColor("theme.interface_color", name, name, name, &value.x);
 #endif
@@ -4147,7 +4230,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 									found = roles.find(role);
 									if (found != roles.end()) {
 										ImVec4 value = found->second;
-										const bool colorChanged = ImGui::ColorEdit4("##color", &value.x, ImGuiColorEditFlags_AlphaBar);
+										const bool colorChanged = editColor("##color", value);
 #ifdef HOLLYCAST_TEST_HARNESS
 									if (collectThemeMetadata)
 										annotateTestColor("theme.widget_role.color", widgetRoleId.c_str(), role, "##color", &value.x);
@@ -4169,7 +4252,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					auto scalar = [&](const char* name, float ImGuiStyle::*member, float max) {
 						float value = previewStyle.*member;
 						const float upper = std::strstr(name, "BorderSize") != nullptr ? 20.f : max;
-						const bool changed = ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+						const bool changed = allowSettingsTouchDrag(ImGui::SliderFloat(name, &value, 0.f, upper, "%.3f", ImGuiSliderFlags_AlwaysClamp));
 #ifdef HOLLYCAST_TEST_HARNESS
 						annotateTestFloat("theme.style", name, name, value, 0.f, upper);
 #endif
@@ -4181,7 +4264,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					};
 					auto vector = [&](const char* name, ImVec2 ImGuiStyle::*member, float max) {
 						ImVec2 value = previewStyle.*member;
-						const bool changed = ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+						const bool changed = allowSettingsTouchDrag(ImGui::DragFloat2(name, &value.x, 0.25f, 0.f, max, "%.3f", ImGuiSliderFlags_AlwaysClamp));
 #ifdef HOLLYCAST_TEST_HARNESS
 							annotateTestVector2("theme.style", name, name, name, value, 0.f, max);
 #endif
@@ -4203,7 +4286,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					for (const auto& item : scalars) {
 						if (item.second == &ImGuiStyle::Alpha) {
 							float value = previewStyle.*item.second;
-							const bool changed = ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+							const bool changed = allowSettingsTouchDrag(ImGui::SliderFloat(item.first, &value, 0.2f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp));
 #ifdef HOLLYCAST_TEST_HARNESS
 							annotateTestFloat("theme.style", item.first, item.first, value, 0.2f, 1.f);
 #endif
@@ -4226,7 +4309,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 						ImGui::TextDisabled("%s", T("Hollycast layout"));
 					auto layoutSlider = [&](const char* name, float& value, float minimum, float maximum, float fallback, bool& present) {
 						float shown = present ? value : fallback;
-						const bool changed = ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+							const bool changed = allowSettingsTouchDrag(ImGui::SliderFloat(name, &shown, minimum, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp));
 #ifdef HOLLYCAST_TEST_HARNESS
 						annotateTestFloat("theme.layout", name, name, shown, minimum, maximum);
 #endif
@@ -4271,7 +4354,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 					}
 					float opacity = g_themeEditor.draft.assets.backgroundOpacity;
 					const char* opacityLabel = T("Background opacity");
-					const bool opacityChanged = ImGui::SliderFloat(opacityLabel, &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+						const bool opacityChanged = allowSettingsTouchDrag(ImGui::SliderFloat(opacityLabel, &opacity, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp));
 #ifdef HOLLYCAST_TEST_HARNESS
 					annotateTestFloat("theme.asset", "background_opacity", opacityLabel, opacity, 0.f, 1.f);
 #endif
@@ -4623,7 +4706,8 @@ static void renderSettingsContentTab(SettingsTab tab)
 				T("Banner"), T("Back Cover"), T("Spine"), T("Box Texture")
 			};
 			const int iconMedia = config::ThemeIconMedia.get();
-			int selectedIconMedia = iconMedia >= 10 ? iconMedia : iconMedia + 1; // Manual (9) is not image artwork.
+			const int manual = static_cast<int>(config::LibraryCoverMediaMode::Manual);
+			int selectedIconMedia = iconMedia == manual ? 0 : iconMedia > manual ? iconMedia : iconMedia + 1;
 			if (selectedIconMedia < 0 || selectedIconMedia >= IM_ARRAYSIZE(iconMediaLabels))
 				selectedIconMedia = 0;
 			SettingsUI::PopupConfig iconMediaCfg {};
@@ -4636,7 +4720,7 @@ static void renderSettingsContentTab(SettingsTab tab)
 			iconMediaCfg.options.currentValue = &selectedIconMedia;
 			iconMediaCfg.options.valueWidth = 220.0f;
 			iconMediaCfg.options.onChange = [](int index) {
-				config::ThemeIconMedia = index >= 10 ? index : index - 1;
+				config::ThemeIconMedia = index > static_cast<int>(config::LibraryCoverMediaMode::Manual) ? index : index - 1;
 				gui_refresh_custom_boxart(true);
 				SaveSettings();
 				return true;
@@ -4790,10 +4874,10 @@ static void renderSettingsContentTab(SettingsTab tab)
 		ImGui::BeginDisabled(!(config::ScreenScraperMedia.get() & supported));
 		if (ImGui::Button(T("Download Selected Media")))
 			gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & supported);
+		ImGui::EndDisabled();
 		ImGui::SameLine();
 		if (ImGui::Button(T("Retry Unmatched / Unavailable Media")))
 			gui_download_library_media(static_cast<u32>(config::ScreenScraperMedia.get()) & supported, true);
-		ImGui::EndDisabled();
 		ImGui::EndDisabled();
 		if (!config::FetchBoxart)
 			ImGui::TextWrapped("%s", T("Enable Fetch Box Art below to allow downloads."));
@@ -4985,9 +5069,9 @@ static void renderSettingsContentTab(SettingsTab tab)
 				T("Spine"),
 				T("Box Texture"),
 			};
-			const int coverMedia = config::LibraryCoverMedia.get();
-			int selectedCoverMedia = coverMedia == 9 ? 0 : coverMedia >= 10 ? coverMedia - 1 : coverMedia;
-			if (selectedCoverMedia < 0 || selectedCoverMedia >= IM_ARRAYSIZE(libraryCoverMediaSources))
+			constexpr int manual = static_cast<int>(config::LibraryCoverMediaMode::Manual);
+			int selectedCoverMedia = config::LibraryCoverMedia.get();
+			if (selectedCoverMedia < 0 || selectedCoverMedia >= static_cast<int>(config::LibraryCoverMediaMode::Count))
 				selectedCoverMedia = 0;
 			SettingsUI::PopupConfig libraryCoverMediaCfg {};
 			libraryCoverMediaCfg.type = SettingsUI::PopupType::Options;
@@ -4998,8 +5082,12 @@ static void renderSettingsContentTab(SettingsTab tab)
 			libraryCoverMediaCfg.options.optionCount = IM_ARRAYSIZE(libraryCoverMediaSources);
 			libraryCoverMediaCfg.options.currentValue = &selectedCoverMedia;
 			libraryCoverMediaCfg.options.valueWidth = 240.0f;
-			libraryCoverMediaCfg.options.onChange = [](int index) {
-				config::LibraryCoverMedia = index >= 9 ? index + 1 : index; // Skip the manual/PDF slot.
+			libraryCoverMediaCfg.options.storageIndexMap = [manual](int index) { return index >= manual ? index + 1 : index; };
+			libraryCoverMediaCfg.options.valueToString = [&](int value) {
+				return value == manual ? T("Manual") : libraryCoverMediaSources[value > manual ? value - 1 : value];
+			};
+			libraryCoverMediaCfg.options.onChange = [](int value) {
+				config::LibraryCoverMedia = value;
 				return true;
 			};
 			RenderGeneralPopupSettingRow(
@@ -7659,7 +7747,7 @@ static void renderShaderParameterControls()
 					int stepIndex = static_cast<int>(std::clamp(std::round((value - minimum) / step), 0.0, static_cast<double>(stepCount)));
 					ImGui::TextWrapped("%s: %.0f", parameter.label.c_str(), static_cast<double>(value));
 					ImGui::SetNextItemWidth(-1.f);
-					changed = ImGui::SliderInt("##value", &stepIndex, 0, stepCount, "");
+					changed = allowSettingsTouchDrag(ImGui::SliderInt("##value", &stepIndex, 0, stepCount, ""));
 					value = static_cast<float>(std::min(maximum, minimum + stepIndex * step));
 				}
 				else {
@@ -7668,7 +7756,7 @@ static void renderShaderParameterControls()
 					int stepIndex = static_cast<int>(std::clamp(std::round((value - parameter.minimum) / step), 0.0, static_cast<double>(stepCount)));
 					ImGui::TextWrapped("%s: %.3f", parameter.label.c_str(), value);
 					ImGui::SetNextItemWidth(-1.f);
-					changed = ImGui::SliderInt("##value", &stepIndex, 0, stepCount, "");
+					changed = allowSettingsTouchDrag(ImGui::SliderInt("##value", &stepIndex, 0, stepCount, ""));
 					value = static_cast<float>(std::clamp(parameter.minimum + stepIndex * step,
 							static_cast<double>(parameter.minimum), static_cast<double>(parameter.maximum)));
 				}
@@ -7691,9 +7779,9 @@ static void renderShaderParameterControls()
 				ImGui::TextDisabled("%u", component + 1);
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(-1.f);
-				changed = ImGui::DragFloat("##component", &values[component],
+				changed = allowSettingsTouchDrag(ImGui::DragFloat("##component", &values[component],
 						step,
-						minimum < maximum ? minimum : 0.f, minimum < maximum ? maximum : 0.f) || changed;
+						minimum < maximum ? minimum : 0.f, minimum < maximum ? maximum : 0.f)) || changed;
 				if (ImGui::IsItemEdited() && minimum < maximum)
 					values[component] = std::clamp(minimum + std::round((values[component] - minimum) / step) * step,
 							minimum, maximum);
@@ -9610,6 +9698,16 @@ static void renderVmuCardManager()
 void renderControlsTab()
 {
 	uiLanguageHandler.init();
+	if (g_currentGamepadForMapping != nullptr && !g_currentGamepadForMapping->is_registered())
+	{
+		CloseDeviceSettingsPopup("Controller Mapping");
+		ResetControllerMappingRuntime();
+	}
+	if (g_currentGamepadForSettings != nullptr && !g_currentGamepadForSettings->is_registered())
+	{
+		CloseDeviceSettingsPopup("Gamepad Settings");
+		g_currentGamepadForSettings.reset();
+	}
 
 	ScopedTwoLineRowStyle controlsRowStyle(12.0f, true, 0.5f);
 
@@ -9756,7 +9854,7 @@ void renderControlsTab()
 						g_currentGamepadForMapping = gamepad;
 						g_currentGamepadForMapping->listenButtons(buttonListener);
 						g_gamepad_port_for_mapping = 0;
-						ImGui::OpenPopup(T("Controller Mapping"));
+						ImGui::OpenPopup(Tnop("Controller Mapping"));
 					}
 				}
 
@@ -9787,7 +9885,7 @@ void renderControlsTab()
 						else
 						{
 							g_currentGamepadForSettings = gamepad;
-							ImGui::OpenPopup(T("Gamepad Settings"));
+							ImGui::OpenPopup(Tnop("Gamepad Settings"));
 						}
 					}
 				}
@@ -9796,7 +9894,7 @@ void renderControlsTab()
 				if (g_currentGamepadForSettings == gamepad)
 				{
 					gamepadSettingsPopup(gamepad);
-					if (!ImGui::IsPopupOpen(T("Gamepad Settings")))
+					if (!ImGui::IsPopupOpen(Tnop("Gamepad Settings")))
 						g_currentGamepadForSettings.reset();
 				}
 
@@ -9804,7 +9902,7 @@ void renderControlsTab()
 				if (g_currentGamepadForMapping == gamepad)
 				{
 					controller_mapping_popup(gamepad);
-					if (!ImGui::IsPopupOpen(T("Controller Mapping")))
+					if (!ImGui::IsPopupOpen(Tnop("Controller Mapping")))
 						ResetControllerMappingRuntime();
 				}
 			}
@@ -9843,9 +9941,13 @@ void renderControlsTab()
 		regionCfg.options.currentValue = &regionSelection;
 		regionCfg.options.valueWidth = 220.0f;
 		regionCfg.options.onChange = [regionOption](int selectedIndex) {
-			if (selectedIndex < 0 || selectedIndex > 3 || regionOption->get() == selectedIndex - 1) return false;
-			regionOption->set(selectedIndex - 1);
-			hikaru::frontend::requestCabinetRegion();
+			if (selectedIndex < 0 || selectedIndex > 3)
+				return false;
+			if (regionOption->get() != selectedIndex - 1)
+			{
+				regionOption->set(selectedIndex - 1);
+				hikaru::frontend::requestCabinetRegion();
+			}
 			return true;
 		};
 		RenderGeneralPopupSettingRow(Tnop("HikaruCabinetRegionSetting"),
@@ -12222,6 +12324,7 @@ void renderAboutTab()
 // Main entry point - renders the entire settings UI
 void renderSettingsNew()
 {
+	ScrollSettingsFromController();
 	if (!g_controllerPopupWasOpen && !IsAnySettingsPopupOpen()
 			&& g_controllerSection != ControllerSection::None)
 	{
@@ -12230,7 +12333,7 @@ void renderSettingsNew()
 			ImGui::ClearActiveID();
 			ImGui::NavMoveRequestCancel();
 			if (g_tabSlideStart >= 0.0)
-				g_state.currentTab = g_tabSlideTarget;
+				SelectSettingsTab(g_tabSlideTarget);
 			g_tabSlideStart = -1.0;
 			g_focusSettingsContent = false;
 			g_focusSettingsNavigation = g_controllerSection == ControllerSection::Content;
@@ -12240,15 +12343,18 @@ void renderSettingsNew()
 		// right only change tabs after entering that tab's content pane.
 		else if (!g_controllerEditing && g_controllerSection == ControllerSection::Content)
 		{
+			// The stick scrolls wide child lists while the D-pad still changes tabs.
+			const ImGuiWindow* focused = GImGui->NavWindow;
+			const bool stickScrollsHorizontally = focused != nullptr && focused->ScrollMax.x > 0.f && focused->ScrollbarX;
 			const bool left = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, true)
-					|| ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft, true);
+					|| (!stickScrollsHorizontally && ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft, true));
 			const bool right = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, true)
-					|| ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, true);
+					|| (!stickScrollsHorizontally && ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, true));
 			if (left != right)
 			{
 				ImGui::NavMoveRequestCancel();
 				if (g_tabSlideStart >= 0.0)
-					g_state.currentTab = g_tabSlideTarget;
+					SelectSettingsTab(g_tabSlideTarget);
 				g_tabSlideDirection = right ? 1 : -1;
 				g_tabSlideTarget = static_cast<SettingsTab>((static_cast<int>(g_state.currentTab)
 						+ g_tabSlideDirection + static_cast<int>(SettingsTab::Count)) % static_cast<int>(SettingsTab::Count));
@@ -12262,12 +12368,7 @@ void renderSettingsNew()
 	{
 		const double elapsed = ImGui::GetTime() - g_tabSlideStart;
 		if (elapsed >= kTabSlideSeconds * 0.5 && g_state.currentTab != g_tabSlideTarget)
-		{
-			g_state.currentTab = g_tabSlideTarget;
-			if (g_contentWindow != nullptr)
-				ImGui::SetScrollY(g_contentWindow, 0.0f);
-			ResetSettingsFooter();
-		}
+			SelectSettingsTab(g_tabSlideTarget);
 		if (elapsed >= kTabSlideSeconds)
 		{
 			g_tabSlideStart = -1.0;

@@ -505,6 +505,12 @@ void input_sdl_handle()
 			SDL_free(event.user.data1);
 			continue;
 		}
+		// SDL_FINGER events already deliver touchscreen input. Drop the synthetic
+		// mouse events before they can change the GUI input source or mouse state.
+		if ((event.type == SDL_MOUSEMOTION && event.motion.which == SDL_TOUCH_MOUSEID)
+				|| ((event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP)
+					&& event.button.which == SDL_TOUCH_MOUSEID))
+			continue;
 #ifdef HAVE_SDL_VMUS
 		// Utility-window input and close/resize events belong to that VMU only.
 		// Let keyboard events reach application shortcuts before filtering game input.
@@ -834,15 +840,24 @@ void input_sdl_handle()
 			// Switch touchscreen support
 			case SDL_FINGERDOWN:
 			case SDL_FINGERMOTION:
+			case SDL_FINGERUP:
 				{
+					if (window == nullptr || (event.tfinger.windowID != 0 && event.tfinger.windowID != SDL_GetWindowID(window)))
+						break;
 					auto mouse = getMouse(0);
-					int x = event.tfinger.x * settings.display.width;
-					int y = event.tfinger.y * settings.display.height;
+					// GUI input applies the display scale to SDL window coordinates.
+					int windowWidth, windowHeight;
+					SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+					const int x = event.tfinger.x * windowWidth;
+					const int y = event.tfinger.y * windowHeight;
 					gui_set_mouse_position(x, y, true);
+					if (event.type == SDL_FINGERUP)
+						gui_set_mouse_button(0, false, true);
+
 					if (mouseCaptured && gameRunning && event.type == SDL_FINGERMOTION)
 					{
-						int dx = event.tfinger.dx * settings.display.width;
-						int dy = event.tfinger.dy * settings.display.height;
+						const int dx = event.tfinger.dx * windowWidth;
+						const int dy = event.tfinger.dy * windowHeight;
 						mouse->setRelPos(dx, dy);
 					}
 					else
@@ -851,17 +866,8 @@ void input_sdl_handle()
 						mouse->setButton(Mouse::LEFT_BUTTON, true);
 						gui_set_mouse_button(0, true, true);
 					}
-				}
-				break;
-			case SDL_FINGERUP:
-				{
-					auto mouse = getMouse(0);
-					int x = event.tfinger.x * settings.display.width;
-					int y = event.tfinger.y * settings.display.height;
-					gui_set_mouse_position(x, y, true);
-					gui_set_mouse_button(0, false, true);
-					mouse->setAbsPos(x, y);
-					mouse->setButton(Mouse::LEFT_BUTTON, false);
+					else if (event.type == SDL_FINGERUP)
+						mouse->setButton(Mouse::LEFT_BUTTON, false);
 				}
 				break;
 		}

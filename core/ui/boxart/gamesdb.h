@@ -1,5 +1,6 @@
 /*
 	Copyright 2022 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -25,14 +26,30 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
 
 using namespace nlohmann;
+
+class TheGamesDbAuthorization
+{
+public:
+	std::optional<u64> beginRequest() const;
+	void reject(u64 requestGeneration);
+	void reset();
+
+private:
+	mutable std::mutex mutex;
+	u64 generation = 0;
+	bool rejected = false;
+};
 
 class TheGamesDb : public Scraper
 {
 public:
 	using Transport = std::function<int(const std::string&, std::vector<u8>&, std::string&)>;
-	explicit TheGamesDb(Transport transport = {});
+	explicit TheGamesDb(Transport transport = {}, std::shared_ptr<TheGamesDbAuthorization> authorization = {});
 	// Front/back covers, logos, banners, fanart, screenshots and title screens.
 	inline static constexpr u32 supportedMedia = 1u | (1u << 2) | (1u << 3) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 9);
 	static bool needsMedia(const GameBoxart& item, u32 selection);
@@ -55,6 +72,7 @@ private:
 	u64 blackoutPeriod = 0;
 
 	Transport transport;
+	std::shared_ptr<TheGamesDbAuthorization> authorization;
 	std::string directory;
 	json references = json::object();
 };

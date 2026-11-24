@@ -236,15 +236,18 @@ public:
 	void resetMappingToDefault(bool arcade, bool gamepad) override
 	{
 		NOTICE_LOG(INPUT, "Resetting Android gamepad to default: %d %d", arcade, gamepad);
+		GamepadDevice::resetMappingToDefault(arcade, gamepad);
+	}
+
+	std::shared_ptr<InputMapping> createDefaultMapping(bool arcade, bool gamepad) override
+	{
 		if (arcade)
 		{
 			if (gamepad)
-				input_mapper = std::make_shared<DefaultInputMapping<true, true>>(*this);
-			else
-				input_mapper = std::make_shared<DefaultInputMapping<true, false>>(*this);
+				return std::make_shared<DefaultInputMapping<true, true>>(*this);
+			return std::make_shared<DefaultInputMapping<true, false>>(*this);
 		}
-		else
-			input_mapper = std::make_shared<DefaultInputMapping<false, false>>(*this);
+		return std::make_shared<DefaultInputMapping<false, false>>(*this);
 	}
 
 private:

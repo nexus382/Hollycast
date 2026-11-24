@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
+#include "ui/boxart/artwork_adapter.h"
 #include "ui/boxart/screenscraper.h"
 #include "ui/boxart/boxart.h"
 #include "ui/boxart/gamesdb.h"
@@ -418,6 +419,71 @@ TEST_F(ScreenScraperTest, MissingMediaAndAlternateMixAreHandledWithoutDownloadin
 	EXPECT_EQ(art.screenScraperMedia.count("fanart"), 0u);
 }
 
+TEST_F(ScreenScraperTest, DefinitivelyMissingCoverAdvancesToFallback)
+{
+	enum class Result { NoGame, NoMedias, NoCover, NotFound, NoMedia, TemporaryFailure };
+	for (const auto result : {Result::NoGame, Result::NoMedias, Result::NoCover,
+			Result::NotFound, Result::NoMedia, Result::TemporaryFailure})
+	{
+		SCOPED_TRACE(static_cast<int>(result));
+		int images = 0;
+		auto session = std::make_shared<Session>(credentials(),
+			[&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+				if (url.find("ssuserInfos.php") != std::string::npos) return reply(bytes, {{"ssuser", user()}});
+				if (url.find("jeuInfos.php") != std::string::npos)
+				{
+					if (result == Result::NoGame) return 404;
+					auto details = game();
+					if (result == Result::NoMedias) details.erase("medias");
+					if (result == Result::NoCover) details["medias"].erase(0);
+					return reply(bytes, {{"jeu", details}});
+				}
+				++images;
+				if (result == Result::TemporaryFailure) return 500;
+				if (result == Result::NotFound) return 404;
+				const std::string missing = "NOMEDIA";
+				bytes.assign(missing.begin(), missing.end());
+				return 200;
+			});
+		session->login();
+		ScreenScraper scraper(session);
+		ASSERT_TRUE(scraper.initialize(root.u8string() + '/'));
+		const std::string staleCover = (root / "deleted-cover.png").u8string();
+		const std::string staleTitle = (root / "deleted-title.png").u8string();
+		const auto liveMix = root / "local-mix.png";
+		std::ofstream(liveMix).put('x');
+		const u32 mix = artwork::mediaBit("miximage");
+		auto art = item();
+		art.requestedMedia |= mix;
+		art.screenScraperId = 1234;
+		art.screenScraperCheckedMedia = result == Result::TemporaryFailure ? mix : art.requestedMedia;
+		art.screenScraperMedia = {{"cover", staleCover}, {"miximage", liveMix.u8string()}, {"title", staleTitle}};
+		art.boxartPath = staleCover;
+		art.offlineArtState = OfflineArtState::NoArtwork;
+		if (result == Result::TemporaryFailure)
+		{
+			EXPECT_THROW(scraper.scrape(art), std::runtime_error);
+			EXPECT_EQ(art.screenScraperCheckedMedia, mix);
+			EXPECT_EQ(art.screenScraperMedia.at("cover"), staleCover);
+			EXPECT_EQ(art.boxartPath, staleCover);
+			EXPECT_EQ(ArtworkAdapter::nextProvider(art, coverMedia), 1);
+		}
+		else
+		{
+			scraper.scrape(art);
+			EXPECT_FALSE(needsMedia(art, coverMedia));
+			EXPECT_EQ(ArtworkAdapter::nextProvider(art, coverMedia), 2);
+			EXPECT_EQ(art.screenScraperMedia.count("cover"), 0u);
+			EXPECT_TRUE(art.boxartPath.empty());
+			scraper.scrape(art);
+		}
+		EXPECT_EQ(art.screenScraperMedia.at("miximage"), liveMix.u8string());
+		EXPECT_EQ(art.screenScraperMedia.at("title"), staleTitle);
+		const bool requestsImage = result == Result::NotFound || result == Result::NoMedia || result == Result::TemporaryFailure;
+		EXPECT_EQ(images, requestsImage ? 1 : 0);
+	}
+}
+
 TEST_F(ScreenScraperTest, AutomaticCoverRequestIgnoresFullManualSelection)
 {
 	config::ScreenScraperMedia = static_cast<int>(allMedia);
@@ -665,6 +731,22 @@ TEST(ScreenScraperAccountTest, ReportsSafeHttpAndInvalidJsonDiagnostics)
 	expectSafe(jsonMessage, "invalid or oversized JSON", knownEndpoint, privateParameter, privateBody);
 	EXPECT_NE(jsonMessage.find("game search"), std::string::npos);
 	EXPECT_EQ(jsonMessage, invalidJson.status().message);
+}
+
+TEST(ScreenScraperAccountTest, FailedLoginAsksToReconnect)
+{
+	for (const int replyCode : {0, 200, 429, 500})
+	{
+		SCOPED_TRACE(replyCode);
+		Session session(credentials(), [&](const std::string&, std::vector<u8>&, std::string&) {
+			return replyCode;
+		});
+		EXPECT_THROW(session.login(), std::runtime_error);
+		const auto account = session.status();
+		EXPECT_FALSE(account.connecting);
+		EXPECT_FALSE(account.connected);
+		EXPECT_NE(account.message.find("Reconnect to try again."), std::string::npos);
+	}
 }
 
 TEST(ScreenScraperAccountTest, RecoversTransientFailuresAfterValidatedReplies)
@@ -966,9 +1048,16 @@ protected:
 	{
 		boxart.runScreenScraperQueue(session, boxart.screenGeneration, root.u8string() + '/', std::move(launchbox), std::move(tgdb));
 	}
-	void startQueueAsync(const std::shared_ptr<Session>& session)
+	void startQueueAsync(const std::shared_ptr<Session>& session, std::unique_ptr<Scraper> launchbox = {},
+			TheGamesDb::Transport tgdbTransport = {})
 	{
-		boxart.screenFetching = std::async(std::launch::async, [this, session] { run(session); });
+		std::unique_ptr<Scraper> tgdb;
+		if (tgdbTransport)
+			tgdb = std::make_unique<TheGamesDb>(std::move(tgdbTransport), boxart.tgdbAuthorization);
+		boxart.screenFetching = std::async(std::launch::async,
+				[this, session, launchbox = std::move(launchbox), tgdb = std::move(tgdb)]() mutable {
+					run(session, std::move(launchbox), std::move(tgdb));
+				});
 	}
 	bool setOfflineArtState(const GameBoxart& item, OfflineArtState state)
 	{
@@ -998,6 +1087,24 @@ protected:
 		std::lock_guard<std::mutex> lock(boxart.mutex);
 		++boxart.screenGeneration;
 		boxart.artworkWake.notify_all();
+	}
+	void addPreparedJob(int index)
+	{
+		std::lock_guard<std::mutex> lock(boxart.mutex);
+		seedPrepared(1, index);
+		boxart.artworkWake.notify_all();
+	}
+	bool stopAndJoinQueue()
+	{
+		stopQueue();
+		const bool stopped = boxart.screenFetching.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		// Wake a parked queue through its work predicate as well if cancellation failed.
+		if (!stopped)
+			boxart.setMediaBatchPending(true);
+		boxart.screenFetching.get();
+		if (!stopped)
+			boxart.setMediaBatchPending(false);
+		return stopped;
 	}
 	bool hasTransientLookups() const
 	{
@@ -1263,6 +1370,54 @@ TEST_F(ScreenScraperQueueTest, AllPrimaryJobsFinishBeforeLaunchBoxAndAllLaunchBo
 	EXPECT_EQ(launchboxCalls, 4); EXPECT_EQ(tgdbCalls, 4);
 	EXPECT_EQ(queued(), 0u);
 	EXPECT_EQ(boxart.downloadProgress().games, 0u);
+}
+
+TEST_F(ScreenScraperQueueTest, RejectedTgdbLeavesWorkPendingWhilePrimaryContinues)
+{
+	seedPrepared(1);
+	std::atomic<int> lookups{0}, newCovers{0}, tgdbRequests{0};
+	auto session = mockSession(1, [&](const std::string& url, std::vector<u8>& bytes, std::string&) {
+		if (url.find("box-2D") != std::string::npos)
+		{
+			if (url.find("jeuid=101&") == std::string::npos)
+				return 404;
+			++newCovers;
+		}
+		bytes = png();
+		return 200;
+	}, lookups);
+	auto launchbox = std::make_unique<PipelineScraper>([](GameBoxart& item) {
+		item.launchboxSearched = true;
+		item.launchboxCheckedMedia |= artwork::coverMedia;
+	});
+	startQueueAsync(session, std::move(launchbox), [&](const std::string&, std::vector<u8>&, std::string&) {
+		++tgdbRequests;
+		return 401;
+	});
+	const auto waitUntilParked = [&](int expectedCovers) {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			if (boxart.theGamesDbAuthorizationRejected() && boxart.activeMediaProvider() == -1
+					&& newCovers == expectedCovers)
+				return true;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		return false;
+	};
+	const bool parked = waitUntilParked(0);
+	addPreparedJob(1);
+	const bool newWorkFinished = waitUntilParked(1);
+	const bool stopped = stopAndJoinQueue();
+
+	EXPECT_TRUE(parked);
+	EXPECT_TRUE(newWorkFinished);
+	EXPECT_TRUE(stopped);
+	EXPECT_EQ(tgdbRequests, 1);
+	ASSERT_EQ(queued(), 1u);
+	const auto pending = takeWork();
+	EXPECT_EQ(pending.screenScraperId, 100u);
+	EXPECT_EQ(pending.tgdbCheckedMedia & artwork::coverMedia, 0u);
 }
 
 TEST_F(ScreenScraperQueueTest, SlowCoverDoesNotIdleOtherWorkersAndAllCoversPrecedeExtras)

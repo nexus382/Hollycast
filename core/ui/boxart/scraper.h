@@ -22,6 +22,8 @@
 #include "types.h"
 #include "json.hpp"
 
+#include <array>
+#include <chrono>
 #include <optional>
 #include <functional>
 #include <map>
@@ -65,6 +67,9 @@ struct GameBoxart
 	std::optional<u64> playTimeSeconds;
 
 	bool arcade = false;
+	// Exact ROM basename and game ID candidates that returned HTTP 404.
+	std::array<std::string, 2> legacyArcadeMissing;
+	std::chrono::steady_clock::time_point legacyArcadeRetryAfter{};
 	OfflineArtState offlineArtState = OfflineArtState::Pending;
 	u64 workRevision = 0;
 	// Per-job shared media bits; never persisted or inferred from the current theme.
@@ -97,7 +102,9 @@ struct GameBoxart
 	static void loadProperty(T& i, const json& j, const std::string& propName)
 	{
 		try {
-			i = j.at(propName).get<T>();
+			// Older Flycast rows omit the provider fields on every game.
+			const auto value = j.find(propName);
+			i = value == j.end() ? T{} : value->get<T>();
 		} catch (const json::exception& e) {
 			i = T();
 		}
@@ -143,7 +150,6 @@ protected:
  // Validate and atomically publish an original image. A 404 is unavailable;
  // transient or invalid responses throw so callers can retain partial work.
  static bool downloadMediaImage(const std::string& url, const std::string& path, const Transport& transport = {});
- bool downloadImage(const std::string& url, const std::string& localName, bool mute = false);
 	std::string makeUniqueFilename(const std::string& url);
 
 private:

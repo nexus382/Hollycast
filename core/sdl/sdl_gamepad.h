@@ -46,6 +46,7 @@ public:
 	const char *get_axis_name(u32 code) override;
 
 	std::shared_ptr<InputMapping> getDefaultMapping() override;
+	std::shared_ptr<InputMapping> createDefaultMapping(bool arcade, bool gamepad) override;
 	void resetMappingToDefault(bool arcade, bool gamepad) override;
 	bool find_mapping(int system = settings.platform.system) override;
 

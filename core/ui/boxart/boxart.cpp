@@ -61,15 +61,19 @@ std::array<int, 3> cachedProviderOrder(int preferred)
 	return {0, 1, 2};
 }
 
-void selectProviderCover(GameBoxart& item)
+bool selectProviderCover(GameBoxart& item)
 {
- const int preferred = config::ArtworkProvider.get();
- for (int provider : cachedProviderOrder(preferred))
- {
-  const auto& media = item.mediaForProvider(provider);
-  const auto cover = media.find("cover");
-  if (cover != media.end() && file_exists(cover->second)) { item.boxartPath = cover->second; return; }
- }
+	for (int provider : cachedProviderOrder(config::ArtworkProvider.get()))
+	{
+		const auto& media = item.mediaForProvider(provider);
+		const auto cover = media.find("cover");
+		if (cover != media.end() && file_exists(cover->second))
+		{
+			item.boxartPath = cover->second;
+			return true;
+		}
+	}
+	return false;
 }
 
 // Resolve completed/missing categories once when queue state changes. Scheduling
@@ -85,6 +89,13 @@ u32 pendingArtworkMedia(const GameBoxart& item, int provider, u32 selection)
 	if ((selection & artwork::metadataMedia) && ArtworkAdapter::needsMedia(item, provider, artwork::metadataMedia))
 		pending |= artwork::metadataMedia;
 	return pending;
+}
+
+bool needsArcadeArtwork(const GameBoxart& item, int provider, u32 selection)
+{
+	// The legacy cover endpoint and the TGDB catalog can fail independently.
+	return (provider != 2 && ArcadeScraper::needsCover(item))
+		|| (provider != 1 && ArtworkAdapter::needsMedia(item, provider, selection));
 }
 
 static constexpr size_t kOnlineBoxartBatchSize = 10;
@@ -292,7 +303,14 @@ bool isMissingBoxartFile(const GameBoxart& boxart)
 
 bool isMissingScrapedBoxartFile(const GameBoxart& boxart)
 {
-	return boxart.scraped && !boxart.boxartUrl.empty() && (boxart.boxartPath.empty() || isMissingBoxartFile(boxart));
+	return (boxart.scraped || boxart.arcade) && !boxart.boxartUrl.empty()
+		&& (boxart.boxartPath.empty() || isMissingBoxartFile(boxart));
+}
+
+bool hasCheckedArcadeTgdbMiss(const GameBoxart& boxart)
+{
+	return boxart.arcade && boxart.tgdbSearched && (boxart.tgdbCheckedMedia & artwork::coverMedia)
+		&& boxart.tgdbMedia.count("cover") == 0;
 }
 
 size_t findLastPathSeparator(const std::string& path)
@@ -367,6 +385,113 @@ bool isPathInDirectory(const std::string& path, const std::string& directory)
 	const std::string normalizedPath = normalizePath(path);
 	const std::string normalizedDirectory = normalizePath(directory);
 	return normalizedPath.substr(0, normalizedDirectory.length()) == normalizedDirectory;
+}
+
+std::string legacyFlycastPathKey(const std::string& path)
+{
+	if (isContentUri(path))
+		return path;
+	const auto normalized = std::filesystem::u8path(path).lexically_normal().generic_u8string();
+	std::string key(normalized.begin(), normalized.end());
+#ifdef _WIN32
+	key = normalizePath(std::move(key));
+#endif
+	return key;
+}
+
+std::string legacyFlycastGameKey(bool arcade, const std::string& fileName)
+{
+	return (arcade ? "arcade:" : "disc:") + fileName;
+}
+
+void indexLegacyFlycastCovers(const std::string& root, const std::string& databaseName,
+		std::unordered_map<std::string, std::string>& covers, std::unordered_set<std::string>& coverFiles)
+{
+	const bool scopedStorage = isContentUri(root);
+	std::unordered_map<std::string, std::string> documents;
+	std::string contents;
+	constexpr size_t maxSize = 64 * 1024 * 1024;
+	try {
+		std::string database;
+		if (scopedStorage)
+		{
+			// Use actual document URIs returned by the provider for the database
+			// and its flat cache files. Document IDs need not resemble filenames.
+			for (const auto& entry : hostfs::storage().listContent(root))
+			{
+				if (entry.isDirectory || !isContentUri(entry.path))
+					continue;
+				const auto [document, inserted] = documents.emplace(entry.name, entry.path);
+				if (!inserted && document->second != entry.path)
+					document->second.clear();
+			}
+			const auto document = documents.find(databaseName);
+			if (document != documents.end())
+				database = document->second;
+		}
+		else
+		{
+			database = appendFilesystemPath(root, databaseName);
+			if (!file_exists(database))
+				return;
+		}
+		if (database.empty() || !readStorageFile(database, contents, maxSize))
+			return;
+	} catch (const hostfs::StorageException&) {
+		// An unreadable optional Flycast database must not block named custom media.
+		return;
+	}
+	const json rows = json::parse(contents, nullptr, false);
+	if (!rows.is_array())
+		return;
+
+	const auto addCover = [&](std::string key, const std::string& path) {
+		const auto [entry, inserted] = covers.emplace(std::move(key), path);
+		if (!inserted && entry->second != path && legacyFlycastPathKey(entry->second) != legacyFlycastPathKey(path))
+			entry->second.clear();
+	};
+	for (const auto& row : rows)
+	{
+		// HollyCast shares the database filename, but these fields identify its own rows.
+		if (!row.is_object() || !row.contains("file_name") || !row.contains("boxart_path")
+				|| !row.contains("boxart_url") || !row.contains("scraped") || !row.contains("arcade")
+				|| row.contains("game_path") || row.contains("offline_art_state") || row.contains("screenscraper_id")
+				|| row.contains("tgdb_id") || row.contains("launchbox_id"))
+			continue;
+		const GameBoxart legacy(row, scopedStorage ? std::string{} : root);
+		if (legacy.fileName.empty() || !legacy.scraped || legacy.boxartUrl.empty())
+			continue;
+
+		std::string cover;
+		if (scopedStorage)
+		{
+			std::string_view name = legacy.boxartPath;
+			while (name.substr(0, 2) == "./")
+				name.remove_prefix(2);
+			const bool windowsAbsolute = name.size() >= 3 && std::isalpha(static_cast<unsigned char>(name[0]))
+					&& name[1] == ':' && (name[2] == '\\' || name[2] == '/');
+			if (windowsAbsolute || (!name.empty() && name.front() == '/') || name.substr(0, 2) == "\\\\")
+				name.remove_prefix(name.find_last_of("/\\") + 1);
+			if (name.find_first_of("/\\:") == std::string_view::npos)
+			{
+				const std::string filename(name);
+				const auto document = documents.find(filename);
+				if (document != documents.end() && isSupportedBoxartExtension(get_file_extension(filename)))
+					cover = document->second;
+			}
+		}
+		else
+		{
+			std::error_code ec;
+			if (!isContentUri(legacy.boxartPath) && isSupportedBoxartExtension(get_file_extension(legacy.boxartPath))
+					&& file_exists(legacy.boxartPath)
+					&& std::filesystem::is_regular_file(std::filesystem::u8path(legacy.boxartPath), ec))
+				cover = legacy.boxartPath;
+		}
+		if (!cover.empty())
+			coverFiles.insert(legacyFlycastPathKey(cover));
+		addCover(legacyFlycastGameKey(legacy.arcade, legacy.fileName), cover);
+	}
 }
 
 int boxartMergeScore(const GameBoxart& boxart)
@@ -570,6 +695,10 @@ bool isGeneratedVmuIconPath(const std::string& root, const std::string& path)
 
 } // namespace
 
+Boxart::Boxart() : tgdbAuthorization(std::make_shared<TheGamesDbAuthorization>())
+{
+}
+
 GameBoxart& Boxart::gameForMedia(const GameMedia& media)
 {
 	const GameBoxart source = makeMediaBoxart(media);
@@ -609,10 +738,19 @@ void Boxart::completeArtworkWork(GameBoxart& item, bool queueOnline, int provide
 	item.requestedProvider = current.requestedProvider < 0 ? provider : current.requestedProvider;
 	// A newly selected provider inherits requests made while the old job ran.
 	if (item.requestedProvider != provider && current.busy) queueOnline = true;
+	// Offline arcade discovery still runs when a Flycast cover is available.
+	// Keep that cover outside the writable record and avoid a follow-up download.
+	if (queueOnline && item.arcade)
+	{
+		const std::string legacyCover = getLegacyFlycastCoverLocked(true, item.fileName, customBoxartRoot);
+		if (!legacyCover.empty())
+			queueOnline = false;
+	}
 	if (!item.arcade)
 		item.requestedMedia = pendingArtworkMedia(item, item.requestedProvider, item.requestedMedia);
 	item.busy = queueOnline && (item.arcade
-		? ArtworkAdapter::needsMedia(item, item.requestedProvider, item.requestedMedia) : item.requestedMedia != 0);
+		? needsArcadeArtwork(item, item.requestedProvider, item.requestedMedia)
+		: item.requestedMedia != 0);
 
 	if (item.busy)
 		toFetch.push_back(item);
@@ -714,7 +852,14 @@ GameBoxart Boxart::getBoxart(const GameMedia& media)
 
 	boxart.playTimeSeconds = getLibraryPlaytime(boxart);
 
-	selectProviderCover(boxart);
+	// A legacy front cover outranks a disc label, but an existing downloaded
+	// cover remains preferred. The base path was already checked above.
+	if (!selectProviderCover(boxart) && (boxart.boxartPath.empty() || boxart.boxartUrl.empty()))
+	{
+		const std::string legacyCover = getLegacyFlycastCover(media);
+		if (!legacyCover.empty())
+			boxart.boxartPath = legacyCover;
+	}
 	if (sourceMode == static_cast<int>(BoxartSourceMode::CustomThenScraped))
 	{
 		const std::string customPath = getCustomBoxartPath(media);
@@ -853,18 +998,39 @@ void Boxart::startFetch()
 	fetchBoxart();
 }
 
+bool Boxart::theGamesDbAuthorizationRejected() const
+{
+	return !tgdbAuthorization->beginRequest().has_value();
+}
+
 void Boxart::retryArtworkMedia()
 {
 	if (cacheRefreshPending.load())
 		return;
 	loadDatabase();
 	std::lock_guard<std::mutex> guard(mutex);
+	tgdbAuthorization->reset();
 	++screenGeneration;
 	artworkWake.notify_all();
 	for (auto& entry : games)
 	{
 		auto& record = entry.second;
-		if (record.arcade) continue;
+		if (record.arcade)
+		{
+			// Leave active arcade jobs in place while restarting the disc queue.
+			if (record.busy)
+				continue;
+			record.legacyArcadeMissing = {};
+			record.legacyArcadeRetryAfter = {};
+			if (record.boxartPath.empty())
+			{
+				record.tgdbCheckedMedia &= ~artwork::coverMedia;
+				record.tgdbSearched = false;
+				record.scraped = false;
+			}
+			record.workRevision = ++nextWorkRevision;
+			continue;
+		}
   const int primary = config::ArtworkProvider.get();
   for (int provider : (primary == 1 ? std::vector<int>{1, 2, 0} : primary == 2 ? std::vector<int>{2, 0} : std::vector<int>{0}))
   {
@@ -902,10 +1068,13 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 	std::string customPath;
 	if (useCustomBoxart)
 		customPath = getCustomBoxartPathForMediaMode(media, config::LibraryCoverMediaMode::CurrentArtwork, &customIndexReady);
-	const int provider = media.arcade && config::ArtworkProvider.get() == 1 ? 0 : config::ArtworkProvider.get();
+	const int provider = config::ArtworkProvider.get();
  const bool useScreenScraper = provider == 1;
  // Wait for the local index before deciding that an image needs downloading.
  if (!customMediaReady()) return getBoxart(media);
+	const std::string legacyCover = getLegacyFlycastCover(media, true);
+	if (!legacyCover.empty())
+		requestedMedia &= ~artwork::coverMedia;
  if (!media.arcade)
  {
   requestedMedia |= artwork::metadataMedia;
@@ -935,7 +1104,11 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 			if (missingBoxartFile && boxart.offlineArtState == OfflineArtState::Complete)
 				boxart.offlineArtState = OfflineArtState::Pending;
 			if (missingScrapedBoxartFile)
-				boxart.scraped = false;
+			{
+				boxart.scraped = hasCheckedArcadeTgdbMiss(boxart);
+				if (boxart.arcade)
+					boxart.boxartUrl.clear();
+			}
 			boxart.workRevision = ++nextWorkRevision;
 			boxart.busy = false;
 			record = boxart;
@@ -945,7 +1118,8 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 		const bool needsOffline = boxart.offlineArtState == OfflineArtState::Pending;
 		if (!media.arcade) requestedMedia = pendingArtworkMedia(boxart, provider, requestedMedia);
 		const bool needsOnline = queueOnline && (media.arcade
-			? ArtworkAdapter::needsMedia(boxart, provider, requestedMedia) : requestedMedia != 0);
+			? legacyCover.empty() && needsArcadeArtwork(boxart, provider, requestedMedia)
+			: requestedMedia != 0);
 		if (queueScrape && (needsOffline || needsOnline))
 		{
    boxart.requestedProvider = record.requestedProvider = provider;
@@ -963,7 +1137,9 @@ GameBoxart Boxart::getBoxartAndQueue(const GameMedia& media, bool startFetch, u3
 
 	boxart.playTimeSeconds = getLibraryPlaytime(boxart);
 
-	selectProviderCover(boxart);
+	if (!selectProviderCover(boxart) && !legacyCover.empty()
+			&& (boxart.boxartPath.empty() || boxart.boxartUrl.empty()))
+		boxart.boxartPath = legacyCover;
 	if (useCustomBoxart)
 	{
 		if (!customPath.empty())
@@ -1109,6 +1285,44 @@ std::string Boxart::getCustomBoxartPath(const GameMedia& media)
 	return getCustomBoxartPathForMediaMode(media, config::LibraryCoverMediaMode::CurrentArtwork);
 }
 
+std::string Boxart::getLegacyFlycastCover(const GameMedia& media, bool verifyFile)
+{
+	if (media.device || media.fileName.empty() || cacheRefreshPending.load()
+			|| config::BoxartSourceMode.get() == static_cast<int>(BoxartSourceMode::PhysicalMediaOnly))
+		return {};
+	const std::string root = getCustomBoxartDirectory();
+	if (root.empty())
+		return {};
+	refreshCustomBoxartIndex(false);
+	std::string cover;
+	{
+		std::lock_guard<std::mutex> guard(mutex);
+		cover = getLegacyFlycastCoverLocked(media.arcade, media.fileName, root);
+	}
+	if (verifyFile && !cover.empty()
+			&& !(isContentUri(cover) ? hostfs::storage().exists(cover) : file_exists(cover)))
+	{
+		std::lock_guard<std::mutex> guard(mutex);
+		const auto current = legacyFlycastCovers.find(legacyFlycastGameKey(media.arcade, media.fileName));
+		if (customIndexLoaded && customBoxartRoot == root
+				&& current != legacyFlycastCovers.end() && current->second == cover)
+		{
+			legacyFlycastCovers.erase(current);
+			markAllArtworkChanged();
+		}
+		return {};
+	}
+	return cover;
+}
+
+std::string Boxart::getLegacyFlycastCoverLocked(bool arcade, const std::string& fileName, const std::string& root) const
+{
+	if (!customIndexLoaded || customBoxartRoot != root)
+		return {};
+	const auto cover = legacyFlycastCovers.find(legacyFlycastGameKey(arcade, fileName));
+	return cover == legacyFlycastCovers.end() ? std::string{} : cover->second;
+}
+
 std::string Boxart::getLibraryCoverMediaPath(const GameMedia& media)
 {
 	const auto coverMediaMode = static_cast<config::LibraryCoverMediaMode>(config::LibraryCoverMedia.get());
@@ -1130,7 +1344,7 @@ std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCo
 	if (cacheRefreshPending.load())
 		return {};
 	loadDatabase();
-	std::lock_guard<std::mutex> guard(mutex);
+	std::unique_lock<std::mutex> guard(mutex);
 	const auto& record = gameForMedia(media);
 	for (const auto& kind : artwork::mediaTypes)
 		if (kind.mode == mediaMode)
@@ -1148,6 +1362,9 @@ std::string Boxart::getCustomMediaPath(const GameMedia& media, config::LibraryCo
 	if (mediaMode == config::LibraryCoverMediaMode::Cover && record.scraped
 		&& !record.boxartUrl.empty() && file_exists(record.boxartPath))
 		return record.boxartPath;
+	guard.unlock();
+	if (mediaMode == config::LibraryCoverMediaMode::Cover)
+		return getLegacyFlycastCover(media, verifyLocal);
 	return {};
 }
 
@@ -1165,7 +1382,7 @@ std::string Boxart::getCustomBoxartPathForMediaMode(const GameMedia& media, conf
 	const std::string nameKey = makeBoxartKey(media.name);
 	const std::string gameNameKey = makeBoxartKey(media.gameName);
 
-	std::lock_guard<std::mutex> guard(mutex);
+	std::unique_lock<std::mutex> guard(mutex);
 	if (indexReady != nullptr)
 		*indexReady = customIndexLoaded && customBoxartRoot == root;
 	auto& mediaIndex = customBoxartByName[modeIndex];
@@ -1174,10 +1391,17 @@ std::string Boxart::getCustomBoxartPathForMediaMode(const GameMedia& media, conf
 		if (key.empty()) continue;
 		const auto it = mediaIndex.find(key);
 		if (it == mediaIndex.end()) continue;
-		// Validate at inventory/queue time, not once per rendered tile. Drop stale
-		// entries so deleting local art cannot suppress a replacement download.
-		if (!verifyFile || file_exists(it->second)) return it->second;
-		mediaIndex.erase(it);
+		if (!verifyFile) return it->second;
+		const std::string path = it->second;
+		// Android document URIs require a storage-provider query, which may block.
+		// A concurrent index rebuild may replace this entry during the query.
+		guard.unlock();
+		const bool exists = isContentUri(path) ? hostfs::storage().exists(path) : file_exists(path);
+		guard.lock();
+		const auto current = mediaIndex.find(key);
+		if (current == mediaIndex.end() || current->second != path) continue;
+		if (exists) return path;
+		mediaIndex.erase(current);
 	}
 	return {};
 }
@@ -1291,25 +1515,32 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 		for (int provider : {2, 0})
 		{
 			GameBoxart item;
-			while (takeScreenScraperWork(item, generation, provider))
+			while ((provider != 0 || !theGamesDbAuthorizationRejected()) && takeScreenScraperWork(item, generation, provider))
 			{
 				activeProvider = provider;
 				auto& fallback = provider == 2 ? launchbox : tgdb;
 				auto& initialized = provider == 2 ? launchboxInitialized : tgdbInitialized;
 				try
 				{
-					if (!fallback) fallback = provider == 2 ? std::unique_ptr<Scraper>(new LaunchBox) : std::unique_ptr<Scraper>(new TheGamesDb);
+					if (!fallback)
+					{
+						if (provider == 2)
+							fallback = std::make_unique<LaunchBox>();
+						else
+							fallback = std::make_unique<TheGamesDb>(TheGamesDb::Transport{}, tgdbAuthorization);
+					}
 					if (!initialized)
 					{
 						if (!fallback->initialize(directory)) throw std::runtime_error("Cannot open fallback artwork cache.");
 						initialized = true;
 					}
-					while (!fallback->ready() && screenGeneration == generation)
+					while (!fallback->ready() && screenGeneration == generation
+							&& (provider != 0 || !theGamesDbAuthorizationRejected()))
 					{
 						std::unique_lock<std::mutex> lock(mutex);
 						artworkWake.wait_for(lock, std::chrono::milliseconds(100));
 					}
-					if (screenGeneration == generation)
+					if (screenGeneration == generation && (provider != 0 || !theGamesDbAuthorizationRejected()))
 					{
 						const GameBoxart before = item;
 						// Retain metadata priority even after a partial/failed fallback.
@@ -1328,6 +1559,8 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 					INFO_LOG(COMMON, "Artwork fallback: %s", error.what());
 					finish(item);
 					saveDatabase();
+					if (provider == 0 && theGamesDbAuthorizationRejected())
+						break;
 					// Retain the provider object and its backoff after transient failures.
 					// A failed cache initialization also receives a bounded retry delay.
 					std::unique_lock<std::mutex> lock(mutex);
@@ -1338,9 +1571,23 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 			}
 		}
 		saveDatabase();
-		std::lock_guard<std::mutex> lock(mutex);
+		std::unique_lock<std::mutex> lock(mutex);
 		if (!mediaBatchPending && !physicalWorking && !std::any_of(toFetch.begin(), toFetch.end(),
 				[](const auto& item) { return !item.arcade; })) break;
+		if (theGamesDbAuthorizationRejected())
+		{
+			// Leave TGDB-only slots queued while allowing earlier stages to process new work.
+			activeProvider = -1;
+			artworkWake.wait(lock, [&] {
+				return screenGeneration != generation || mediaBatchPending || physicalWorking
+					|| std::any_of(toFetch.begin(), toFetch.end(), [&](const GameBoxart& queued) {
+						if (queued.arcade || queued.offlineArtState == OfflineArtState::Pending || !isCurrentWork(queued))
+							return false;
+						const auto& current = games.at(queued.sourceKey());
+						return ArtworkAdapter::nextProvider(current, current.requestedMedia) > 0;
+					});
+			});
+		}
 	}
 	activeProvider = -1;
 	saveDatabase();
@@ -1368,6 +1615,11 @@ void Boxart::fetchBoxart()
 	{
 		screenSessionSnapshot = screenSession;
 		std::lock_guard<std::mutex> guard(mutex);
+		if (screenSession && screenSession != lastScreenSession.lock())
+		{
+			lastScreenSession = screenSession;
+			tgdbAuthorization->reset();
+		}
 		++screenGeneration;
 		artworkWake.notify_all();
 	}
@@ -1415,7 +1667,7 @@ void Boxart::fetchBoxart()
 				std::lock_guard<std::mutex> guard(mutex);
 				physicalWorking = true;
 			}
-			physicalFetching = std::async(std::launch::async, [this, wantOnline, allowOnline, retainOnlineWork, useScreenScraper, selectedProvider]() {
+			physicalFetching = std::async(std::launch::async, [this, wantOnline, allowOnline, retainOnlineWork, selectedProvider]() {
 				ThreadName _("BoxArt-physical");
 				try {
 					while (true)
@@ -1446,7 +1698,7 @@ void Boxart::fetchBoxart()
 						DEBUG_LOG(COMMON, "Scraping physical boxart for %d games", (int)physicalBoxart.size());
 						scrapePhysicalBoxart(physicalBoxart, getSaveDirectory(), [&](GameBoxart& item) {
 							std::lock_guard<std::mutex> guard(mutex);
-							completeArtworkWork(item, wantOnline || retainOnlineWork || (allowOnline && item.arcade), item.arcade && useScreenScraper ? 0 : selectedProvider);
+							completeArtworkWork(item, wantOnline || retainOnlineWork || (allowOnline && item.arcade), selectedProvider);
 						});
 						saveDatabase(true);
 					}
@@ -1473,7 +1725,10 @@ void Boxart::fetchBoxart()
 	}
 	if (onlineFetching.valid())
 		return;
-	if (!useScreenScraper && scraper && scraperProvider == selectedProvider && !scraper->ready()) return;
+	const bool tgdbPaused = allowOnline && selectedProvider == 0 && theGamesDbAuthorizationRejected();
+	if (allowOnline && !useScreenScraper && !tgdbPaused && scraper && scraperProvider == selectedProvider && !scraper->ready()) return;
+	const bool launchBoxOnly = allowOnline && selectedProvider == 2 && scraperProvider == 2
+			&& scraper && !scraper->fallbackReady();
 	// Backoff and daily-limit pauses retain the rest of a manually queued library.
 	// Disabling downloads or signing out still releases queued work normally.
 	std::vector<GameBoxart> boxart;
@@ -1483,7 +1738,15 @@ void Boxart::fetchBoxart()
 			return;
 		// Legacy/arcade work is independent of the streaming Dreamcast queue.
 		const auto eligibleItem = [&](const GameBoxart& item) {
-			return item.offlineArtState != OfflineArtState::Pending && !(retainOnlineWork && !item.arcade);
+			if (item.offlineArtState == OfflineArtState::Pending || (retainOnlineWork && !item.arcade))
+				return false;
+			if (launchBoxOnly)
+			{
+				// A manual request can add LaunchBox work to an item parked for TGDB.
+				const auto& current = games.at(item.sourceKey());
+				return LaunchBox::needsMedia(current, current.requestedMedia ? current.requestedMedia : artwork::coverMedia);
+			}
+			return !tgdbPaused || ArcadeScraper::needsCover(item);
 		};
 		if (std::none_of(toFetch.begin(), toFetch.end(), eligibleItem)) return;
 		const auto end = std::stable_partition(toFetch.begin(), toFetch.end(), eligibleItem);
@@ -1492,21 +1755,24 @@ void Boxart::fetchBoxart()
 			return;
 		size_t size = std::min(eligible, kOnlineBoxartBatchSize);
 		boxart = std::vector<GameBoxart>(toFetch.begin(), toFetch.begin() + size);
+		for (auto& item : boxart)
+			item.requestedMedia |= games.at(item.sourceKey()).requestedMedia;
 		toFetch.erase(toFetch.begin(), toFetch.begin() + size);
 	}
-	const int provider = useScreenScraper ? 0 : selectedProvider;
-	onlineFetching = std::async(std::launch::async, [this, provider, wantOnline, allowOnline, useScreenScraper, boxart = std::move(boxart)]() mutable {
+	const int provider = selectedProvider;
+	onlineFetching = std::async(std::launch::async, [this, provider, wantOnline, allowOnline, useScreenScraper, tgdbPaused, boxart = std::move(boxart)]() mutable {
 		ThreadName _("BoxArt-online");
 		DEBUG_LOG(COMMON, "Scraping online boxart for %d games", (int)boxart.size());
 		if (allowOnline)
 		{
-			if (!useScreenScraper && (scraper == nullptr || scraperProvider != provider))
+			if (!useScreenScraper && !tgdbPaused && (scraper == nullptr || scraperProvider != provider))
 			{
 				scraperProvider = provider;
-				std::unique_ptr<Scraper> primary;
-    if (provider == 2) primary = std::make_unique<LaunchBox>();
-    else primary = std::make_unique<TheGamesDb>();
-    scraper = std::make_unique<ArtworkAdapter>(provider, std::move(primary));
+				auto tgdb = std::make_unique<TheGamesDb>(TheGamesDb::Transport{}, tgdbAuthorization);
+				if (provider == 2)
+					scraper = std::make_unique<ArtworkAdapter>(provider, std::make_unique<LaunchBox>(), std::move(tgdb));
+				else
+					scraper = std::make_unique<ArtworkAdapter>(provider, std::move(tgdb));
 				if (!scraper->initialize(getSaveDirectory()))
 				{
 					ERROR_LOG(COMMON, "Artwork provider initialization failed");
@@ -1524,17 +1790,18 @@ void Boxart::fetchBoxart()
 			}
 			try {
 				if (provider == 0 || useScreenScraper) arcadeScraper->scrape(boxart);
-				if (!useScreenScraper)
+				if (!useScreenScraper && !tgdbPaused)
 				{
 					scraper->scrape(boxart);
 				}
 				{
 					std::lock_guard<std::mutex> guard(mutex);
 					for (GameBoxart& b : boxart)
-						{
-       b.scrapedProvider = provider;
-       completeArtworkWork(b, wantOnline && (!b.arcade || provider == 2), provider);
-      }
+					{
+						b.scrapedProvider = useScreenScraper ? 0 : provider;
+						const bool queueOnline = wantOnline || (b.arcade && allowOnline);
+						completeArtworkWork(b, queueOnline, provider);
+					}
 				}
 			} catch (const std::exception& e) {
 				if (*e.what() != '\0')
@@ -1983,7 +2250,8 @@ void Boxart::reviewDatabaseArtwork()
 		std::lock_guard<std::mutex> guard(mutex);
 		review.reserve(games.size());
 		for (const auto& game : games)
-			if (!game.second.boxartPath.empty() || game.second.scraped)
+			if (!game.second.boxartPath.empty() || game.second.scraped
+				|| (game.second.arcade && !game.second.boxartUrl.empty()))
 				review.push_back({game.first, game.second.gamePath, game.second.boxartPath,
 					game.second.workRevision, game.second.scraped, true});
 	}
@@ -2004,6 +2272,11 @@ void Boxart::reviewDatabaseArtwork()
 		if (entry.usableImage)
 			continue;
 		bool changed = false;
+		if (game.arcade && !game.boxartUrl.empty())
+		{
+			game.boxartUrl.clear();
+			changed = true;
+		}
 		if (!game.boxartPath.empty())
 		{
 			game.boxartPath.clear();
@@ -2013,9 +2286,11 @@ void Boxart::reviewDatabaseArtwork()
 				game.scraped = false;
 			changed = true;
 		}
-		if (game.boxartPath.empty() && game.scraped)
+		// Arcade TGDB uses scraped for completed searches, including a cover miss.
+		const bool checkedArcadeCover = hasCheckedArcadeTgdbMiss(game);
+		if (game.scraped != checkedArcadeCover)
 		{
-			game.scraped = false;
+			game.scraped = checkedArcadeCover;
 			game.busy = false;
 			changed = true;
 		}
@@ -2359,6 +2634,7 @@ void Boxart::refreshCustomBoxartIndex(bool force)
 			{
 				for (auto& mediaIndex : customBoxartByName)
 					mediaIndex.clear();
+				legacyFlycastCovers.clear();
 				customBoxartRoot = root;
 				customIndexLoaded = false;
 				physicalCache.clear();
@@ -2389,16 +2665,22 @@ void Boxart::buildCustomBoxartIndex()
 
 		std::unordered_map<std::string, std::string> newIndex;
 		CustomBoxartIndex mediaModeIndexes;
+		std::unordered_map<std::string, std::string> legacyCovers;
 		bool succeeded = true;
 		try {
 			if (!root.empty())
 			{
 				hostfs::storage().getFileInfo(root);
+				std::unordered_set<std::string> legacyCoverFiles;
+				indexLegacyFlycastCovers(root, DB_NAME, legacyCovers, legacyCoverFiles);
 				hostfs::DirectoryTree tree(root);
 				for (auto it = tree.begin(); it != tree.end(); ++it)
 				{
 					const hostfs::FileInfo& entry = *it;
-					if (entry.isDirectory || isGeneratedVmuIconPath(root, entry.path))
+					// Database-owned files must keep their ROM identity instead of
+					// being treated as ordinary custom art with a matching image name.
+					if (entry.isDirectory || isGeneratedVmuIconPath(root, entry.path)
+							|| (!legacyCoverFiles.empty() && legacyCoverFiles.count(legacyFlycastPathKey(entry.path))))
 						continue;
 					const std::string ext = get_file_extension(entry.name);
 					const std::string key = makeBoxartKey(entry.name);
@@ -2469,6 +2751,7 @@ void Boxart::buildCustomBoxartIndex()
 			{
 				for (auto& mediaIndex : customBoxartByName)
 					mediaIndex.clear();
+				legacyFlycastCovers.clear();
 				customBoxartRoot = root;
 				customIndexLoaded = false;
 				markAllArtworkChanged();
@@ -2478,6 +2761,7 @@ void Boxart::buildCustomBoxartIndex()
 		}
 
 		customBoxartRoot = root;
+		legacyFlycastCovers.swap(legacyCovers);
 		for (size_t i = 0; i < customBoxartByName.size(); ++i)
 			customBoxartByName[i].swap(mediaModeIndexes[i]);
 		customBoxartByName[static_cast<size_t>(config::LibraryCoverMediaMode::CurrentArtwork)] = std::move(newIndex);

@@ -22,6 +22,7 @@
 #include "stdclass.h"
 #include "cfg/option.h"
 #include "oslib/storage.h"
+#include <cerrno>
 #include <cmath>
 
 static struct
@@ -922,20 +923,29 @@ bool InputMapping::save(const std::string& name)
 		return true;
 
 	std::string path;
-	// Prefer first user-defined mapping path for writes
-	if (!config::MappingsPath.get().empty() && !config::MappingsPath.get()[0].empty())
+	hostfs::File *fp;
+	try
 	{
-		std::string base = config::MappingsPath.get()[0];
-		make_directory(base);
-		path = hostfs::storage().getSubPath(base, name);
+		// Prefer first user-defined mapping path for writes
+		if (!config::MappingsPath.get().empty() && !config::MappingsPath.get()[0].empty())
+		{
+			std::string base = config::MappingsPath.get()[0];
+			make_directory(base);
+			path = hostfs::storage().getSubPath(base, name);
+		}
+		else
+		{
+			std::string base = get_writable_config_path("mappings/");
+			make_directory(base);
+			path = get_writable_config_path(std::string("mappings/") + name);
+		}
+		fp = hostfs::storage().openFile(path, "w");
 	}
-	else
+	catch (const hostfs::StorageException& e)
 	{
-		std::string base = get_writable_config_path("mappings/");
-		make_directory(base);
-		path = get_writable_config_path(std::string("mappings/") + name);
+		WARN_LOG(INPUT, "Cannot save controller mapping %s: %s", name.c_str(), e.what());
+		return false;
 	}
-	hostfs::File *fp = hostfs::storage().openFile(path.c_str(), "w");
 	if (fp == NULL)
 	{
 		WARN_LOG(INPUT, "Cannot save controller mappings into %s", path.c_str());
@@ -1031,35 +1041,73 @@ bool InputMapping::save(const std::string& name)
 			triggerString += '~';
 	}
 	mf.set("emulator", "triggers", triggerString);
-	mf.save(fp);
-	dirty = false;
+	std::string data;
+	mf.save(data);
+	const bool saved = fp->write(data.data(), 1, data.size()) == data.size() && !fp->error();
 	delete fp;
 
+	if (!saved)
+	{
+		WARN_LOG(INPUT, "Cannot write controller mappings into %s", path.c_str());
+		return false;
+	}
+	dirty = false;
 	return true;
 }
 
-void InputMapping::SaveMapping(const std::string& name, const std::shared_ptr<InputMapping>& mapping)
+bool InputMapping::SaveMapping(const std::string& name, const std::shared_ptr<InputMapping>& mapping)
 {
-	mapping->save(name);
+	if (!mapping->save(name))
+		return false;
 	InputMapping::loaded_mappings[name] = mapping;
+	return true;
 }
 
-void InputMapping::DeleteMapping(const std::string& name)
+bool InputMapping::DeleteMapping(const std::string& name)
 {
-	loaded_mappings.erase(name);
-	// Try delete from user-defined mapping path first
-	if (!config::MappingsPath.get().empty() && !config::MappingsPath.get()[0].empty())
+	const auto removeIfPresent = [](const std::string& path) {
+		return nowide::remove(path.c_str()) == 0 || errno == ENOENT;
+	};
+	const auto& roots = config::MappingsPath.get();
+	const std::string relative = "mappings/" + name;
+	bool removedFirst = true;
+	if (!roots.empty() && !roots.front().empty())
 	{
 		try
 		{
-			std::string candidate = hostfs::storage().getSubPath(config::MappingsPath.get()[0], name);
-			nowide::remove(candidate.c_str());
+			const auto candidate = hostfs::storage().getSubPath(roots.front(), name);
+			// Hostfs cannot delete provider-backed files. Check the root too because
+			// a revoked grant can look like a missing child.
+			if (hostfs::customStorage().isKnownPath(candidate))
+				removedFirst = hostfs::storage().exists(roots.front()) && !hostfs::storage().exists(candidate);
+			else
+				removedFirst = removeIfPresent(candidate);
 		}
 		catch (const hostfs::StorageException&)
 		{
+			removedFirst = false;
 		}
 	}
-	nowide::remove(get_writable_config_path(std::string("mappings/") + name).c_str());
+	if (!removeIfPresent(get_writable_config_path(relative)) || !removedFirst)
+		return false;
+
+	loaded_mappings.erase(name);
+	// Report a surviving mapping that would take effect after the writable copies are removed.
+	for (size_t i = 1; i < roots.size(); ++i)
+	{
+		if (roots[i].empty())
+			continue;
+		try
+		{
+			if (hostfs::storage().exists(hostfs::storage().getSubPath(roots[i], name)))
+				return false;
+		}
+		catch (const hostfs::StorageException&)
+		{
+			// LoadMapping also skips unavailable secondary roots.
+		}
+	}
+	return !hostfs::storage().exists(get_readonly_config_path(relative));
 }
 
 std::vector<std::string> InputMapping::strSplit(const std::string str, char c, size_t maxsplit)

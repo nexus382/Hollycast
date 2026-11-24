@@ -122,6 +122,72 @@ TEST_F(TheGamesDbTest, AutomaticFetchDownloadsOnlyCoverAndManualRequestAddsExtra
 	EXPECT_EQ(referenceRequests, 3) << "Reference names should be reused across launches";
 }
 
+TEST_F(TheGamesDbTest, CredentialRejectionPausesApiUntilReset)
+{
+	for (const int code : {401, 403})
+		for (const bool inPayload : {false, true})
+		{
+			SCOPED_TRACE(::testing::Message() << code << " payload " << inPayload);
+			auto authorization = std::make_shared<TheGamesDbAuthorization>();
+			bool reject = true;
+			int attempts = 0;
+			const auto transport = [&](const std::string& url, std::vector<u8>& bytes, std::string& type) {
+				++attempts;
+				if (!reject)
+					return respond(url, bytes, type);
+				if (!inPayload)
+					return code;
+				const auto body = json{{"code", code}}.dump();
+				bytes.assign(body.begin(), body.end());
+				return 200;
+			};
+			GameBoxart pending = item;
+			pending.requestedMedia = artwork::metadataMedia;
+			TheGamesDb source(transport, authorization);
+			ASSERT_TRUE(source.initialize(root.string()));
+			EXPECT_THROW(source.scrape(pending), std::runtime_error);
+			EXPECT_FALSE(source.ready());
+			EXPECT_FALSE(pending.tgdbSearched);
+			EXPECT_EQ(pending.tgdbCheckedMedia, 0u);
+
+			// Recreating the fallback for another artwork batch must retain the pause.
+			TheGamesDb fallback(transport, authorization);
+			ASSERT_TRUE(fallback.initialize(root.string()));
+			EXPECT_THROW(fallback.scrape(pending), std::runtime_error);
+			EXPECT_EQ(attempts, 1);
+
+			reject = false;
+			authorization->reset();
+			ASSERT_TRUE(source.ready());
+			source.scrape(pending);
+			EXPECT_TRUE(pending.tgdbSearched);
+			EXPECT_GT(attempts, 1);
+		}
+}
+
+TEST_F(TheGamesDbTest, TemporaryApiFailuresKeepAuthorizationAvailable)
+{
+	for (const int status : {-1, 429, 503})
+	{
+		auto authorization = std::make_shared<TheGamesDbAuthorization>();
+		TheGamesDb source([status](const std::string&, std::vector<u8>&, std::string&) { return status; }, authorization);
+		ASSERT_TRUE(source.initialize(root.string()));
+		EXPECT_THROW(source.scrape(item), std::runtime_error);
+		EXPECT_FALSE(source.ready());
+		EXPECT_TRUE(authorization->beginRequest().has_value());
+	}
+}
+
+TEST(TheGamesDbAuthorizationTest, OldResponseDoesNotSuspendNewAttempt)
+{
+	TheGamesDbAuthorization authorization;
+	const auto previous = authorization.beginRequest();
+	ASSERT_TRUE(previous.has_value());
+	authorization.reset();
+	authorization.reject(*previous);
+	EXPECT_TRUE(authorization.beginRequest().has_value());
+}
+
 TEST_F(TheGamesDbTest, MissingTypesAreRememberedAndDeletedDownloadsBecomePending)
 {
 	images.erase(images.begin() + 1, images.end()); // Only a real back-cover scan remains.

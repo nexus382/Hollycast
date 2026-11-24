@@ -118,12 +118,13 @@ void DreamLinkSDLGamepad::registered()
 	dreamlink->registered();
 }
 
-void DreamLinkSDLGamepad::resetMappingToDefault(bool arcade, bool gamepad) {
-	SDLGamepad::resetMappingToDefault(arcade, gamepad);
-	if (input_mapper) {
-		setCustomMapping(input_mapper);
-		setBaseDefaultMapping(input_mapper);
+std::shared_ptr<InputMapping> DreamLinkSDLGamepad::createDefaultMapping(bool arcade, bool gamepad) {
+	auto mapping = SDLGamepad::createDefaultMapping(arcade, gamepad);
+	if (mapping) {
+		setCustomMapping(mapping);
+		setBaseDefaultMapping(mapping);
 	}
+	return mapping;
 }
 
 std::shared_ptr<InputMapping> DreamLinkSDLGamepad::getDefaultMapping() {
