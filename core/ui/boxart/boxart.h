@@ -19,6 +19,7 @@
  */
 #pragma once
 #include "scraper.h"
+#include "artwork_adapter.h"
 #include "artwork_media.h"
 #include "stdclass.h"
 #include "cfg/option.h"
@@ -38,6 +39,7 @@
 #include <deque>
 
 struct GameMedia;
+class TheGamesDbAuthorization;
 namespace screenscraper { class Session; }
 
 enum class BoxartSourceMode
@@ -51,6 +53,7 @@ enum class BoxartSourceMode
 class Boxart
 {
 public:
+	Boxart();
 	GameBoxart getBoxartAndLoad(const GameMedia& media, bool startFetch = true);
 	GameBoxart getBoxart(const GameMedia& media);
 	// Metadata lookup only: never open a disc or start artwork work.
@@ -75,6 +78,7 @@ public:
 	void queueBoxart(const GameMedia& media, u32 requestedMedia = artwork::basicMedia);
 	void startFetch();
 	int activeMediaProvider() const { return activeProvider.load(); }
+	bool theGamesDbAuthorizationRejected() const;
 	bool customMediaReady();
 	bool customMediaFailed();
 	// Compare the complete token to invalidate prepared library data, including
@@ -102,6 +106,7 @@ public:
 
 private:
 	friend class BoxartWorkTest_AcceptsOnlyCurrentSourceRevision_Test;
+	friend class BoxartTest_ExpiredLegacyCooldownCanRetryAfterTgdbMiss_Test;
 	friend class ScreenScraperQueueTest;
 
 	enum class CustomIndexState
@@ -116,6 +121,8 @@ private:
 			config::LibraryCoverMediaMode mediaMode = config::LibraryCoverMediaMode::CurrentArtwork);
 	GameBoxart getPhysicalBoxart(const GameMedia& media);
 	std::string getCustomBoxartPath(const GameMedia& media);
+	std::string getLegacyFlycastCover(const GameMedia& media, bool verifyFile = false);
+	std::string getLegacyFlycastCoverLocked(bool arcade, const std::string& fileName, const std::string& root) const;
 	std::string getCustomBoxartPathForMediaMode(const GameMedia& media, config::LibraryCoverMediaMode mediaMode,
 			bool *indexReady = nullptr, bool verifyFile = false);
 	GameBoxart getBoxartAndQueue(const GameMedia& media, bool startFetch, u32 requestedMedia = artwork::basicMedia);
@@ -171,10 +178,11 @@ private:
 	std::future<bool> playtimeWrite;
 
 	CustomBoxartIndex customBoxartByName;
+	std::unordered_map<std::string, std::string> legacyFlycastCovers;
 	std::string customBoxartRoot;
 	std::string requestedCustomBoxartRoot;
 	std::mutex mutex;
-	std::unique_ptr<Scraper> scraper;
+	std::unique_ptr<ArtworkAdapter> scraper;
 	int scraperProvider = -1;
 	std::unique_ptr<Scraper> arcadeScraper;
 	u64 nextWorkRevision = 0;
@@ -203,7 +211,9 @@ private:
 	std::chrono::steady_clock::time_point cacheRefreshRetryAfter{}; // Protected by mutex; prevents per-frame restart attempts.
 	std::atomic<bool> cacheRefreshPending{false};
 	std::atomic<int> activeProvider{-1};
+	std::shared_ptr<TheGamesDbAuthorization> tgdbAuthorization;
 	std::shared_ptr<screenscraper::Session> screenSessionSnapshot; // UI-thread owned.
+	std::weak_ptr<screenscraper::Session> lastScreenSession; // UI-thread owned, including while downloads are disabled.
 	bool mediaBatchPending = false; // Protected by mutex; preserves cover priority during queue refill.
 	bool physicalWorking = false; // Protected by mutex; producer can overlap network workers.
 	size_t activeScreenJobs = 0; // Protected by mutex; keep idle workers alive until the queue drains.

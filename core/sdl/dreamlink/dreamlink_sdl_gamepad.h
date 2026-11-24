@@ -39,7 +39,7 @@ public:
 	void set_maple_port(int port) override;
 	void registered() override;
 	static bool isDreamcastController(int deviceIndex);
-	void resetMappingToDefault(bool arcade, bool gamepad) override;
+	std::shared_ptr<InputMapping> createDefaultMapping(bool arcade, bool gamepad) override;
 	void close() override;
 
 protected:

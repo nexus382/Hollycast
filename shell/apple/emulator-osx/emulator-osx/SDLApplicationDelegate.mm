@@ -314,9 +314,19 @@ static void addMenuSeparator(NSMenu *menu)
 	runMenuAction([]() { GuiMenu::openGeneralSettings(); });
 }
 
+- (void)openLibrarySettings:(id)sender
+{
+	runMenuAction([]() { GuiMenu::openLibrarySettings(); });
+}
+
 - (void)openVideoSettings:(id)sender
 {
 	runMenuAction([]() { GuiMenu::openVideoSettings(); });
+}
+
+- (void)openShaderSettings:(id)sender
+{
+	runMenuAction([]() { GuiMenu::openShaderSettings(); });
 }
 
 - (void)openOnScreenDisplaySettings:(id)sender
@@ -508,7 +518,9 @@ static void setupHollycastMenus(void)
 	NSMenuItem *settingsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Settings" action:nil keyEquivalent:@""];
 	NSMenu *settingsMenu = [[NSMenu alloc] initWithTitle:@"Settings"];
 	addMenuItem(settingsMenu, @"General", @selector(openGeneralSettings:), @"", 0);
+	addMenuItem(settingsMenu, @"Library", @selector(openLibrarySettings:), @"", 0);
 	addMenuItem(settingsMenu, @"Video", @selector(openVideoSettings:), @"", 0);
+	addMenuItem(settingsMenu, @"Shader", @selector(openShaderSettings:), @"", 0);
 	addMenuItem(settingsMenu, @"On Screen Display", @selector(openOnScreenDisplaySettings:), @"", 0);
 	addMenuItem(settingsMenu, @"Audio", @selector(openAudioSettings:), @"", 0);
 	addMenuItem(settingsMenu, @"Controls", @selector(openControlsSettings:), @"", 0);

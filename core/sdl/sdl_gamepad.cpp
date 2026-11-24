@@ -751,15 +751,18 @@ std::shared_ptr<InputMapping> SDLGamepad::getDefaultMapping() {
 void SDLGamepad::resetMappingToDefault(bool arcade, bool gamepad)
 {
 	NOTICE_LOG(INPUT, "Resetting SDL gamepad to default: %d %d", arcade, gamepad);
+	GamepadDevice::resetMappingToDefault(arcade, gamepad);
+}
+
+std::shared_ptr<InputMapping> SDLGamepad::createDefaultMapping(bool arcade, bool gamepad)
+{
 	if (arcade)
 	{
 		if (gamepad)
-			input_mapper = std::make_shared<DefaultInputMapping<true, true>>(sdl_controller);
-		else
-			input_mapper = std::make_shared<DefaultInputMapping<true, false>>(sdl_controller);
+			return std::make_shared<DefaultInputMapping<true, true>>(sdl_controller);
+		return std::make_shared<DefaultInputMapping<true, false>>(sdl_controller);
 	}
-	else
-		input_mapper = std::make_shared<DefaultInputMapping<false, false>>(sdl_controller);
+	return std::make_shared<DefaultInputMapping<false, false>>(sdl_controller);
 }
 
 bool SDLGamepad::find_mapping(int system)

@@ -454,15 +454,18 @@ public:
 	void resetMappingToDefault(bool arcade, bool gamepad) override
 	{
 		NOTICE_LOG(INPUT, "Resetting iOS gamepad to default: %d %d", arcade, gamepad);
+		GamepadDevice::resetMappingToDefault(arcade, gamepad);
+	}
+
+	std::shared_ptr<InputMapping> createDefaultMapping(bool arcade, bool gamepad) override
+	{
 		if (arcade)
 		{
 			if (gamepad)
-				input_mapper = std::make_shared<DefaultIOSMapping<true, true>>();
-			else
-				input_mapper = std::make_shared<DefaultIOSMapping<true, false>>();
+				return std::make_shared<DefaultIOSMapping<true, true>>();
+			return std::make_shared<DefaultIOSMapping<true, false>>();
 		}
-		else
-			input_mapper = std::make_shared<DefaultIOSMapping<false, false>>();
+		return std::make_shared<DefaultIOSMapping<false, false>>();
 	}
 
 	static void addController(GCController *controller)

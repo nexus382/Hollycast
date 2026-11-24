@@ -21,8 +21,13 @@ bool ArtworkAdapter::initialize(const std::string& directory)
 
 bool ArtworkAdapter::ready() const
 {
+ return primary->ready();
+}
+
+bool ArtworkAdapter::fallbackReady() const
+{
  std::lock_guard<std::mutex> lock(fallbackMutex);
- return primary->ready() && (!fallback || fallback->ready());
+ return !fallback || fallback->ready();
 }
 
 u32 ArtworkAdapter::supportedMedia(int provider)
@@ -106,6 +111,10 @@ void ArtworkAdapter::scrape(GameBoxart& item)
  const u32 missing = fallbackMedia(item, provider, requested, primaryFailure != nullptr);
  if (!fallback || !missing) { if (primaryFailure) std::rethrow_exception(primaryFailure); return; }
  std::lock_guard<std::mutex> lock(fallbackMutex);
+ if (!fallback->ready()) {
+  if (primaryFailure) std::rethrow_exception(primaryFailure);
+  return;
+ }
  // Keep richer primary metadata when TGDB only fills an unavailable image slot.
  const bool matched = provider == 1 ? item.screenScraperId != 0 : item.launchboxId != 0;
  const GameBoxart before = item;
