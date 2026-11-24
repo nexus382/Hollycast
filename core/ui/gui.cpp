@@ -137,6 +137,7 @@ static u32 mouseButtons;
 static int mouseX, mouseY;
 static float mouseWheel;
 static bool mouseTouchscreen;
+static std::atomic<bool> settingsTouchInputActive{false};
 static std::string error_msg;
 static bool error_msg_shown;
 static bool launch_error_help = false;
@@ -165,6 +166,23 @@ static library::MediaBatch libraryMediaBatch;
 static bool libraryMediaRefreshPending = false;
 static bool libraryMediaRetryPending = false;
 static bool libraryStateThumbnailCacheInvalidated = false;
+
+static u32 requiredLibraryMedia(const themes::Theme* theme, const themes::Layout* layout)
+{
+	return theme && layout
+		? themes::requiredMedia(*theme, *layout, themes::iconArtworkSource(config::ThemeIconMedia.get()))
+		: artwork::basicMedia;
+}
+
+static void rebuildLibraryMedia(u32 automaticMedia, const std::string& label,
+		u32 manualMedia = 0, bool retryUnavailable = false);
+
+static void refreshLibraryMedia(bool retryUnavailable = false)
+{
+	const auto* theme = themes::current();
+	rebuildLibraryMedia(requiredLibraryMedia(theme, themes::currentLayout()),
+			theme ? theme->name : T("Basic library media"), 0, retryUnavailable);
+}
 
 static void advanceLibrarySavestates()
 {
@@ -212,7 +230,7 @@ static void updateLibraryMediaProgress()
 		// Inventory the reviewed database only after its background reset is published.
 		const bool retryUnavailable = libraryMediaRetryPending;
 		libraryMediaRetryPending = false;
-		gui_download_library_media(libraryMediaBatch.mask ? libraryMediaBatch.mask : artwork::basicMedia, retryUnavailable);
+		refreshLibraryMedia(retryUnavailable);
 	}
 	auto& batch = libraryMediaBatch;
 	const bool enabled = config::FetchBoxart
@@ -493,6 +511,8 @@ void gui_set_mouse_position(int x, int y, bool touchscreen, bool harnessInput)
 	mouseX = std::round(x * scale);
 	mouseY = std::round(y * scale);
 	mouseTouchscreen = touchscreen;
+	if (touchscreen && settingsTouchInputActive.load(std::memory_order_relaxed) && (mouseButtons & 1) != 0)
+		queueSettingsTouchSample(ImVec2(mouseX, mouseY), true);
 #ifndef LIBRETRO
 	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
 #endif
@@ -517,6 +537,8 @@ void gui_set_mouse_button(int button, bool pressed, bool touchscreen, bool harne
 	else
 		mouseButtons &= ~(1 << button);
 	mouseTouchscreen = touchscreen;
+	if (touchscreen && button == 0 && settingsTouchInputActive.load(std::memory_order_relaxed))
+		queueSettingsTouchSample(ImVec2(mouseX, mouseY), pressed);
 #ifndef LIBRETRO
 	postprocess::setShaderHostMouse(static_cast<float>(mouseX), static_cast<float>(mouseY), mouseButtons);
 #endif
@@ -541,16 +563,25 @@ static void gui_newFrame()
 	ImGuiIO& io = ImGui::GetIO();
 
 	io.AddMouseSourceEvent(mouseTouchscreen ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse);
-	if (mouseX < 0 || mouseX >= settings.display.width || mouseY < 0 || mouseY >= settings.display.height)
-		io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
-	else
-		io.AddMousePosEvent(mouseX, mouseY);
+	const bool pointerInDisplay = mouseX >= 0 && mouseX < settings.display.width
+			&& mouseY >= 0 && mouseY < settings.display.height;
+	const ImVec2 pointerPosition = pointerInDisplay ? ImVec2(mouseX, mouseY) : ImVec2(-FLT_MAX, -FLT_MAX);
+	const bool pointerPressed = (mouseButtons & 1) != 0;
+	static bool settingsHadPointerInput = false;
+	const bool inSettings = gui_state == GuiState::Settings;
+	const bool handled = (inSettings || settingsHadPointerInput)
+			&& handleSettingsTouchInput(pointerPosition, mouseTouchscreen);
+	settingsHadPointerInput = inSettings;
+	if (!handled)
+	{
+		io.AddMousePosEvent(pointerPosition.x, pointerPosition.y);
+		io.AddMouseButtonEvent(ImGuiMouseButton_Left, pointerPressed);
+	}
 	if (io.WantCaptureMouse)
 	{
 		io.AddMouseWheelEvent(0, -mouseWheel / 16);
 		mouseWheel = 0;
 	}
-	io.AddMouseButtonEvent(ImGuiMouseButton_Left, (mouseButtons & (1 << 0)) != 0);
 	io.AddMouseButtonEvent(ImGuiMouseButton_Right, (mouseButtons & (1 << 1)) != 0);
 	io.AddMouseButtonEvent(ImGuiMouseButton_Middle, (mouseButtons & (1 << 2)) != 0);
 	io.AddMouseButtonEvent(3, (mouseButtons & (1 << 3)) != 0);
@@ -4855,9 +4886,7 @@ void gui_display_ui()
 	static std::string queuedMediaKey;
 	const auto* selectedTheme = themes::current();
 	const auto* selectedLayout = themes::currentLayout();
-	const auto overrideSource = themes::iconArtworkSource(config::ThemeIconMedia.get());
-	const u32 requirements = selectedTheme && selectedLayout
-		? themes::requiredMedia(*selectedTheme, *selectedLayout, overrideSource) : artwork::basicMedia;
+	const u32 requirements = requiredLibraryMedia(selectedTheme, selectedLayout);
 	const bool enabled = config::FetchBoxart && config::BoxartSourceMode.get() != static_cast<int>(BoxartSourceMode::PhysicalMediaOnly);
 	const u64 generation = scanner.get_generation();
 	const std::string key = std::to_string(generation) + "/" + std::to_string(requirements) + "/"
@@ -4866,7 +4895,7 @@ void gui_display_ui()
 		+ (enabled ? "/on" : "/off");
 	if (enabled && generation && !scanner.is_scanning() && key != queuedMediaKey)
 	{
-		gui_download_library_media(requirements, false, selectedTheme ? selectedTheme->name : T("Basic library media"));
+		rebuildLibraryMedia(requirements, selectedTheme ? selectedTheme->name : T("Basic library media"));
 		queuedMediaKey = key;
 	}
 	else if (!enabled) queuedMediaKey.clear();
@@ -5373,6 +5402,7 @@ void gui_setState(GuiState newState)
 		resetLibraryGameInfoHover();
 	}
 	gui_state = newState;
+	settingsTouchInputActive.store(newState == GuiState::Settings, std::memory_order_relaxed);
 	if (newState != GuiState::Closed && newState != GuiState::Loading)
 		SettingsNew::closeShaderLiveTune();
 	if (newState == GuiState::Closed)
@@ -5405,7 +5435,7 @@ void gui_refresh_custom_boxart(bool force)
 	boxart.refreshCustomBoxartIndex(force);
 	// Invalidation cancels pending source revisions; rebuild their requests through
 	// the same bounded inventory path rather than depending on visible tiles.
-	gui_download_library_media(libraryMediaBatch.mask ? libraryMediaBatch.mask : artwork::basicMedia);
+	refreshLibraryMedia();
 }
 
 void gui_refresh_boxart_cache()
@@ -5425,6 +5455,8 @@ void gui_display_library_download_progress()
 		return;
 	}
 	const auto& batch = libraryMediaBatch;
+	if (boxart.theGamesDbAuthorizationRejected())
+		ImGui::TextWrapped("%s", T("TheGamesDB rejected this build's API credentials. Use Retry Unmatched / Unavailable Media to try again."));
 	if (!batch.progress.total) return;
 	ImGui::TextWrapped("%s", batch.label.c_str());
 	const auto& p = batch.progress;
@@ -5453,22 +5485,13 @@ void gui_display_library_download_progress()
 	}
 }
 
-void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const std::string& label)
+static void rebuildLibraryMedia(u32 automaticMedia, const std::string& label,
+		u32 manualMedia, bool retryUnavailable)
 {
 	if (retryUnavailable && boxart.refreshPending())
 		libraryMediaRetryPending = true;
 	else if (retryUnavailable)
 		boxart.retryArtworkMedia();
-	library::MediaBatch batch;
-	batch.mask = requestedMedia | artwork::metadataMedia;
-	// Switching themes must not discard a manually requested batch that is still
-	// being inventoried. Merging masks is safe: each source has one active job.
-	batch.label = label;
-	if (libraryMediaBatch.progress.pending)
-	{
-		if (libraryMediaBatch.mask & ~batch.mask) batch.label = T("Queued library media");
-		batch.mask |= libraryMediaBatch.mask;
-	}
 	std::vector<GameMedia> games;
 	{
 		std::lock_guard<std::mutex> guard(scanner.get_mutex());
@@ -5477,9 +5500,14 @@ void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const
 			if (!game.device && !game.path.empty() && !game.arcade && paths.insert(game.path).second)
 				games.push_back(game);
 	}
-	batch.reset(std::move(games), batch.mask, std::move(batch.label));
-	libraryMediaBatch = std::move(batch);
+	libraryMediaBatch.rebuild(std::move(games), automaticMedia, label, manualMedia, T("Queued library media"));
 	boxart.startFetch();
+}
+
+void gui_download_library_media(u32 requestedMedia, bool retryUnavailable, const std::string& label)
+{
+	rebuildLibraryMedia(requiredLibraryMedia(themes::current(), themes::currentLayout()),
+			label, requestedMedia, retryUnavailable);
 }
 
 void gui_download_all_theme_media()

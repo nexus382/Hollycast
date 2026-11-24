@@ -137,9 +137,21 @@ public:
 
 	static void load_system_mappings();
 	static void RefreshGamepadPresets();
+	struct MappingDraft {
+		std::shared_ptr<InputMapping> mapping;
+		bool instance = false;
+		bool perGame = false;
+	};
+	MappingDraft createMappingDraft(int system, bool allowPerGame);
+	bool saveMappingDraft(int system, MappingDraft& draft);
+	void reloadEditedMappings();
+	bool deletePerGameMappingsExcept(const std::vector<std::pair<int, bool>>& preserved);
+	virtual std::shared_ptr<InputMapping> createDefaultMapping(bool arcade, bool gamepad) {
+		return getDefaultMapping();
+	}
 	virtual bool find_mapping(int system = settings.platform.system);
 	virtual void resetMappingToDefault(bool arcade, bool gamepad) {
-		input_mapper = getDefaultMapping();
+		input_mapper = createDefaultMapping(arcade, gamepad);
 	}
 	void clearButtonMapping(u32 port, DreamcastKey key);
 	void clearAxisMapping(u32 port, DreamcastKey key);
@@ -240,6 +252,7 @@ private:
 	void setButtonState(int port, DreamcastKey key, bool pressed);
 	bool handleButtonInput(int port, DreamcastKey key, bool pressed);
 	bool handleButtonInputDef(const InputMapping::InputDef& inputDef, bool pressed);
+	MappingDraft findMapping(int system, bool allowPerGame);
 	std::string make_mapping_filename(bool instance, int system, bool perGame = false);
 	bool detectAxis(u32 code, int value);
 	static void emuEvent(Event event, void *arg);
@@ -338,7 +351,7 @@ private:
 	input_detected_cb _input_detected = nullptr;
 	ButtonListener buttonListener = nullptr;
 	bool _remappable;
-	bool _is_registered = false;
+	std::atomic<bool> _is_registered{false};
 	u32 digitalToAnalogState[4];
 	std::unordered_map<DreamcastKey, int> lastAxisValue[4];
 	bool perGameMapping = false;

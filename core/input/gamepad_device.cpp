@@ -698,6 +698,26 @@ void GamepadDevice::load_system_mappings()
 	RefreshGamepadPresets();
 }
 
+void GamepadDevice::reloadEditedMappings()
+{
+	std::vector<std::shared_ptr<GamepadDevice>> affected;
+	{
+		Lock _(_gamepads_mutex);
+		for (const auto& gamepad : _gamepads)
+			if (gamepad->api_name() == api_name() && gamepad->name() == name())
+				affected.push_back(gamepad);
+	}
+	for (const auto& gamepad : affected)
+	{
+		if (!gamepad->is_registered())
+			continue;
+		gamepad->releaseMappedInputs();
+		if (!gamepad->find_mapping())
+			gamepad->resetMappingToDefault(settings.platform.isArcade(), true);
+	}
+	RefreshGamepadPresets();
+}
+
 std::string GamepadDevice::make_mapping_filename(bool instance, int system, bool perGame /* = false */)
 {
 	std::string mapping_file = api_name() + "_" + name();
@@ -721,37 +741,23 @@ std::string GamepadDevice::make_mapping_filename(bool instance, int system, bool
 	return mapping_file;
 }
 
-bool GamepadDevice::find_mapping(int system /* = settings.platform.system */)
+GamepadDevice::MappingDraft GamepadDevice::findMapping(int system, bool allowPerGame)
 {
-	// FIXME this is called on Event::Start in the game loader thread
-	// race condition with the UI thread?
-	if (!_remappable)
-		return true;
-	instanceMapping = false;
 	bool cloneMapping = false;
 	while (true)
 	{
-		bool perGame = !settings.content.gameId.empty();
+		bool perGame = allowPerGame && !settings.content.gameId.empty();
 		while (true)
 		{
-			std::string mapping_file = make_mapping_filename(true, system, perGame);
-			input_mapper = InputMapping::LoadMapping(mapping_file);
-			if (!input_mapper)
-			{
-				mapping_file = make_mapping_filename(false, system, perGame);
-				input_mapper = InputMapping::LoadMapping(mapping_file);
-			}
-			else
-			{
-				instanceMapping = true;
-			}
-			if (!!input_mapper)
+			auto mapping = InputMapping::LoadMapping(make_mapping_filename(true, system, perGame));
+			const bool instance = mapping != nullptr;
+			if (!instance)
+				mapping = InputMapping::LoadMapping(make_mapping_filename(false, system, perGame));
+			if (mapping)
 			{
 				if (cloneMapping)
-					input_mapper = std::make_shared<InputMapping>(*input_mapper);
-				perGameMapping = perGame;
-				rumblePower = input_mapper->rumblePower;
-				return true;
+					mapping = std::make_shared<InputMapping>(*mapping);
+				return { std::move(mapping), instance, perGame };
 			}
 			if (!perGame)
 				break;
@@ -762,7 +768,46 @@ bool GamepadDevice::find_mapping(int system /* = settings.platform.system */)
 		system = DC_PLATFORM_DREAMCAST;
 		cloneMapping = true;
 	}
-	return false;
+	return {};
+}
+
+bool GamepadDevice::find_mapping(int system /* = settings.platform.system */)
+{
+	// FIXME this is called on Event::Start in the game loader thread
+	// race condition with the UI thread?
+	if (!_remappable)
+		return true;
+	auto result = findMapping(system, true);
+	input_mapper = std::move(result.mapping);
+	instanceMapping = result.instance;
+	if (!input_mapper)
+		return false;
+	perGameMapping = result.perGame;
+	rumblePower = input_mapper->rumblePower;
+	return true;
+}
+
+GamepadDevice::MappingDraft GamepadDevice::createMappingDraft(int system, bool allowPerGame)
+{
+	auto draft = findMapping(system, allowPerGame);
+	if (!draft.mapping)
+		draft.mapping = createDefaultMapping(system != DC_PLATFORM_DREAMCAST, true);
+	if (draft.mapping)
+		draft.mapping = std::make_shared<InputMapping>(*draft.mapping);
+	return draft;
+}
+
+bool GamepadDevice::saveMappingDraft(int system, MappingDraft& draft)
+{
+	if (!draft.mapping || !draft.mapping->is_dirty())
+		return true;
+	// SaveMapping caches the supplied object. Keep the draft independent of live mappings.
+	auto mapping = std::make_shared<InputMapping>(*draft.mapping);
+	mapping->set_dirty();
+	if (!InputMapping::SaveMapping(make_mapping_filename(draft.instance, system, draft.perGame), mapping))
+		return false;
+	draft.mapping->clearDirty();
+	return true;
 }
 
 int GamepadDevice::GetGamepadCount() {
@@ -793,16 +838,25 @@ void GamepadDevice::setPerGameMapping(bool enabled)
 	if (enabled)
 		input_mapper = std::make_shared<InputMapping>(*input_mapper);
 	else
-	{
-		auto deleteMapping = [this](bool instance, int system) {
-			std::string filename = make_mapping_filename(instance, system, true);
-			InputMapping::DeleteMapping(filename);
-		};
-		deleteMapping(false, DC_PLATFORM_DREAMCAST);
-		deleteMapping(false, DC_PLATFORM_NAOMI);
-		deleteMapping(true, DC_PLATFORM_DREAMCAST);
-		deleteMapping(true, DC_PLATFORM_NAOMI);
-	}
+		deletePerGameMappingsExcept({});
+}
+
+bool GamepadDevice::deletePerGameMappingsExcept(const std::vector<std::pair<int, bool>>& preserved)
+{
+	if (settings.content.gameId.empty())
+		return true;
+	bool removed = true;
+	for (int system : {DC_PLATFORM_DREAMCAST, DC_PLATFORM_NAOMI})
+		for (bool instance : {false, true})
+		{
+			const auto it = std::find_if(preserved.begin(), preserved.end(), [=](const auto& entry) {
+				return entry.second == instance &&
+					(entry.first == DC_PLATFORM_DREAMCAST) == (system == DC_PLATFORM_DREAMCAST);
+			});
+			if (it == preserved.end() && !InputMapping::DeleteMapping(make_mapping_filename(instance, system, true)))
+				removed = false;
+		}
+	return removed;
 }
 
 void GamepadDevice::clearButtonMapping(u32 port, DreamcastKey key)
@@ -987,6 +1041,7 @@ void GamepadDevice::Unregister(const std::shared_ptr<GamepadDevice>& gamepad)
 		if (it != _gamepads.end())
 		{
 			removed = *it;
+			removed->_is_registered = false;
 			_gamepads.erase(it);
 		}
 	}

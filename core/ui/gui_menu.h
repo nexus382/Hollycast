@@ -58,7 +58,7 @@ void renderCardsMenu();
 void renderToolsMenu();
 
 // Settings Menu - configuration
-// Items: General, Library, Video, On Screen Display, Audio, Controls, Network, Advanced
+// Items: General, Library, Video, Shader, On Screen Display, Audio, Controls, Network, Advanced
 void renderSettingsMenu();
 
 // Help Menu - documentation and support
@@ -99,7 +99,9 @@ void takeScreenshot();
 void openCheats();
 void openCustomBoxartSettings();
 void openGeneralSettings();
+void openLibrarySettings();
 void openVideoSettings();
+void openShaderSettings();
 void openOnScreenDisplaySettings();
 void openAudioSettings();
 void openControlsSettings();

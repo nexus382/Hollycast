@@ -103,6 +103,8 @@ json GameBoxart::to_json(const std::string& baseArtPath) const
 		{ "scraped", scraped },
 		{ "arcade", arcade },
 	};
+	if (!legacyArcadeMissing[0].empty() || !legacyArcadeMissing[1].empty())
+		j["legacy_arcade_missing"] = legacyArcadeMissing;
 	// Only local paths are persisted. ScreenScraper download URLs contain passwords.
 	for (const auto& media : screenScraperMedia)
 		j["screenscraper_media"][media.first] = media.second.substr(0, baseArtPath.size()) == baseArtPath
@@ -175,43 +177,25 @@ GameBoxart::GameBoxart(const json& j, const std::string& baseArtPath)
 	}
 	loadProperty(scraped, j, "scraped");
 	loadProperty(arcade, j, "arcade");
-	if (!boxartPath.empty() && !isAbsolutePath(boxartPath))
+	loadProperty(legacyArcadeMissing, j, "legacy_arcade_missing");
+	// Older Flycast databases stored absolute paths, including Windows paths
+	// that no longer look absolute when the library is moved to another OS.
+	const bool legacyCover = scraped && !boxartUrl.empty() && !j.contains("game_path");
+	const bool windowsAbsolute = boxartPath.size() >= 3 && std::isalpha(static_cast<unsigned char>(boxartPath[0]))
+			&& boxartPath[1] == ':' && (boxartPath[2] == '\\' || boxartPath[2] == '/');
+	const bool absolute = isAbsolutePath(boxartPath) || (legacyCover && (windowsAbsolute || boxartPath.rfind("\\\\", 0) == 0));
+	if (!boxartPath.empty() && !absolute)
 		boxartPath = baseArtPath + boxartPath;
-}
-
-bool Scraper::downloadImage(const std::string& url, const std::string& localName, bool mute)
-{
-	DEBUG_LOG(COMMON, "downloading %s", url.c_str());
-	std::vector<u8> content;
-	std::string contentType;
-	if (!http::success(http::get(url, content, contentType)))
-	{
-		if (!mute)
-			WARN_LOG(COMMON, "downloadImage http error: %s", url.c_str());
-		return false;
-	}
-	if (contentType.substr(0, 6) != "image/")
-	{
-		if (!mute)
-			WARN_LOG(COMMON, "downloadImage bad content type %s", contentType.c_str());
-		return false;
-	}
-	if (content.empty())
-	{
-		if (!mute)
-			WARN_LOG(COMMON, "downloadImage: empty content");
-		return false;
-	}
-	FILE *f = nowide::fopen(localName.c_str(), "wb");
-	if (f == nullptr)
-	{
-		WARN_LOG(COMMON, "can't create local file %s: error %d", localName.c_str(), errno);
-		return false;
-	}
-	fwrite(&content[0], 1, content.size(), f);
-	fclose(f);
-
-	return true;
+	if (!legacyCover || !absolute || baseArtPath.empty() || file_exists(boxartPath))
+		return;
+	const std::string filename = boxartPath.substr(boxartPath.find_last_of("/\\") + 1);
+	const std::string ext = get_file_extension(filename);
+	if (filename.find(':') != std::string::npos || (ext != "png" && ext != "jpg" && ext != "jpeg" && ext != "bmp"))
+		return;
+	std::error_code error;
+	const std::string relocated = baseArtPath + filename;
+	if (std::filesystem::is_regular_file(std::filesystem::u8path(relocated), error))
+		boxartPath = relocated;
 }
 
 std::string Scraper::makeUniqueFilename(const std::string& url)

@@ -14,6 +14,8 @@ public:
    std::unique_ptr<Scraper> fallback = {});
  bool initialize(const std::string& directory) override;
  bool ready() const override;
+ bool fallbackReady() const;
+ using Scraper::scrape;
  void scrape(GameBoxart& item) override;
  static u32 supportedMedia(int provider);
  // For the ordered ScreenScraper -> LaunchBox -> TGDB pipeline. -1 means complete.

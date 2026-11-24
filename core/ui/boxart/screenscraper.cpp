@@ -229,6 +229,8 @@ void Session::fail(int code, RequestType requestType, FailureType failureType)
 	case RequestType::Artwork: requestName = "artwork"; break;
 	default: requestName = "other"; break;
 	}
+	const bool login = requestType == RequestType::Login;
+	const char *retry = login ? " Reconnect to try again." : " Retrying after one minute.";
 	std::string message;
 	switch (code)
 	{
@@ -236,7 +238,7 @@ void Session::fail(int code, RequestType requestType, FailureType failureType)
 	case 403: message = "ScreenScraper rejected the application or personal account credentials."; break;
 	case 423: message = "ScreenScraper is temporarily closed. Reconnect later."; break;
 	case 426: message = "This Hollycast application version is not allowed by ScreenScraper."; break;
-	case 429: message = "ScreenScraper is busy or rate limited. Retrying after one minute."; break;
+	case 429: message = std::string("ScreenScraper is busy or rate limited.") + retry; break;
 	case 430: message = "ScreenScraper daily request allowance reached. Reconnect after it resets."; break;
 	case 431: message = "ScreenScraper daily unmatched-game allowance reached. Reconnect after it resets."; break;
 	case 400: message = "ScreenScraper rejected the request parameters."; break;
@@ -248,21 +250,21 @@ void Session::fail(int code, RequestType requestType, FailureType failureType)
 				message += "500 or network error.";
 			else
 				message += std::to_string(code) + ".";
-			message += " Retrying after one minute.";
+			message += retry;
 		}
 		else if (failureType == FailureType::InvalidJson)
 			message = "ScreenScraper " + std::string(requestName)
-				+ " response is invalid or oversized JSON. Retrying after one minute.";
+				+ " response is invalid or oversized JSON." + retry;
 		else if (failureType == FailureType::InvalidResponse)
 			message = "ScreenScraper " + std::string(requestName)
-				+ " response is invalid. Retrying after one minute.";
+				+ " response is invalid." + retry;
 		else
 			message = "ScreenScraper " + std::string(requestName)
-				+ " request failed because of a transport failure. Retrying after one minute.";
+				+ " request failed because of a transport failure." + retry;
 		break;
 	}
 	account.message = message;
-	if (code == 400 || code == 401 || code == 403 || code == 423 || code == 426 || code == 430 || code == 431)
+	if (login || code == 400 || code == 401 || code == 403 || code == 423 || code == 426 || code == 430 || code == 431)
 	{
 		account.connected = false;
 		requestRetryPending = false;
@@ -631,10 +633,25 @@ void ScreenScraper::scrape(GameBoxart& item)
 	const u32 selection = item.requestedMedia & screenscraper::allMedia;
 	if (!screenscraper::needsMedia(item, item.requestedMedia))
 		return;
+	const auto markMissing = [&](u32 missing) {
+		for (size_t i = 0; i < screenscraper::mediaTypes.size(); ++i)
+		{
+			if (!(missing & (1u << i))) continue;
+			const auto cached = item.screenScraperMedia.find(screenscraper::mediaTypes[i].name);
+			if (cached == item.screenScraperMedia.end() || file_exists(cached->second)) continue;
+			// A deleted cache file otherwise keeps this slot eligible for another lookup,
+			// even after the service confirmed it has no replacement.
+			if (i == 0 && item.boxartPath == cached->second)
+				item.boxartPath.clear();
+			item.screenScraperMedia.erase(cached);
+		}
+		item.screenScraperCheckedMedia |= missing;
+	};
 	const auto game = item.screenScraperDetails ? *item.screenScraperDetails : findGame(item);
 	if (!game.is_object())
 	{
 		item.screenScraperSearched = true;
+		markMissing(selection);
 		// A missing game has no other image types to fetch in the second phase.
 		item.screenScraperCheckedMedia |= screenscraper::allMedia;
 		return;
@@ -692,7 +709,7 @@ void ScreenScraper::scrape(GameBoxart& item)
 	const auto media = game.find("medias");
 	if (media == game.end() || !media->is_array())
 	{
-		item.screenScraperCheckedMedia |= selection;
+		markMissing(selection);
 		return;
 	}
 	for (size_t i = 0; i < screenscraper::mediaTypes.size(); ++i)
@@ -735,19 +752,19 @@ void ScreenScraper::scrape(GameBoxart& item)
 				download = &mediaDownloads[path];
 			}
 			std::lock_guard<std::mutex> guard(download->mutex);
-			if (download->unavailable)
-			{
-				item.screenScraperCheckedMedia |= bit;
-				continue;
-			}
 			// Recheck after acquiring ownership: another disc may just have saved it.
 			if (!file_exists(path))
 			{
+				if (download->unavailable)
+				{
+					markMissing(bit);
+					continue;
+				}
 				const auto bytes = session->requestImage(item.screenScraperId, type, region);
 				if (bytes.empty())
 				{
 					download->unavailable = true;
-					item.screenScraperCheckedMedia |= bit;
+					markMissing(bit);
 					continue;
 				}
 				try { saveImage(path, bytes); }
@@ -763,8 +780,10 @@ void ScreenScraper::scrape(GameBoxart& item)
 				item.boxartPath = path;
 				item.boxartUrl.clear();
 			}
+			item.screenScraperCheckedMedia |= bit;
 		}
-		item.screenScraperCheckedMedia |= bit;
+		else
+			markMissing(bit);
 	}
 }
 
