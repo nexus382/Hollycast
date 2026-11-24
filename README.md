@@ -10,13 +10,17 @@ Hollycast is an open-source emulator for Sega Dreamcast, NAOMI, NAOMI 2 and Atom
 
 <sub>Logo credit: [@ruva](https://artistree.io/ruva)</sub>
 
-[![Latest release](https://img.shields.io/github/v/release/nexus382/Hollycast?label=release)](https://github.com/nexus382/Hollycast/releases/latest)
-[![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/8s8Ecc2BxR)
-[![Join r/Hollycast on Reddit](https://img.shields.io/badge/Reddit-r%2FHollycast-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/Hollycast/)
-[![Website](https://img.shields.io/badge/web-hollycast.org-orange)](https://hollycast.org)
+<p align="center">
+  <a href="https://github.com/nexus382/Hollycast/releases/latest"><img src="https://img.shields.io/github/v/release/nexus382/Hollycast?label=release" alt="Latest release"></a>
+  <a href="https://github.com/nexus382/Hollycast/releases/tag/latest-dev"><img src="https://img.shields.io/badge/latest%20dev-download-orange" alt="Latest development build"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv2-blue.svg" alt="License: GPL v2"></a>
+</p>
 
-[![Latest Dev](https://img.shields.io/badge/latest%20dev-download-orange)](https://github.com/nexus382/Hollycast/releases/tag/latest-dev)
+<p align="center">
+  <a href="https://hollycast.org"><img src="https://img.shields.io/badge/web-hollycast.org-orange" alt="Hollycast website"></a>
+  <a href="https://discord.gg/8s8Ecc2BxR"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&amp;logoColor=white" alt="Discord"></a>
+  <a href="https://www.reddit.com/r/Hollycast/"><img src="https://img.shields.io/badge/Reddit-r%2FHollycast-FF4500?logo=reddit&amp;logoColor=white" alt="Join r/Hollycast on Reddit"></a>
+</p>
 
 [Downloads](#download) · [Emulator features](#what-hollycast-adds) · [Build from source](#building-from-source) · [Contributing](#contributing) · [Contributors and credits](CREDITS.md)
 
