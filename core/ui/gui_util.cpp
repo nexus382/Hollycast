@@ -790,6 +790,8 @@ StoragePopupResult select_storage_popup(bool isDirectory, bool writeAccess, cons
 void scrollWhenDraggingOnVoid(ImGuiMouseButton mouse_button)
 {
 	ImGuiContext& g = *ImGui::GetCurrentContext();
+	if (gui_state == GuiState::Settings && g.IO.MouseSource == ImGuiMouseSource_TouchScreen)
+		return;
 	ImGuiWindow* window = g.CurrentWindow;
 	while (window != nullptr
 			&& (window->Flags & ImGuiWindowFlags_ChildWindow)
@@ -1174,9 +1176,223 @@ static void computeScrollSpeed(float &v)
 	}
 }
 
+namespace {
+
+struct SettingsTouchSample
+{
+	ImVec2 position;
+	bool pressed;
+};
+
+struct SettingsTouchDragItem
+{
+	ImGuiID window;
+	ImRect bounds;
+};
+
+std::mutex settingsTouchMutex;
+std::vector<SettingsTouchSample> settingsTouchQueue;
+std::vector<SettingsTouchDragItem> settingsTouchDragItems;
+int settingsTouchDragFrame = -1;
+
+} // namespace
+
+void queueSettingsTouchSample(const ImVec2& position, bool pressed)
+{
+	std::lock_guard lock(settingsTouchMutex);
+	settingsTouchQueue.push_back({position, pressed});
+}
+
+bool allowSettingsTouchDrag(bool changed, const ImRect* touchBounds)
+{
+	if (gui_state == GuiState::Settings && ImGui::IsItemVisible())
+	{
+		const ImGuiContext& context = *GImGui;
+		if (settingsTouchDragFrame != context.FrameCount)
+		{
+			settingsTouchDragItems.clear();
+			settingsTouchDragFrame = context.FrameCount;
+		}
+		ImRect bounds = touchBounds != nullptr ? *touchBounds : context.LastItemData.NavRect;
+		bounds.ClipWith(context.CurrentWindow->ClipRect);
+		settingsTouchDragItems.push_back({context.CurrentWindow->ID, bounds});
+	}
+	return changed;
+}
+
+bool handleSettingsTouchInput(const ImVec2& position, bool touchscreen)
+{
+	enum class Gesture { None, Pending, Scroll, Widget, Consumed };
+	static Gesture gesture = Gesture::None;
+	static ImGuiID scrollWindows[2] {};
+	static ImGuiAxis axis = ImGuiAxis_Y;
+	static bool draggable = false;
+	static ImVec2 origin, previous;
+	static float speed = 0.f;
+	static ImU32 pendingRelease = 0;
+	static std::vector<SettingsTouchSample> samples;
+	{
+		std::lock_guard lock(settingsTouchMutex);
+		if (samples.empty())
+			settingsTouchQueue.swap(samples);
+		else
+		{
+			samples.insert(samples.end(), settingsTouchQueue.begin(), settingsTouchQueue.end());
+			settingsTouchQueue.clear();
+		}
+	}
+	if (gui_state != GuiState::Settings || !touchscreen)
+	{
+		samples.clear();
+		gesture = Gesture::None;
+		speed = 0.f;
+		pendingRelease = 0;
+		return false;
+	}
+
+	ImGuiContext& context = *GImGui;
+	if (pendingRelease != 0)
+	{
+		// ImGui can spread a touch click across frames. Let its widget see
+		// the release before another gesture moves that widget's window.
+		if (std::any_of(context.InputEventsQueue.begin(), context.InputEventsQueue.end(),
+				[](const ImGuiInputEvent& event) { return event.EventId == pendingRelease; }))
+			return true;
+		pendingRelease = 0;
+	}
+	ImGuiIO& io = context.IO;
+	ImGuiID movedWindow = 0;
+	ImGuiAxis movedAxis = ImGuiAxis_None;
+	const auto scrollBy = [&](float delta) {
+		ImGuiWindow* window = ImGui::FindWindowByID(scrollWindows[axis]);
+		if (window == nullptr || !window->Active || !ImGui::IsWindowContentHoverable(window))
+		{
+			speed = 0.f;
+			return;
+		}
+		const bool moved = movedWindow == window->ID && movedAxis == axis;
+		const float offset = (moved ? window->ScrollTarget[axis] : window->Scroll[axis]) - delta;
+		if (axis == ImGuiAxis_X)
+			ImGui::SetScrollX(window, offset);
+		else
+			ImGui::SetScrollY(window, offset);
+		movedWindow = window->ID;
+		movedAxis = axis;
+	};
+
+	// Keep down, move and up in order even when they arrive within one render
+	// frame. ImGui will deliver any resulting clicks across its own frames.
+	const bool hadSamples = !samples.empty();
+	size_t consumed = 0;
+	while (consumed < samples.size())
+	{
+		const SettingsTouchSample& sample = samples[consumed++];
+		const ImVec2& point = sample.position;
+		const bool valid = point.x >= 0.f && point.y >= 0.f && point.x < io.DisplaySize.x && point.y < io.DisplaySize.y;
+		if (sample.pressed && gesture == Gesture::None)
+		{
+			scrollWindows[ImGuiAxis_X] = scrollWindows[ImGuiAxis_Y] = 0;
+			speed = 0.f;
+			ImGuiWindow* hovered = nullptr;
+			if (valid)
+				ImGui::FindHoveredWindowEx(point, false, &hovered, nullptr);
+			draggable = hovered != nullptr && settingsTouchDragFrame == context.FrameCount
+					&& std::any_of(settingsTouchDragItems.begin(), settingsTouchDragItems.end(), [&](const SettingsTouchDragItem& item) {
+						return item.window == hovered->ID && item.bounds.Contains(point);
+					});
+			for (ImGuiWindow* window = hovered; window != nullptr && window->Active
+					&& ImGui::IsWindowContentHoverable(window); window = window->ParentWindow)
+			{
+				if (window->Flags & ImGuiWindowFlags_NoScrollWithMouse)
+					break;
+				// Direct scrollbar drags keep their usual widget behavior.
+				if ((window->ScrollbarX && ImGui::GetWindowScrollbarRect(window, ImGuiAxis_X).Contains(point))
+						|| (window->ScrollbarY && ImGui::GetWindowScrollbarRect(window, ImGuiAxis_Y).Contains(point)))
+				{
+					scrollWindows[ImGuiAxis_X] = scrollWindows[ImGuiAxis_Y] = 0;
+					break;
+				}
+				if (scrollWindows[ImGuiAxis_X] == 0 && window->ScrollbarX && window->ScrollMax.x > 0.f)
+					scrollWindows[ImGuiAxis_X] = window->ID;
+				if (scrollWindows[ImGuiAxis_Y] == 0 && window->ScrollMax.y > 0.f)
+					scrollWindows[ImGuiAxis_Y] = window->ID;
+				if (window->Flags & ImGuiWindowFlags_Popup)
+					break;
+			}
+			gesture = scrollWindows[ImGuiAxis_X] != 0 || scrollWindows[ImGuiAxis_Y] != 0 ? Gesture::Pending : Gesture::Widget;
+			origin = previous = point;
+		}
+
+		if (gesture == Gesture::Pending && valid)
+		{
+			const ImVec2 distance = point - origin;
+			if (distance != ImVec2() && ImLengthSqr(distance) >= io.MouseDragThreshold * io.MouseDragThreshold)
+			{
+				axis = std::abs(distance.x) > std::abs(distance.y) ? ImGuiAxis_X : ImGuiAxis_Y;
+				if (axis == ImGuiAxis_X && draggable)
+				{
+					// Only a horizontal value control may replay the press as a drag.
+					gesture = Gesture::Widget;
+					io.AddMousePosEvent(origin.x, origin.y);
+					io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+				}
+				else
+					gesture = scrollWindows[axis] != 0 ? Gesture::Scroll : Gesture::Consumed;
+			}
+		}
+
+		if (gesture == Gesture::Scroll && valid)
+		{
+			const float delta = point[axis] - previous[axis];
+			if (delta != 0.f)
+			{
+				speed = movedWindow == scrollWindows[axis] && movedAxis == axis ? speed + delta : delta;
+				scrollBy(delta);
+			}
+			previous = point;
+		}
+		io.AddMousePosEvent(valid ? point.x : -FLT_MAX, valid ? point.y : -FLT_MAX);
+		if (!sample.pressed && gesture == Gesture::Pending && valid)
+			io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+		const ImU32 nextEvent = context.InputEventsNextEventId;
+		io.AddMouseButtonEvent(ImGuiMouseButton_Left, sample.pressed && gesture == Gesture::Widget);
+		if (!sample.pressed)
+		{
+			gesture = Gesture::None;
+			if (context.InputEventsNextEventId != nextEvent)
+			{
+				pendingRelease = context.InputEventsNextEventId - 1;
+				break;
+			}
+		}
+	}
+	samples.erase(samples.begin(), samples.begin() + consumed);
+	if (!hadSamples)
+	{
+		io.AddMousePosEvent(position.x, position.y);
+		if (gesture == Gesture::None)
+		{
+			if (context.NavMoveSubmitted || context.NavActivateId != 0)
+				speed = 0.f;
+			computeScrollSpeed(speed);
+			if (speed != 0.f)
+				scrollBy(speed);
+		}
+		else if (gesture == Gesture::Scroll)
+			speed = 0.f;
+	}
+	return true;
+}
+
 void windowDragScroll(bool allowHorizontal)
 {
 	ImGuiWindow *window = ImGui::GetCurrentWindow();
+	if (gui_state == GuiState::Settings && ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen)
+	{
+		window->DragScrolling = false;
+		window->ScrollSpeed = ImVec2();
+		return;
+	}
 	if (GImGui->NavMoveSubmitted || GImGui->NavActivateId != 0)
 	{
 		window->DragScrolling = false;
@@ -2723,6 +2939,9 @@ bool RenderOptionsPopup(const PopupOptionsConfig& cfg)
     return valueChanged;
 }
 
+static ImGuiID liveSliderPopup = 0;
+static int liveSliderPopupFrame = -1;
+
 // Internal helper to render slider popup
 bool RenderSliderPopup(PopupSliderConfig& cfg)
 {
@@ -2747,7 +2966,7 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
 		}
 	}
 
-	if ((editingPopup == ownerPopup) && isTopmost && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+	const auto cancel = [&]()
 	{
 		const bool changed = *cfg.currentValue != openingValue;
 		*cfg.currentValue = openingValue;
@@ -2762,7 +2981,18 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
 		ImGui::ClearActiveID();
 		ImGui::ClosePopupToLevel(GImGui->OpenPopupStack.Size - 1, true);
 		return changed;
-	}
+	};
+
+	const bool liveRollback = !cfg.onApply && cfg.onCancel;
+	const ImGuiID cancelOwner = liveRollback ? ownerPopup : ImGuiKeyOwner_NoOwner;
+	const auto cancelPressed = [&](ImGuiKey key) {
+		return (!liveRollback || ImGui::GetKeyOwner(key) == cancelOwner)
+				&& ImGui::IsKeyPressed(key, ImGuiInputFlags_None, cancelOwner);
+	};
+	// Let an active numeric editor handle its own cancel before closing the popup.
+	if (editingPopup == ownerPopup && isTopmost && ImGui::GetInputTextState(GImGui->ActiveId) == nullptr
+			&& (cancelPressed(ImGuiKey_GamepadFaceRight) || ((cfg.onApply || liveRollback) && cancelPressed(ImGuiKey_Escape))))
+		return cancel();
 
 	if (editingPopup == ownerPopup && !isTopmost) {
 		editingPopup = 0; // Nested popup took over, or this one closed; release tracking.
@@ -2847,6 +3077,10 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
 	);
 
     if (popupVisible) {
+        if (liveRollback && isTopmost) {
+            liveSliderPopup = ownerPopup;
+            liveSliderPopupFrame = ImGui::GetFrameCount();
+        }
         if (rowLabel[0] != '\0') {
             ImGui::PushFont(largeFont);
             ImGui::TextUnformatted(rowLabel);
@@ -2994,14 +3228,14 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
                 ImGui::SetKeyboardFocusHere();
 
             int tempValue = *cfg.currentValue;
-            const bool sliderChanged = ImGui::SliderInt(
+            const bool sliderChanged = allowSettingsTouchDrag(ImGui::SliderInt(
                 "##SliderPopup",
                 &tempValue,
                 cfg.minValue,
                 cfg.maxValue,
                 "",
                 ImGuiSliderFlags_NoInput
-            );
+            ));
             const bool sliderFocused = ImGui::IsItemFocused();
             const bool sliderActive = ImGui::IsItemActive();
             if (modeControllerSlider && (ImGui::IsItemHovered() || sliderActive) && ImGui::IsMouseDown(ImGuiMouseButton_Left))
@@ -3106,24 +3340,17 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
             ImGui::CloseCurrentPopup();
             editingPopup = 0;
         } else if (cfg.onApply) {
-            // Begin menu buttons container
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(uiScaled(8), uiScaled(8)));
-
-            const float buttonWidth = uiScaled(120);
-            const float buttonHeight = uiScaled(32);
-
-            // Right-align buttons
-            float availableWidth = ImGui::GetContentRegionAvail().x;
-            ImGui::SetCursorPosX(availableWidth - buttonWidth);
-
-            // Apply button with rounded corners
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, uiScaled(8.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(uiScaled(16), uiScaled(8)));
+            ImGui::Separator();
+            ImGui::Spacing();
 
             if (requestFocusApply)
                 ImGui::SetKeyboardFocusHere();
 
-            if (ImGui::Button(cfg.applyButtonText, ImVec2(buttonWidth, buttonHeight))) {
+            const bool applyPressed = ImGui::Button(cfg.applyButtonText);
+            ImGui::SameLine();
+            if (ImGui::Button(T("Cancel"))) {
+                valueChanged = cancel() || valueChanged;
+            } else if (applyPressed) {
                 cfg.onApply();
                 cfg.hasPendingChanges = false; // Reset state
                 modePendingChanges = false;
@@ -3133,8 +3360,6 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
                 ImGui::CloseCurrentPopup();
                 editingPopup = 0;
             }
-
-            ImGui::PopStyleVar(3); // Pop ItemSpacing, FrameRounding, FramePadding
         }
 
         ImGui::EndPopup();
@@ -3144,6 +3369,21 @@ bool RenderSliderPopup(PopupSliderConfig& cfg)
 }
 
 } // namespace Detail
+
+void PrepareSliderPopupNavigation()
+{
+	ImGuiContext& g = *GImGui;
+	if (Detail::liveSliderPopupFrame != g.FrameCount || g.ActiveId != 0 || g.OpenPopupStack.empty())
+		return;
+	const ImGuiID popup = g.OpenPopupStack.back().PopupId;
+	if (popup != Detail::liveSliderPopup)
+		return;
+
+	// ImGui closes non-modal popups in NewFrame. Keep cancel available to the
+	// live slider so it can roll back, while leaving outside-click handling alone.
+	ImGui::SetKeyOwner(ImGuiKey_GamepadFaceRight, popup, ImGuiInputFlags_LockUntilRelease);
+	ImGui::SetKeyOwner(ImGuiKey_Escape, popup, ImGuiInputFlags_LockUntilRelease);
+}
 
 // Main entry point
 bool SettingPopup(PopupConfig& config)

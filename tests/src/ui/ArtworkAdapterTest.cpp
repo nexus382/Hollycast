@@ -2,6 +2,7 @@
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gtest/gtest.h"
+#include "ui/boxart/arcade_scraper.h"
 #include "ui/boxart/artwork_adapter.h"
 #include "ui/boxart/artwork_media.h"
 #include "ui/boxart/gamesdb.h"
@@ -51,6 +52,96 @@ TEST_F(ArtworkAdapterTest, TgdbFillsOnlyMissingSupportedSlotsAndKeepsPrimaryMeta
  EXPECT_TRUE(item.launchboxMedia.count("physical")); EXPECT_TRUE(item.tgdbMedia.count("screenshot"));
  EXPECT_EQ(artwork::allMedia, item.requestedMedia);
  EXPECT_FALSE(ArtworkAdapter::needsMedia(item, 2, artwork::allMedia));
+}
+
+TEST_F(ArtworkAdapterTest, PausedFallbackKeepsLaunchBoxAvailableForOtherGames)
+{
+ auto authorization = std::make_shared<TheGamesDbAuthorization>();
+ int calls = 0;
+ auto fallback = std::make_unique<TheGamesDb>([&](const std::string&, std::vector<u8>&, std::string&) {
+  ++calls;
+  return 403;
+ }, authorization);
+ ArtworkAdapter adapter(2, std::make_unique<StubScraper>([&](GameBoxart& item) {
+  item.launchboxSearched = true;
+  item.launchboxCheckedMedia |= artwork::coverMedia;
+  if (item.name == "Matched") {
+   item.launchboxId = 1;
+   item.launchboxMedia["cover"] = image("other-cover");
+  }
+ }), std::move(fallback));
+ ASSERT_TRUE(adapter.initialize(root.string()));
+ GameBoxart missing;
+ missing.requestedMedia = artwork::coverMedia;
+ EXPECT_THROW(adapter.scrape(missing), std::runtime_error);
+ EXPECT_TRUE(adapter.ready());
+ EXPECT_FALSE(adapter.fallbackReady());
+ EXPECT_TRUE(ArtworkAdapter::needsMedia(missing, 2, missing.requestedMedia));
+ GameBoxart matched;
+ matched.name = "Matched";
+ matched.requestedMedia = artwork::coverMedia;
+ EXPECT_NO_THROW(adapter.scrape(matched));
+ EXPECT_FALSE(ArtworkAdapter::needsMedia(matched, 2, matched.requestedMedia));
+ EXPECT_EQ(calls, 1);
+ authorization->reset();
+ EXPECT_TRUE(adapter.fallbackReady());
+}
+
+TEST_F(ArtworkAdapterTest, LegacyArcadeMissSurvivesRestartWithoutSuppressingTgdb)
+{
+ int calls = 0;
+ ArcadeScraper scraper([&](const std::string&, std::vector<u8>&, std::string&) {
+  ++calls;
+  return 404;
+ });
+ ASSERT_TRUE(scraper.initialize(root.string() + "/"));
+ GameBoxart item;
+ item.arcade = true;
+ item.fileName = "sample.zip";
+ scraper.scrape(item);
+ EXPECT_EQ(1, calls);
+ EXPECT_FALSE(ArcadeScraper::needsCover(item));
+
+ GameBoxart loaded(item.to_json(root.string()), root.string());
+ EXPECT_FALSE(ArcadeScraper::needsCover(loaded));
+ EXPECT_TRUE(TheGamesDb::needsMedia(loaded, artwork::coverMedia));
+ loaded.uniqueId = "sample";
+ EXPECT_FALSE(ArcadeScraper::needsCover(loaded));
+ loaded.uniqueId = "Another ID";
+ EXPECT_TRUE(ArcadeScraper::needsCover(loaded));
+ scraper.scrape(loaded);
+ EXPECT_EQ(2, calls);
+ EXPECT_FALSE(ArcadeScraper::needsCover(loaded));
+}
+
+TEST_F(ArtworkAdapterTest, LegacyArcadeRetriesInvalidImagesAndRetainsDefinitiveMisses)
+{
+ std::vector<std::string> requests;
+ ArcadeScraper scraper([&](const std::string& url, std::vector<u8>& bytes, std::string& type) {
+  requests.push_back(url);
+  if (url.find("/sample.jpg") != std::string::npos) return 404;
+  bytes = {1, 2, 3};
+  type = "image/jpeg";
+  return 200;
+ });
+ ASSERT_TRUE(scraper.initialize(root.string() + "/"));
+ GameBoxart item;
+ item.arcade = true;
+ item.fileName = "sample.zip";
+ item.uniqueId = "another";
+ scraper.scrape(item);
+ ASSERT_EQ(2u, requests.size());
+ EXPECT_FALSE(ArcadeScraper::needsCover(item));
+ EXPECT_TRUE(item.boxartPath.empty());
+ EXPECT_TRUE(std::filesystem::is_empty(root));
+ scraper.scrape(item);
+ EXPECT_EQ(2u, requests.size());
+
+ GameBoxart loaded(item.to_json(root.string()), root.string());
+ EXPECT_TRUE(ArcadeScraper::needsCover(loaded));
+ scraper.scrape(loaded);
+ ASSERT_EQ(3u, requests.size());
+ EXPECT_EQ(requests[1], requests[2]);
 }
 
 TEST_F(ArtworkAdapterTest, ScreenScraperDefersFallbackAndPlansOnlyMissingRequestedMedia)

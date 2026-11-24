@@ -58,6 +58,9 @@ void scrollWhenDraggingOnVoid(ImGuiMouseButton mouse_button = ImGuiMouseButton_L
 // Call immediately after BeginChild/BeginTable for each scrollable library pane.
 // Capturing a finger swipe before widgets run cancels their pending tap.
 void scrollWindowFromTouch();
+void queueSettingsTouchSample(const ImVec2& position, bool pressed);
+bool handleSettingsTouchInput(const ImVec2& position, bool touchscreen);
+bool allowSettingsTouchDrag(bool changed, const ImRect* touchBounds = nullptr);
 // Shared empty state for classic, table and themed libraries; caller opens the folder picker.
 bool drawEmptyLibraryPrompt(bool hasContentPath = false, bool scanning = false);
 // First-run theme choice; caller persists changes and refreshes style after rendering.
@@ -551,6 +554,7 @@ struct PopupConfig {
 };
 
 // Main entry point function
+void PrepareSliderPopupNavigation();
 bool SettingPopup(PopupConfig& config);
 
 // Convenience overloads

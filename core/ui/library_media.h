@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -23,36 +24,63 @@ struct MediaBatch
 		bool notifyPending = false;
 	};
 
-	std::vector<GameMedia> games;
-	std::vector<Boxart::MediaProgress> outcomes;
+	struct GameRequest
+	{
+		GameMedia game;
+		u32 media;
+		u32 manualMedia;
+		Boxart::MediaProgress outcome;
+	};
+
+	std::vector<GameRequest> games;
 	Boxart::MediaProgress progress;
-	u32 mask = 0;
 	std::string label;
 	size_t cursor = 0;
 	bool checked = false, notified = false;
 	double nextCheck = 0, finishedAt = 0;
 
-	void reset(std::vector<GameMedia> games, u32 requestedMedia, std::string label)
+	void rebuild(std::vector<GameMedia> sources, u32 automaticMedia, std::string label,
+			u32 manualMedia = 0, const std::string& queuedLabel = {})
 	{
-		this->games = std::move(games);
-		this->mask = requestedMedia | artwork::metadataMedia;
+		std::unordered_map<std::string, u32> previousManualMedia;
+		// Keep a manual library selection attached to the disc sources present when
+		// it was requested, including during partial inventory and cache refresh.
+		if (std::any_of(games.begin(), games.end(), [](const GameRequest& request) {
+			return (request.manualMedia & request.outcome.pendingMedia) != 0;
+		}))
+			for (const auto& request : games)
+				if (request.manualMedia)
+					previousManualMedia.emplace(request.game.path, request.manualMedia);
+
 		this->label = std::move(label);
+		notified = false;
+		games.clear();
+		games.reserve(sources.size());
 		progress = {};
 		cursor = 0;
 		checked = false;
-		notified = false;
 		nextCheck = 0;
 		finishedAt = 0;
 
-		size_t units = 1; // Metadata is always inventoried.
-		for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
-			if (mask & (1u << i)) ++units;
-		progress.total = progress.pending = units * this->games.size();
-		outcomes.assign(this->games.size(), {});
-		for (auto& outcome : outcomes)
+		automaticMedia |= artwork::metadataMedia;
+		manualMedia &= artwork::allMedia;
+		for (auto& source : sources)
 		{
+			const auto previous = previousManualMedia.find(source.path);
+			const u32 retained = previous == previousManualMedia.end() ? 0 : previous->second;
+			if (!queuedLabel.empty() && (retained & ~(automaticMedia | manualMedia)))
+				this->label = queuedLabel;
+			const u32 selected = manualMedia | retained;
+			const u32 requested = automaticMedia | selected;
+			size_t units = 1; // Metadata is always inventoried.
+			for (size_t i = 0; i < artwork::mediaTypes.size(); ++i)
+				if (requested & (1u << i)) ++units;
+			Boxart::MediaProgress outcome;
 			outcome.total = outcome.pending = units;
-			outcome.pendingMedia = mask;
+			outcome.pendingMedia = requested;
+			games.push_back({std::move(source), requested, selected, outcome});
+			progress.total += units;
+			progress.pending += units;
 		}
 	}
 
@@ -68,12 +96,13 @@ struct MediaBatch
 		const size_t end = std::min(cursor + maxItems, games.size());
 		while (cursor < end)
 		{
-			auto& prior = outcomes[cursor];
+			auto& request = games[cursor];
+			auto& prior = request.outcome;
 			const bool firstInventory = !checked;
-			const u32 requestedMedia = firstInventory ? mask : prior.pendingMedia;
+			const u32 requestedMedia = prior.pendingMedia;
 			Boxart::MediaProgress current;
 			if (requestedMedia)
-				current = boxart.mediaProgress(games[cursor], requestedMedia);
+				current = boxart.mediaProgress(request.game, requestedMedia);
 
 			progress.ready += current.ready;
 			progress.pending = progress.pending - prior.pending + current.pending;
@@ -86,10 +115,10 @@ struct MediaBatch
 			// The first request also schedules offline disc parsing when every online
 			// category is already complete. Re-offer outstanding bits on later polls;
 			// Boxart suppresses duplicates while a request is active.
-			const u32 queueMedia = firstInventory ? mask : current.pendingMedia;
+			const u32 queueMedia = firstInventory ? request.media : current.pendingMedia;
 			if (queueMedia)
 			{
-				boxart.queueBoxart(games[cursor], queueMedia);
+				boxart.queueBoxart(request.game, queueMedia);
 				if (current.pendingMedia && !notified)
 				{
 					result.notifyPending = true;

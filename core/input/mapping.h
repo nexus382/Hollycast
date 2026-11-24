@@ -158,6 +158,7 @@ public:
 		dead_zone = other.dead_zone;
 		saturation = other.saturation;
 		rumblePower = other.rumblePower;
+		triggers = other.triggers;
 		for (int port = 0; port < 4; port++)
 		{
 			axes[port] = other.axes[port];
@@ -255,11 +256,12 @@ public:
 	bool save(const std::string& name);
 
 	void set_dirty();
+	void clearDirty() { dirty = false; }
 	bool is_dirty() const { return dirty; }
 
 	static std::shared_ptr<InputMapping> LoadMapping(const std::string& name);
-	static void SaveMapping(const std::string& name, const std::shared_ptr<InputMapping>& mapping);
-	static void DeleteMapping(const std::string& name);
+	static bool SaveMapping(const std::string& name, const std::shared_ptr<InputMapping>& mapping);
+	static bool DeleteMapping(const std::string& name);
 
 	static void ClearMappings();
 

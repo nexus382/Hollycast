@@ -55,18 +55,51 @@ std::string plainText(std::string value)
 const char* imageTypes[] = {"boxart", "", "clearlogo", "banner", "", "fanart", "screenshot", "titlescreen", "", "boxart", ""};
 }
 
-TheGamesDb::TheGamesDb(Transport transport) : transport(std::move(transport)) {}
+std::optional<u64> TheGamesDbAuthorization::beginRequest() const
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	if (rejected)
+		return std::nullopt;
+	return generation;
+}
+
+void TheGamesDbAuthorization::reject(u64 requestGeneration)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	// A response from before a manual retry or reconnect must not cancel the new attempt.
+	if (generation == requestGeneration)
+		rejected = true;
+}
+
+void TheGamesDbAuthorization::reset()
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	++generation;
+	rejected = false;
+}
+
+TheGamesDb::TheGamesDb(Transport transport, std::shared_ptr<TheGamesDbAuthorization> authorization)
+	: transport(std::move(transport)),
+	  authorization(authorization ? std::move(authorization) : std::make_shared<TheGamesDbAuthorization>())
+{
+}
 
 std::string TheGamesDb::makeUrl(const std::string& endpoint)
 {
     return "https://api.thegamesdb.net/v1/" + endpoint + "?apikey=" APIKEY;
 }
 
-bool TheGamesDb::ready() const { return getTimeMs() >= blackoutPeriod; }
+bool TheGamesDb::ready() const { return getTimeMs() >= blackoutPeriod && authorization->beginRequest().has_value(); }
 
 bool TheGamesDb::needsMedia(const GameBoxart& item, u32 selection)
 {
-    if (item.arcade) return !item.scraped;
+    if (item.arcade)
+    {
+        if (!item.scraped) return true;
+        if (!item.boxartUrl.empty() && !item.boxartPath.empty()) return false;
+        const auto cover = item.tgdbMedia.find("cover");
+        return cover != item.tgdbMedia.end() && !file_exists(cover->second);
+    }
     if ((selection & artwork::metadataMedia) && !item.tgdbSearched) return true;
     return artwork::needsImages(selection & supportedMedia, item.tgdbCheckedMedia, item.tgdbMedia);
 }
@@ -91,10 +124,19 @@ bool TheGamesDb::initialize(const std::string& saveDirectory)
 
 json TheGamesDb::httpGet(const std::string& url)
 {
-    if (!ready()) throw std::runtime_error("");
+    const auto requestGeneration = authorization->beginRequest();
+    if (!requestGeneration || getTimeMs() < blackoutPeriod) throw std::runtime_error("");
+    const auto checkAuthorization = [&](int status) {
+        if (status == 401 || status == 403)
+        {
+            authorization->reject(*requestGeneration);
+            throw std::runtime_error("TheGamesDB rejected its API credentials. Automatic requests are paused.");
+        }
+    };
     std::vector<u8> bytes;
     std::string type;
     const int status = transport ? transport(url, bytes, type) : http::get(url, bytes, type);
+    checkAuthorization(status);
     if (!http::success(status) || bytes.empty())
     {
         blackoutPeriod = getTimeMs() + 60000;
@@ -108,7 +150,10 @@ json TheGamesDb::httpGet(const std::string& url)
         blackoutPeriod = getTimeMs() + 60000;
         throw std::runtime_error("TheGamesDB returned an invalid response.");
     }
-    if (!response.contains("code") || !response["code"].is_number_integer() || !http::success(response["code"].get<int>()))
+    const auto code = response.find("code");
+    const int responseStatus = code != response.end() && code->is_number_integer() ? code->get<int>() : 0;
+    checkAuthorization(responseStatus);
+    if (!http::success(responseStatus))
     {
         blackoutPeriod = getTimeMs() + 60000;
         throw std::runtime_error("TheGamesDB API request failed. Retrying after one minute.");
@@ -236,6 +281,16 @@ void TheGamesDb::scrape(GameBoxart& item)
     if (!needsMedia(item, item.requestedMedia ? item.requestedMedia : artwork::coverMedia)) return;
     const auto game = findGame(item);
     if (!game.is_object()) {
+        if (item.arcade)
+        {
+            const auto cover = item.tgdbMedia.find("cover");
+            if (cover != item.tgdbMedia.end() && !file_exists(cover->second))
+            {
+                if (item.boxartPath == cover->second)
+                    item.boxartPath.clear();
+                item.tgdbMedia.erase(cover);
+            }
+        }
         item.tgdbSearched = true;
         item.tgdbCheckedMedia |= supportedMedia;
         item.scraped = true;

@@ -92,6 +92,7 @@ void setWindowTitleGame() {}
 struct SDLGamepad { static void UpdateRumble() {} };
 constexpr u32 SDL_MOUSEMOTION=1, SDL_MOUSEBUTTONDOWN=2, SDL_MOUSEBUTTONUP=3, SDL_MOUSEWHEEL=4;
 constexpr u32 SDL_KEYDOWN=5, SDL_KEYUP=6;
+constexpr u32 SDL_TOUCH_MOUSEID=static_cast<u32>(-1);
 constexpr int KMOD_LALT=1, KMOD_LCTRL=2, KMOD_ALT=1, KMOD_CTRL=2, KMOD_SHIFT=4, KMOD_GUI=8;
 constexpr int SDLK_RETURN=13, SDLK_F11=122, SDL_SCANCODE_LALT=226, SDL_SCANCODE_LCTRL=224, EMU_BTN_NONE=0;
 union SDL_Event {

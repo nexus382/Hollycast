@@ -1,5 +1,6 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
+#include "ui/gui.h"
 #include "ui/gui_util.h"
 #include "ui/gui_font.h"
 #include "ui/boxart/screenscraper.h"
@@ -16,6 +17,7 @@ protected:
 	void SetUp() override
 	{
 		previousContext = ImGui::GetCurrentContext();
+		previousGuiState = gui_state;
 		previousFonts = {largeFont, settingsTitleFont, settingsValueFont, settingsRightValueFont, settingsIconFont};
 		previousScale = settings.display.uiScale;
 		settings.display.uiScale = 1.0f;
@@ -48,6 +50,9 @@ protected:
 	}
 	void TearDown() override
 	{
+		if (touchInput)
+			handleSettingsTouchInput(touchPosition, false);
+		gui_state = previousGuiState;
 		ImGui::DestroyContext();
 		ImGui::SetCurrentContext(previousContext);
 		largeFont = previousFonts[0];
@@ -59,11 +64,18 @@ protected:
 	}
 	void frame(bool open = false)
 	{
+		if (touchInput)
+		{
+			ImGui::GetIO().AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+			handleSettingsTouchInput(touchPosition, true);
+		}
+		SettingsUI::PrepareSliderPopupNavigation();
 		ImGui::NewFrame();
 		ImGui::SetNextWindowPos(ImVec2(0, 0));
 		ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
 		ImGui::Begin("Library Settings");
-		if (open) ImGui::OpenPopup(cfg.options.popupID);
+		if (open)
+			ImGui::OpenPopup(cfg.type == SettingsUI::PopupType::Slider ? cfg.slider.popupID : cfg.options.popupID);
 		SettingsUI::SettingPopup(cfg);
 		ImGui::End();
 		ImGui::Render();
@@ -95,7 +107,23 @@ protected:
 		ImGui::ActivateItemByID(popup()->GetID(i18n::T(label)));
 		frame();
 	}
+	void openTouchChoices()
+	{
+		gui_state = GuiState::Settings;
+		touchInput = true;
+		ImGui::GetIO().DisplaySize = ImVec2(640, 480);
+		frame(true);
+		frame();
+	}
+	void touch(ImVec2 position, bool pressed)
+	{
+		touchPosition = position;
+		queueSettingsTouchSample(position, pressed);
+	}
 	ImGuiContext *previousContext = nullptr;
+	GuiState previousGuiState = GuiState::Closed;
+	bool touchInput = false;
+	ImVec2 touchPosition{-FLT_MAX, -FLT_MAX};
 	std::array<ImFont*, 5> previousFonts{};
 	float previousScale = 1;
 	std::array<const char*, screenscraper::mediaTypes.size()> labels{};
@@ -213,6 +241,94 @@ TEST_F(SettingsPopupTest, SmallWindowScrollsChoicesWithinBoundedDialog)
 	EXPECT_GT(choices()->ScrollMax.y, 0);
 	button("Cancel");
 	EXPECT_EQ(popup(), nullptr);
+}
+
+TEST_F(SettingsPopupTest, SameFrameSwipeScrollsChoicesWithoutTogglingCheckbox)
+{
+	openTouchChoices();
+	ImGuiWindow* list = choices();
+	ASSERT_NE(list, nullptr);
+	ASSERT_GT(list->ScrollMax.y, 0.f);
+	const ImVec2 checkbox = list->DC.CursorStartPos + ImVec2(8.f, 8.f);
+	ASSERT_TRUE(list->ClipRect.Contains(checkbox));
+	const ImVec2 end = checkbox - ImVec2(0.f, 40.f);
+	touch(checkbox, true);
+	touch(end, true);
+	touch(end, false);
+	frame();
+	EXPECT_GT(list->Scroll.y, 0.f);
+	frame();
+	EXPECT_FALSE(ImGui::IsMouseDown(ImGuiMouseButton_Left));
+	EXPECT_EQ(changes, 0);
+	button("Apply");
+	EXPECT_EQ(value, 1);
+}
+
+TEST_F(SettingsPopupTest, SameFrameTapTogglesCheckboxBeforeNextSwipe)
+{
+	openTouchChoices();
+	ImGuiWindow* list = choices();
+	ASSERT_NE(list, nullptr);
+	const ImVec2 checkbox = list->DC.CursorStartPos + ImVec2(8.f, 8.f);
+	ASSERT_TRUE(list->ClipRect.Contains(checkbox));
+	touch(checkbox, true);
+	touch(checkbox, false);
+	frame();
+	EXPECT_FLOAT_EQ(list->Scroll.y, 0.f);
+
+	// Send the swipe before ImGui has finished delivering the tap.
+	const ImVec2 end = checkbox - ImVec2(0.f, 40.f);
+	touch(checkbox, true);
+	touch(end, true);
+	touch(end, false);
+	for (int i = 0; i < 5 && list->Scroll.y == 0.f; ++i)
+		frame();
+	EXPECT_GT(list->Scroll.y, 0.f);
+	frame();
+	EXPECT_FALSE(ImGui::IsMouseDown(ImGuiMouseButton_Left));
+	button("Apply");
+	EXPECT_EQ(value, 0);
+	EXPECT_EQ(changes, 1);
+}
+
+TEST_F(SettingsPopupTest, LiveSliderCancelRestoresPreviewOnGamepadBackAndEscape)
+{
+	cfg.type = SettingsUI::PopupType::Slider;
+	cfg.slider.label = "Preview level";
+	cfg.slider.icon = "I";
+	cfg.slider.popupID = "PreviewLevel";
+	cfg.slider.currentValue = &value;
+	int preview = value;
+	int cancels = 0;
+	cfg.slider.onValueChange = [&] { preview = value; };
+	cfg.slider.onCancel = [&] {
+		EXPECT_EQ(preview, 1);
+		++cancels;
+	};
+	auto& io = ImGui::GetIO();
+	for (ImGuiKey cancel : {ImGuiKey_GamepadFaceRight, ImGuiKey_Escape})
+	{
+		SCOPED_TRACE(ImGui::GetKeyName(cancel));
+		frame(true);
+		frame();
+		ASSERT_NE(popup(), nullptr);
+		ImGui::SetFocusID(popup()->GetID("##SliderPopup"), popup());
+		io.AddKeyEvent(ImGuiKey_RightArrow, true);
+		frame();
+		ASSERT_EQ(value, 2);
+		EXPECT_EQ(preview, 2);
+		io.AddKeyEvent(ImGuiKey_RightArrow, false);
+		frame();
+		io.AddKeyEvent(cancel, true);
+		frame();
+		EXPECT_EQ(popup(), nullptr);
+		EXPECT_EQ(value, 1);
+		EXPECT_EQ(preview, 1);
+		EXPECT_FALSE(cfg.slider.hasPendingChanges);
+		io.AddKeyEvent(cancel, false);
+		frame();
+	}
+	EXPECT_EQ(cancels, 2);
 }
 
 TEST_F(SettingsPopupTest, SingleChoiceStillAppliesImmediately)
