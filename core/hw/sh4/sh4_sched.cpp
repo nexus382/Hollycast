@@ -4,6 +4,7 @@
 #include "sh4_sched.h"
 #include "serialize.h"
 #include "hw/aica/aica_if.h"
+#include "profiler/sh4_loop_profiler.h"
 
 #include <algorithm>
 #include <vector>
@@ -173,6 +174,9 @@ static void handle_cb(sched_list& sched)
 
 void sh4_sched_tick(int cycles)
 {
+#ifdef SH4_LOOP_PROFILER
+	sh4_loop_tick(sh4_sched_now64());
+#endif
 	if (Sh4cntx.sh4_sched_next >= 0)
 		return;
 

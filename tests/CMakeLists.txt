@@ -28,6 +28,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/SessionStateTest.cpp
         src/AicaArmTest.cpp
         src/Sh4InterpreterTest.cpp
+        src/GuardedPollTraceTest.cpp
         src/AssemblyDebuggerTest.cpp
         src/SorterTest.cpp
         src/MmuTest.cpp

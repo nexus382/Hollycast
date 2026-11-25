@@ -369,6 +369,7 @@ using OptionString = Option<std::string>;
 // Dynarec
 
 extern Option<bool> DynarecEnabled;
+extern Option<bool> GuardedPollTrace;
 extern Option<int> FastForwardSpeedLimit;
 extern Option<bool> FastForwardAudio;
 #ifndef LIBRETRO

@@ -6,13 +6,31 @@
 #include "stdclass.h"
 
 #include <memory>
+#include <utility>
 
 typedef void (*DynarecCodeEntryPtr)();
 struct RuntimeBlockInfo;
 typedef std::shared_ptr<RuntimeBlockInfo> RuntimeBlockInfoPtr;
 
+#ifdef SH4_LOOP_PROFILER
+// Native byte ranges emitted at compile time only. Opcode ranges contain their
+// call/register-access ranges; consumers must choose the most specific range.
+enum class Sh4ProfileSpanKind : u8 { Opcode, RuntimeCall, RegisterLoad, RegisterStore, InterpreterFallback };
+struct Sh4ProfileSpan
+{
+	u32 host_offset;
+	u32 host_size;
+	u32 guest_pc;
+	Sh4ProfileSpanKind kind;
+	uintptr_t target; // RuntimeCall target, otherwise zero
+};
+#endif
+
 struct RuntimeBlockInfo
 {
+#ifdef SH4_LOOP_PROFILER
+	void* loop_profile_data = nullptr;
+#endif
 	bool Setup(u32 pc,fpscr_t fpu_cfg);
 
 	u32 addr;
@@ -45,6 +63,10 @@ struct RuntimeBlockInfo
 	bool read_only;
 
 	std::vector<shil_opcode> oplist;
+#ifdef SH4_LOOP_PROFILER
+	std::vector<Sh4ProfileSpan> profile_spans;
+	std::vector<std::pair<u32, u16>> profile_guest_opcodes;
+#endif
 	//predecessors references
 	std::vector<RuntimeBlockInfoPtr> pre_refs;
 

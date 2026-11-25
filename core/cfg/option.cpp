@@ -27,6 +27,7 @@ namespace config {
 // Dynarec
 
 Option<bool> DynarecEnabled("Dynarec.Enabled", true);
+Option<bool> GuardedPollTrace("Dynarec.GuardedPollTrace", true);
 Option<int> Sh4Clock("Sh4Clock", 200);
 Option<int> FastForwardSpeedLimit("FastForwardSpeedLimit", 300);
 Option<bool> FastForwardAudio("FastForwardAudio", false);
