@@ -23,6 +23,9 @@
 #include "cfg/option.h"
 #include "hw/aica/aica_if.h"
 #include "imgread/common.h"
+#ifdef USE_WINDOWS_CDROM
+#include "imgread/windows_cdrom.h"
+#endif
 #include "hw/naomi/naomi_cart.h"
 #include "reios/reios.h"
 #include "hw/sh4/modules/mmu.h"
@@ -1056,9 +1059,27 @@ void Emulator::requestReset()
 
 void loadGameSpecificSettings()
 {
+#ifdef USE_WINDOWS_CDROM
+	const bool physicalDisc = settings.platform.isConsole()
+			&& !windowsCdromDevicePath(settings.content.path).empty();
+#endif
 	if (settings.platform.isConsole())
 	{
 		reios_disk_id();
+#ifdef USE_WINDOWS_CDROM
+		if (physicalDisc)
+		{
+			// A drive letter can hold many games and is not a valid Windows save name.
+			const auto digest = MD5Sum().add(ip_meta).getDigest();
+			constexpr char hex[] = "0123456789abcdef";
+			settings.content.fileName = "disc-";
+			for (u8 byte : digest)
+			{
+				settings.content.fileName += hex[byte >> 4];
+				settings.content.fileName += hex[byte & 15];
+			}
+		}
+#endif
 		settings.content.gameId = trim_trailing_ws(std::string(ip_meta.product_number, sizeof(ip_meta.product_number)));
 		// in case there is a null character followed by garbage, which happens
 		settings.content.gameId = settings.content.gameId.c_str();
@@ -1075,6 +1096,10 @@ void loadGameSpecificSettings()
 	// Reload per-game settings
 	config::Settings::instance().load(true);
 
+#ifdef USE_WINDOWS_CDROM
+	if (physicalDisc && config::GGPOEnable)
+		throw FlycastException(i18n::Ts("Use a disc image to play this game with rollback netplay."));
+#endif
 	if (config::GGPOEnable || settings.raHardcoreMode)
 		config::Sh4Clock.override(200);
 	if (settings.raHardcoreMode)

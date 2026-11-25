@@ -1,5 +1,6 @@
 /*
 	Copyright 2023 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -229,7 +230,7 @@ public:
 			if (lpath.substr(0, 4) == "\\\\.\\")
 			{
 				// Win32 device namespace
-				UINT type = GetDriveTypeW(wname.get());
+				UINT type = GetDriveTypeW(wname.get() + 4);
 				if (type != DRIVE_CDROM)
 					throw StorageException(strprintf(i18n::T("Invalid device %s"), lpath.substr(4, 2).c_str()));
 				info.isDirectory = false;

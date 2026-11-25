@@ -449,7 +449,7 @@ void saveScreenshot(const std::string& name, const std::vector<u8>& data)
 
 #endif
 
-#ifndef USE_LIBCDIO
+#if !defined(USE_LIBCDIO) && !defined(USE_WINDOWS_CDROM)
 const std::vector<std::string>& getCdromDrives() {
 	static std::vector<std::string> empty;
 	return empty;

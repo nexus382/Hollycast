@@ -39,6 +39,12 @@ Prebuilt binaries for every platform are on the **[latest release page](https://
 
 Releases tagged `-dev` are built from the `dev` branch and contain the newest, less-tested changes. Other releases are built from `master`.
 
+### Playing from a disc or GDEMU SD card
+
+In a Windows desktop build with physical CD support, insert a bootable Dreamcast CD-R and select its drive letter in the game library. The drive must support reading the disc's sessions and raw sectors and locking the tray during play. Stop emulation or open the emulated disc tray before ejecting the CD. Use a disc image for rollback netplay. Standard PC optical drives cannot read the high-density game area of retail Dreamcast GD-ROMs.
+
+For GDEMU, insert the SD card into a PC card reader and add it as a game content folder. Hollycast can launch supported images such as GDI and CDI from the card. Keep each GDI with its track files. Images with the same filename, such as `disc.gdi`, share savestate slots. Use in-game VMU saves when playing directly from the card.
+
 ## What Hollycast adds
 
 - **Modern interface.** A redesigned UI with a game library that shows box art and VMU icons.
