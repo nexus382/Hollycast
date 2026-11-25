@@ -213,6 +213,8 @@ void DX11Renderer::Term()
 	fbSecondAccumView.reset();
 	fbSecondAccumTex.reset();
 	quad.reset();
+	rttReadbackTexture.reset();
+	fbReadbackTexture.reset();
 	deviceContext.reset();
 	device.reset();
 	vrStagingTexture.reset();
@@ -299,8 +301,14 @@ void DX11Renderer::createTexAndRenderTarget(ComPtr<ID3D11Texture2D>& texture, Co
 
 void DX11Renderer::resize(int w, int h)
 {
+	if (resizeFramebuffer(w, h))
+		createDepthTexAndView(depthTex, depthTexView, width, height);
+}
+
+bool DX11Renderer::resizeFramebuffer(int w, int h)
+{
 	if (width == (u32)w && height == (u32)h)
-		return;
+		return false;
 	width = w;
 	height = h;
 
@@ -316,11 +324,9 @@ void DX11Renderer::resize(int w, int h)
 		device->CreateShaderResourceView(fbTex, &viewDesc, &fbTextureView.get());
 	}
 
-	// Create depth stencil texture
-	createDepthTexAndView(depthTex, depthTexView, width, height);
-
 	frameRendered = false;
 	frameRenderedOnce = false;
+	return true;
 }
 
 bool DX11Renderer::ensureBufferSize(ComPtr<ID3D11Buffer>& buffer, D3D11_BIND_FLAG bind, u32& currentSize, u32 minSize)
@@ -1294,6 +1300,23 @@ void DX11Renderer::prepareRttRenderTarget(u32 texAddress)
 	setRTTSize(fbw, fbh);
 }
 
+HRESULT DX11Renderer::ensureReadbackTexture(ComPtr<ID3D11Texture2D>& texture, const D3D11_TEXTURE2D_DESC& desc)
+{
+	if (texture)
+	{
+		D3D11_TEXTURE2D_DESC current;
+		texture->GetDesc(&current);
+		if (current.Width == desc.Width && current.Height == desc.Height && current.Format == desc.Format
+				&& current.MipLevels == desc.MipLevels && current.ArraySize == desc.ArraySize
+				&& current.SampleDesc.Count == desc.SampleDesc.Count && current.SampleDesc.Quality == desc.SampleDesc.Quality
+				&& current.Usage == desc.Usage && current.BindFlags == desc.BindFlags && current.CPUAccessFlags == desc.CPUAccessFlags
+				&& current.MiscFlags == desc.MiscFlags)
+			return S_OK;
+		texture.reset();
+	}
+	return device->CreateTexture2D(&desc, nullptr, &texture.get());
+}
+
 void DX11Renderer::readRttRenderTarget(u32 texAddress)
 {
 	u32 w = rendContext->framebufferWidth;
@@ -1307,21 +1330,20 @@ void DX11Renderer::readRttRenderTarget(u32 texAddress)
 		desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 
-		ComPtr<ID3D11Texture2D> stagingTex;
-		HRESULT hr = device->CreateTexture2D(&desc, nullptr, &stagingTex.get());
+		HRESULT hr = ensureReadbackTexture(rttReadbackTexture, desc);
 		if (FAILED(hr))
 		{
 			WARN_LOG(RENDERER, "Staging RTT texture creation failed");
 			return;
 		}
-		deviceContext->CopyResource(stagingTex, rttTexture);
+		deviceContext->CopyResource(rttReadbackTexture, rttTexture);
 
 		PixelBuffer<u32> tmp_buf;
 		tmp_buf.init(w, h);
 		u8 *p = (u8 *)tmp_buf.data();
 
 		D3D11_MAPPED_SUBRESOURCE mappedSubres;
-		hr = deviceContext->Map(stagingTex, 0, D3D11_MAP_READ, 0, &mappedSubres);
+		hr = deviceContext->Map(rttReadbackTexture, 0, D3D11_MAP_READ, 0, &mappedSubres);
 		if (FAILED(hr))
 		{
 			WARN_LOG(RENDERER, "Failed to map staging RTT texture");
@@ -1340,7 +1362,7 @@ void DX11Renderer::readRttRenderTarget(u32 texAddress)
 				src += mappedSubres.RowPitch;
 			}
 		}
-		deviceContext->Unmap(stagingTex, 0);
+		deviceContext->Unmap(rttReadbackTexture, 0);
 
 		u16 *dst = (u16 *)&vram[texAddress];
 		WriteTextureToVRam<2, 1, 0, 3>(w, h, (u8 *)tmp_buf.data(), dst, rendContext->fb_W_CTRL, rendContext->fb_W_LINESTRIDE * 8, rendContext->fbClip);
@@ -1470,21 +1492,20 @@ void DX11Renderer::writeFramebufferToVRAM()
 	desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 
-	ComPtr<ID3D11Texture2D> stagingTex;
-	HRESULT hr = device->CreateTexture2D(&desc, nullptr, &stagingTex.get());
+	HRESULT hr = ensureReadbackTexture(fbReadbackTexture, desc);
 	if (FAILED(hr))
 	{
 		WARN_LOG(RENDERER, "Staging RTT texture creation failed");
 		return;
 	}
-	deviceContext->CopyResource(stagingTex, fbTexture);
+	deviceContext->CopyResource(fbReadbackTexture, fbTexture);
 
 	PixelBuffer<u32> tmp_buf;
 	tmp_buf.init(width, height);
 	u8 *p = (u8 *)tmp_buf.data();
 
 	D3D11_MAPPED_SUBRESOURCE mappedSubres;
-	hr = deviceContext->Map(stagingTex, 0, D3D11_MAP_READ, 0, &mappedSubres);
+	hr = deviceContext->Map(fbReadbackTexture, 0, D3D11_MAP_READ, 0, &mappedSubres);
 	if (FAILED(hr))
 	{
 		WARN_LOG(RENDERER, "Failed to map staging RTT texture");
@@ -1502,7 +1523,7 @@ void DX11Renderer::writeFramebufferToVRAM()
 			src += mappedSubres.RowPitch;
 		}
 	}
-	deviceContext->Unmap(stagingTex, 0);
+	deviceContext->Unmap(fbReadbackTexture, 0);
 
 	WriteFramebuffer<2, 1, 0, 3>(width, height, (u8 *)tmp_buf.data(), texAddress, rendContext->fb_W_CTRL, linestride, finalClip);
 }

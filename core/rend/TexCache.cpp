@@ -1025,7 +1025,7 @@ static void readFramebufferC888Line(u32 addr, u32 *dst, int width)
 #endif
 
 template<typename Packer>
-void ReadFramebuffer(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& width, int& height)
+void ReadFramebuffer(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& width, int& height, bool decode)
 {
 	width = (info.fb_r_size.fb_x_size + 1) * 2;     // in 16-bit words
 	height = info.fb_r_size.fb_y_size + 1;
@@ -1072,6 +1072,9 @@ void ReadFramebuffer(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& wid
 		// 240p if PAL or NTSC
 		height = std::min(height, 240);
 	}
+
+	if (!decode)
+		return;
 
 	pb.init(width, height);
 	u32 *dst = (u32 *)pb.data();
@@ -1169,8 +1172,8 @@ void ReadFramebuffer(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& wid
 			break;
 	}
 }
-template void ReadFramebuffer<RGBAPacker>(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& width, int& height);
-template void ReadFramebuffer<BGRAPacker>(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& width, int& height);
+template void ReadFramebuffer<RGBAPacker>(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& width, int& height, bool decode);
+template void ReadFramebuffer<BGRAPacker>(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& width, int& height, bool decode);
 
 template<int bits>
 static inline u8 roundColor(u8 in)

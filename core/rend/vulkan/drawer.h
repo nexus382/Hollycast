@@ -29,6 +29,7 @@
 #include "texture.h"
 
 #include <memory>
+#include <optional>
 #include <vector>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -44,6 +45,13 @@ protected:
 	VulkanContext *GetContext() const { return VulkanContext::Instance(); }
 	TileClipping SetTileClip(vk::CommandBuffer cmdBuffer, u32 val, vk::Rect2D& clipRect);
 	void SetBaseScissor(const vk::Extent2D& viewport = vk::Extent2D());
+	void packModifierVolumes(BufferPacker& packer)
+	{
+		if (config::ModifierVolumes && !rendContext->modtrig.empty())
+			modVolOffset = packer.add(rendContext->modtrig.data(), rendContext->modtrig.size() * sizeof(ModTriangle));
+		else
+			modVolOffset.reset();
+	}
 	void scaleAndWriteFramebuffer(vk::CommandBuffer commandBuffer, FramebufferAttachment *finalFB);
 
 	void SetScissor(vk::CommandBuffer cmdBuffer, const vk::Rect2D& scissor)
@@ -213,6 +221,8 @@ protected:
 	TransformMatrix matrices;
 	CommandPool *commandPool = nullptr;
 	std::vector<std::unique_ptr<BufferData>> mainBuffers;
+	std::unique_ptr<FramebufferAttachment> scaledFB;
+	std::optional<vk::DeviceSize> modVolOffset;
 	rend_context *rendContext = nullptr;
 };
 
@@ -284,7 +294,6 @@ private:
 	int imageIndex = 0;
 	struct {
 		vk::DeviceSize indexOffset = 0;
-		vk::DeviceSize modVolOffset = 0;
 		vk::DeviceSize vertexUniformOffset = 0;
 		vk::DeviceSize fragmentUniformOffset = 0;
 		vk::DeviceSize naomi2OpaqueOffset = 0;

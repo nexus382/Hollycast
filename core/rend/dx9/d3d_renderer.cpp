@@ -168,6 +168,8 @@ void D3DRenderer::preReset()
 	depthSurface.reset();
 	rttSurface.reset();
 	rttTexture.reset();
+	rttReadbackSurface.reset();
+	fbReadbackSurface.reset();
 	dcfbSurface.reset();
 	dcfbTexture.reset();
 	fbScaledTexture.reset();
@@ -941,6 +943,19 @@ void D3DRenderer::prepareRttRenderTarget(u32 texAddress, int& vpWidth, int& vpHe
 	vpHeight = fbh;
 }
 
+HRESULT D3DRenderer::ensureReadbackSurface(ComPtr<IDirect3DSurface9>& surface, u32 width, u32 height, D3DFORMAT format)
+{
+	if (surface)
+	{
+		D3DSURFACE_DESC desc;
+		surface->GetDesc(&desc);
+		if (desc.Width == width && desc.Height == height && desc.Format == format)
+			return S_OK;
+		surface.reset();
+	}
+	return device->CreateOffscreenPlainSurface(width, height, format, D3DPOOL_SYSTEMMEM, &surface.get(), nullptr);
+}
+
 void D3DRenderer::readRttRenderTarget(u32 texAddress)
 {
 	u32 w = rendContext->framebufferWidth;
@@ -949,10 +964,9 @@ void D3DRenderer::readRttRenderTarget(u32 texAddress)
 	{
 		D3DSURFACE_DESC rttDesc;
 		rttSurface->GetDesc(&rttDesc);
-		ComPtr<IDirect3DSurface9> offscreenSurface;
-		bool rc = SUCCEEDED(device->CreateOffscreenPlainSurface(rttDesc.Width, rttDesc.Height, rttDesc.Format, D3DPOOL_SYSTEMMEM, &offscreenSurface.get(), nullptr));
+		bool rc = SUCCEEDED(ensureReadbackSurface(rttReadbackSurface, rttDesc.Width, rttDesc.Height, rttDesc.Format));
 		verify(rc);
-		rc = SUCCEEDED(device->GetRenderTargetData(rttSurface, offscreenSurface));
+		rc = SUCCEEDED(device->GetRenderTargetData(rttSurface, rttReadbackSurface));
 		verify(rc);
 
 		PixelBuffer<u32> tmp_buf;
@@ -961,7 +975,7 @@ void D3DRenderer::readRttRenderTarget(u32 texAddress)
 		u8 *p = (u8 *)tmp_buf.data();
 		D3DLOCKED_RECT rect;
 		RECT lockRect { 0, 0, (long)w, (long)h };
-		rc = SUCCEEDED(offscreenSurface->LockRect(&rect, &lockRect, D3DLOCK_READONLY));
+		rc = SUCCEEDED(rttReadbackSurface->LockRect(&rect, &lockRect, D3DLOCK_READONLY));
 		verify(rc);
 		if ((u32)rect.Pitch == w * sizeof(u32)) {
 			memcpy(p, rect.pBits, w * h * sizeof(u32));
@@ -976,7 +990,7 @@ void D3DRenderer::readRttRenderTarget(u32 texAddress)
 				p += w * sizeof(u32);
 			}
 		}
-		rc = SUCCEEDED(offscreenSurface->UnlockRect());
+		rc = SUCCEEDED(rttReadbackSurface->UnlockRect());
 		verify(rc);
 
 		u16 *dst = (u16 *)&vram[texAddress];
@@ -1396,10 +1410,9 @@ void D3DRenderer::writeFramebufferToVRAM()
 	u32 texAddress = rendContext->fb_W_SOF1 & VRAM_MASK; // TODO SCALER_CTL.interlace, SCALER_CTL.fieldselect
 	u32 linestride = rendContext->fb_W_LINESTRIDE * 8;
 
-	ComPtr<IDirect3DSurface9> offscreenSurface;
-	bool rc = SUCCEEDED(device->CreateOffscreenPlainSurface(width, height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &offscreenSurface.get(), nullptr));
+	bool rc = SUCCEEDED(ensureReadbackSurface(fbReadbackSurface, width, height, D3DFMT_A8R8G8B8));
 	verify(rc);
-	rc = SUCCEEDED(device->GetRenderTargetData(fbSurface, offscreenSurface));
+	rc = SUCCEEDED(device->GetRenderTargetData(fbSurface, fbReadbackSurface));
 	verify(rc);
 
 	PixelBuffer<u32> tmp_buf;
@@ -1408,7 +1421,7 @@ void D3DRenderer::writeFramebufferToVRAM()
 	u8 *p = (u8 *)tmp_buf.data();
 	D3DLOCKED_RECT rect;
 	RECT lockRect { 0, 0, (long)width, (long)height };
-	rc = SUCCEEDED(offscreenSurface->LockRect(&rect, &lockRect, D3DLOCK_READONLY));
+	rc = SUCCEEDED(fbReadbackSurface->LockRect(&rect, &lockRect, D3DLOCK_READONLY));
 	verify(rc);
 	if ((u32)rect.Pitch == width * sizeof(u32))
 		memcpy(p, rect.pBits, width * height * sizeof(u32));
@@ -1422,7 +1435,7 @@ void D3DRenderer::writeFramebufferToVRAM()
 			p += width * sizeof(u32);
 		}
 	}
-	rc = SUCCEEDED(offscreenSurface->UnlockRect());
+	rc = SUCCEEDED(fbReadbackSurface->UnlockRect());
 	verify(rc);
 
 	WriteFramebuffer<2, 1, 0, 3>(width, height, (u8 *)tmp_buf.data(), texAddress, rendContext->fb_W_CTRL, linestride, finalClip);

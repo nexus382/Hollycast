@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -259,24 +260,7 @@ public:
 
 	void CollectCleanup()
 	{
-		std::vector<u64> list;
-
-		u32 TargetFrame = std::max((u32)120, FrameCount) - 120;
-
-		for (const auto& [id, texture] : cache)
-		{
-			if (texture.dirty && texture.dirty < TargetFrame)
-				list.push_back(id);
-
-			if (list.size() > 5)
-				break;
-		}
-
-		for (u64 id : list)
-		{
-			if (cache.find(id)->second.Delete())
-				cache.erase(id);
-		}
+		collectCleanup([](Texture& texture) { return texture.Delete(); });
 	}
 
 	void Clear()
@@ -285,10 +269,43 @@ public:
 			texture.Delete();
 
 		cache.clear();
+		nextCleanupKey.reset();
 		INFO_LOG(RENDERER, "Texture cache cleared");
 	}
 
 protected:
+	template<typename DeleteTexture>
+	void collectCleanup(DeleteTexture deleteTexture)
+	{
+		constexpr u32 graceFrames = 120;
+		if (cache.empty() || FrameCount <= graceFrames)
+			return;
+
+		// Spread a large, mostly clean cache over the grace period. Keep a key
+		// between scenes because inserting new textures can invalidate iterators.
+		const u32 oldestFrame = FrameCount - graceFrames;
+		const size_t scanBudget = std::max<size_t>(64, cache.size() / graceFrames + 1);
+		auto it = nextCleanupKey ? cache.find(*nextCleanupKey) : cache.begin();
+		if (it == cache.end())
+			it = cache.begin();
+		size_t attempts = 0;
+		for (size_t scanned = 0; it != cache.end() && scanned < scanBudget && attempts < 6; ++scanned)
+		{
+			auto current = it++;
+			Texture& texture = current->second;
+			if (texture.dirty && texture.dirty < oldestFrame)
+			{
+				++attempts;
+				if (deleteTexture(texture))
+					cache.erase(current);
+			}
+		}
+		if (it == cache.end())
+			nextCleanupKey.reset();
+		else
+			nextCleanupKey = it->first;
+	}
+
 	std::unordered_map<u64, Texture> cache;
 	// Only use TexU and TexV from TSP in the cache key
 	//     TexV : 7, TexU : 7
@@ -297,10 +314,13 @@ protected:
 	const TCW TCWTextureCacheMask = { { 0x1FFFFF, 0, 1, 7, 1, 1 } };
 	//     TexAddr : 0x1FFFFF, PalSelect : 0, PixelFmt : 7, VQ_Comp : 1, MipMapped : 1
 	const TCW TCWPalTextureCacheMask = { { 0x1FFFFF, 0, 0, 7, 1, 1 } };
+
+private:
+	std::optional<u64> nextCleanupKey;
 };
 
 template<typename Packer = RGBAPacker>
-void ReadFramebuffer(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& width, int& height);
+void ReadFramebuffer(const FramebufferInfo& info, PixelBuffer<u32>& pb, int& width, int& height, bool decode = true);
 
 // width and height in pixels. linestride in bytes
 template<int Red = 0, int Green = 1, int Blue = 2, int Alpha = 3>

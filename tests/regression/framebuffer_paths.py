@@ -37,6 +37,7 @@ using u32 = std::uint32_t;
 #define ERROR_LOG(category, ...) ((void)0)
 static bool glActive = false, vkActive = false;
 static int failAt = 0, dimensionReports = 0;
+static int decodes = 0, uploads = 0;
 static int rawWidth = 0, rawHeight = 0, renderedWidth = 0, renderedHeight = 0;
 namespace performance_overlay {
 void recordRenderedResolution(int rw, int rh, int w, int h) {
@@ -55,10 +56,13 @@ struct FramebufferInfo {
     int decodedWidth = 640, decodedHeight = 240;
 };
 template<typename T> struct PixelBuffer { T pixel {}; T* data() { return &pixel; } };
-void ReadFramebuffer(const FramebufferInfo& info, PixelBuffer<u32>&, int& w, int& h) {
+void ReadFramebuffer(const FramebufferInfo& info, PixelBuffer<u32>&, int& w, int& h, bool decode = true) {
     // Only decoding is mocked. It must precede GL query submission.
     assert(!glActive);
-    if (failAt == 5) throw std::runtime_error("decode");
+    if (decode) {
+        ++decodes;
+        if (failAt == 5) throw std::runtime_error("decode");
+    }
     w = info.decodedWidth; h = info.decodedHeight;
 }
 struct GlFramebuffer {
@@ -84,6 +88,7 @@ struct {
 constexpr int GL_SCISSOR_TEST = 1, GL_COLOR_BUFFER_BIT = 2, GL_BLEND = 3;
 void glUploadFramebuffer() {
     assert(glActive);
+    ++uploads;
     if (failAt == 1) throw std::runtime_error("upload");
 }
 void initVideoRoutingFrameBuffer() {}
@@ -171,9 +176,17 @@ int main() {
         assert(rawWidth == 640 && rawHeight == height && renderedWidth == 640 && renderedHeight == height);
     }
     info.vo_control.blank_video = 1;
+    int decodedBefore = decodes, uploadedBefore = uploads;
     renderer.RenderFramebuffer(info);
     assert(rawWidth == 640 && renderedHeight == 480); // GL clears its full-sized target.
+    assert(decodes == decodedBefore && uploads == uploadedBefore);
     info.vo_control.blank_video = 0;
+    info.fb_r_ctrl.fb_enable = 0;
+    renderer.RenderFramebuffer(info);
+    assert(decodes == decodedBefore && uploads == uploadedBefore);
+    info.fb_r_ctrl.fb_enable = 1;
+    renderer.RenderFramebuffer(info);
+    assert(decodes == decodedBefore + 1 && uploads == uploadedBefore + 1);
     for (int failure = 1; failure <= 5; ++failure) {
         failAt = failure;
         OpenGLRenderer failed;

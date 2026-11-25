@@ -5,7 +5,6 @@
 #include "rend/sorter.h"
 #include "metal_common.h"
 #include <array>
-#include <atomic>
 #include <cstring>
 #include <memory>
 
@@ -20,9 +19,10 @@ inline MTLCullMode metalCullMode(unsigned ispCullMode)
 struct MetalGeometryBuffers {
     id<MTLBuffer> vertices = nil;
     id<MTLBuffer> indices = nil;
+    id<MTLBuffer> modifiers = nil;
 };
 inline MetalGeometryBuffers metalUploadGeometry(id<MTLDevice> device, rend_context& context,
-        MetalGeometryBuffers result = {})
+        MetalGeometryBuffers result = {}, bool uploadModifiers = false)
 {
     // PVR flat shading takes colors from the last vertex; Metal uses the first.
     // The shared conversion also rotates sorted triangles without changing winding.
@@ -37,32 +37,41 @@ inline MetalGeometryBuffers metalUploadGeometry(id<MTLDevice> device, rend_conte
         throw RendererException("Metal geometry buffer allocation failed");
     if (vertexBytes) std::memcpy(result.vertices.contents, context.verts.data(), vertexBytes);
     if (indexBytes) std::memcpy(result.indices.contents, context.idx.data(), indexBytes);
+    if (uploadModifiers && !context.modtrig.empty()) {
+        const size_t bytes = context.modtrig.size() * sizeof(ModTriangle);
+        if (!result.modifiers || result.modifiers.length < bytes)
+            result.modifiers = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+        if (!result.modifiers) throw RendererException("Metal modifier geometry allocation failed");
+        std::memcpy(result.modifiers.contents, context.modtrig.data(), bytes);
+    }
     return result;
 }
 
 class MetalGeometryUploadPool {
-    struct Slot {
-        MetalGeometryBuffers buffers;
-        std::weak_ptr<std::atomic<bool>> pending;
-    };
-    std::array<Slot, 3> slots;
 public:
-    MetalGeometryBuffers upload(id<MTLDevice> device, rend_context& context, id<MTLCommandBuffer> command)
+    using Upload = std::shared_ptr<MetalGeometryBuffers>;
+
+    Upload acquire(id<MTLDevice> device, rend_context& context, bool uploadModifiers)
+    {
+        for (Upload& slot : slots) {
+            if (slot && slot.use_count() != 1) continue;
+            if (!slot) slot = std::make_shared<MetalGeometryBuffers>();
+            *slot = metalUploadGeometry(device, context, *slot, uploadModifiers);
+            return slot;
+        }
+        return std::make_shared<MetalGeometryBuffers>(metalUploadGeometry(device, context, {}, uploadModifiers));
+    }
+
+    MetalGeometryBuffers upload(id<MTLDevice> device, rend_context& context, id<MTLCommandBuffer> command,
+            bool uploadModifiers = false)
     {
         if (!command) throw RendererException("Metal geometry upload requires a command buffer");
-        for (Slot& slot : slots) {
-            auto pending = slot.pending.lock();
-            if (pending && pending->load(std::memory_order_acquire)) continue;
-            slot.buffers = metalUploadGeometry(device, context, slot.buffers);
-            auto token = std::make_shared<std::atomic<bool>>(true);
-            // An uncommitted command releases its token when encoding unwinds.
-            [command addCompletedHandler:^(id<MTLCommandBuffer>) {
-                token->store(false, std::memory_order_release);
-            }];
-            slot.pending = token;
-            return slot.buffers;
-        }
-        return metalUploadGeometry(device, context);
+        Upload geometry = acquire(device, context, uploadModifiers);
+        __block Upload pending = geometry;
+        [command addCompletedHandler:^(id<MTLCommandBuffer>) { pending.reset(); }];
+        return *geometry;
     }
     void clear() { slots = {}; }
+private:
+    std::array<Upload, 3> slots;
 };

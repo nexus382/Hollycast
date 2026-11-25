@@ -18,7 +18,7 @@ class MetalModifierVolumes
 public:
     void Init(id<MTLDevice> device);
     void Term();
-    void Draw(id<MTLRenderCommandEncoder> encoder, const rend_context& context,
+    void Draw(id<MTLRenderCommandEncoder> encoder, id<MTLBuffer> vertices, const rend_context& context,
               TransformMatrix& matrices, int first, int count, int width, int height, bool finalize = true);
     void ClearStencil(id<MTLRenderCommandEncoder> encoder, int width, int height);
 private:

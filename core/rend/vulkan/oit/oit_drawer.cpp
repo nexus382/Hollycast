@@ -146,13 +146,13 @@ void OITDrawer::DrawList(const vk::CommandBuffer& cmdBuffer, u32 listType, bool 
 template<bool Translucent>
 void OITDrawer::DrawModifierVolumes(const vk::CommandBuffer& cmdBuffer, int first, int count, const ModifierVolumeParam *modVolParams)
 {
-	if (count == 0 || rendContext->modtrig.empty() || !config::ModifierVolumes)
+	if (count == 0 || !modVolOffset)
 		return;
 
 	static const float scopeColor[4] = { 0.75f, 0.25f, 0.25f, 1.0f };
 	CommandBufferDebugScope _(cmdBuffer, "DrawModVols(OIT)", scopeColor);
 
-	cmdBuffer.bindVertexBuffers(0, curMainBuffer, offsets.modVolOffset);
+	cmdBuffer.bindVertexBuffers(0, curMainBuffer, *modVolOffset);
 	SetScissor(cmdBuffer, baseScissor);
 
 	const ModifierVolumeParam *params = &modVolParams[first];
@@ -232,7 +232,7 @@ void OITDrawer::UploadMainBuffer(const OITDescriptorSets::VertexShaderUniforms& 
 	// Vertex
 	packer.add(rendContext->verts.data(), rendContext->verts.size() * sizeof(decltype(*rendContext->verts.data())));
 	// Modifier Volumes
-	offsets.modVolOffset = packer.add(rendContext->modtrig.data(), rendContext->modtrig.size() * sizeof(decltype(*rendContext->modtrig.data())));
+	packModifierVolumes(packer);
 	// Index
 	offsets.indexOffset = packer.add(rendContext->idx.data(), rendContext->idx.size() * sizeof(decltype(*rendContext->idx.data())));
 	// Uniform buffers
@@ -393,8 +393,9 @@ bool OITDrawer::Draw(const Texture *fogTexture, const Texture *paletteTexture)
 				current_pass.autosort,
 				!!pixelBufferAddress);
 
-        // Reset the pixel counter
-    	oitBuffers->ResetPixelCounter(cmdBuffer);
+		const bool collectsFragments = current_pass.autosort && current_pass.tr_count > previous_pass.tr_count;
+		if (collectsFragments)
+			oitBuffers->ResetPixelCounter(cmdBuffer);
 
     	const bool initialPass = render_pass == 0;
     	const bool finalPass = render_pass == (int)rendContext->render_passes.size() - 1;
@@ -452,7 +453,7 @@ bool OITDrawer::Draw(const Texture *fogTexture, const Texture *paletteTexture)
 		}
 
 		// Tr modifier volumes
-		if (GetContext()->GetVendorID() != VulkanContext::VENDOR_QUALCOMM)	// Adreno bug
+		if (collectsFragments && GetContext()->GetVendorID() != VulkanContext::VENDOR_QUALCOMM)	// Adreno bug
 		{
 			if (current_pass.mv_op_tr_shared)
 				DrawModifierVolumes<true>(cmdBuffer, previous_pass.mvo_count, current_pass.mvo_count - previous_pass.mvo_count, rendContext->global_param_mvo.data());
@@ -697,10 +698,8 @@ void OITTextureDrawer::EndFrame()
 
 		u16 *dst = (u16 *)&vram[textureAddr];
 
-		PixelBuffer<u32> tmpBuf;
-		tmpBuf.init(fbw, fbh);
-		colorAttachment->GetBufferData()->download(fbw * fbh * 4, tmpBuf.data());
-		WriteTextureToVRam(fbw, fbh, (u8 *)tmpBuf.data(), dst, rendContext->fb_W_CTRL, rendContext->fb_W_LINESTRIDE * 8, rendContext->fbClip);
+		MappedBufferRead pixels(*colorAttachment->GetBufferData(), fbw * fbh * 4);
+		WriteTextureToVRam(fbw, fbh, pixels.data, dst, rendContext->fb_W_CTRL, rendContext->fb_W_LINESTRIDE * 8, rendContext->fbClip);
 	}
 	else
 	{

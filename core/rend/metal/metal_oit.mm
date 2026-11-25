@@ -93,17 +93,15 @@ bool MetalOITBuffers::grow()
 }
 
 void MetalOITBuffers::modifiers(id<MTLCommandQueue> queue, id<MTLTexture> color, id<MTLTexture> depth,
-        const rend_context& context, TransformMatrix& matrices, const ModifierVolumeParam *params, int first, int count,
+        id<MTLBuffer> vertices, const rend_context& context, TransformMatrix& matrices, const ModifierVolumeParam *params, int first, int count,
         const std::function<void(id<MTLCommandBuffer>)>& track)
 {
     if (count <= 0 || context.modtrig.empty()) return;
     struct alignas(16) ModUniforms { simd_float4x4 matrix; simd_float4 clip, values; simd_uint4 flags; };
-    id<MTLBuffer> vertices = [device newBufferWithBytes:context.modtrig.data()
-        length:context.modtrig.size() * sizeof(ModTriangle) options:MTLResourceStorageModeShared];
-    if (!vertices) throw RendererException("Metal per-pixel modifier geometry allocation failed");
     ModUniforms u {};
     std::memcpy(&u.matrix, &matrices.GetNormalMatrix()[0][0], sizeof(u.matrix));
     u.flags.y = config::NativeDepthInterpolation;
+    id<MTLCommandBuffer> command = nil;
     auto drawVolume = [&](const ModifierVolumeParam& param, unsigned mode, u32 start, u32 triangles) {
         if (param.isNaomi2()) throw RendererException("Metal per-pixel Naomi 2 modifier volume is not supported");
         Rect clip {glm::ivec2(0),glm::ivec2(0)};
@@ -115,12 +113,18 @@ void MetalOITBuffers::modifiers(id<MTLCommandQueue> queue, id<MTLTexture> color,
         if (right==x || bottom==y) return;
         u.flags.x = tile == TileClipping::Inside;
         u.clip = simd_make_float4(clip.origin.x,clip.origin.y,clip.origin.x+clip.size.x,clip.origin.y+clip.size.y);
-        id<MTLCommandBuffer> command = [queue commandBuffer];
+        if (!command) {
+            command = [queue commandBuffer];
+            if (!command) throw RendererException("Metal per-pixel modifier command allocation failed");
+        }
+        // Each encoder completes its tracked node-buffer writes before the
+        // following encoder reads them, including the inclusion/exclusion draw.
         MTLRenderPassDescriptor *pass=[MTLRenderPassDescriptor renderPassDescriptor];
         pass.colorAttachments[0].texture=color; pass.colorAttachments[0].loadAction=MTLLoadActionLoad; pass.colorAttachments[0].storeAction=MTLStoreActionStore;
         pass.depthAttachment.texture=depth; pass.depthAttachment.loadAction=MTLLoadActionLoad; pass.depthAttachment.storeAction=MTLStoreActionStore;
         pass.stencilAttachment.texture=depth; pass.stencilAttachment.loadAction=MTLLoadActionLoad; pass.stencilAttachment.storeAction=MTLStoreActionStore;
         id<MTLRenderCommandEncoder> enc=[command renderCommandEncoderWithDescriptor:pass];
+        if (!enc) throw RendererException("Metal per-pixel modifier encoder allocation failed");
         [enc setRenderPipelineState:modifierPipeline]; [enc setVertexBuffer:vertices offset:0 atIndex:0];
         [enc setVertexBytes:&u length:sizeof(u) atIndex:1]; [enc setFragmentBytes:&u length:sizeof(u) atIndex:1];
         [enc setFragmentBytes:&mode length:sizeof(mode) atIndex:2];
@@ -128,8 +132,7 @@ void MetalOITBuffers::modifiers(id<MTLCommandQueue> queue, id<MTLTexture> color,
         [enc setFrontFacingWinding:MTLWindingCounterClockwise]; [enc setCullMode:metalModvolCullMode(param.isp.CullMode)];
         [enc setScissorRect:MTLScissorRect{(NSUInteger)x,(NSUInteger)y,(NSUInteger)(right-x),(NSUInteger)(bottom-y)}];
         [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:start*3 vertexCount:triangles*3];
-        [enc endEncoding]; if (track) track(command); [command commit]; [command waitUntilCompleted];
-        if (command.status != MTLCommandBufferStatusCompleted) throw RendererException(metalErrorMessage("Metal per-pixel modifier pass failed",command.error));
+        [enc endEncoding];
     };
     int base=-1;
     for (int i=first;i<first+count;i++) {
@@ -143,20 +146,56 @@ void MetalOITBuffers::modifiers(id<MTLCommandQueue> queue, id<MTLTexture> color,
             base=-1;
         }
     }
+    if (command) {
+        if (track) track(command);
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted)
+            throw RendererException(metalErrorMessage("Metal per-pixel modifier pass failed", command.error));
+    }
 }
 
-void metalOITCopyDepthStencilAspect(id<MTLDevice> device, id<MTLCommandBuffer> command,
-        id<MTLTexture> source, id<MTLTexture> destination, int width, int height, bool stencil)
+void MetalOITScratch::resize(id<MTLDevice> device, int width, int height)
 {
-    size_t row = ((size_t)width * (stencil ? 1 : 4) + 255) & ~size_t(255);
-    id<MTLBuffer> buffer = [device newBufferWithLength:row * height options:MTLResourceStorageModePrivate];
-    if (!buffer) throw RendererException("Metal per-pixel depth/stencil copy allocation failed");
+    if (opaqueDepth && opaqueDepth.device == device
+            && opaqueDepth.width == (NSUInteger)width && opaqueDepth.height == (NSUInteger)height)
+        return;
+    // Let completed scenes release their old targets before allocating the new size.
+    *this = {};
+    MetalOITScratch next;
+    auto texture = [&](MTLPixelFormat format, MTLTextureUsage usage) {
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
+                width:width height:height mipmapped:NO];
+        descriptor.storageMode = MTLStorageModePrivate;
+        descriptor.usage = usage;
+        id<MTLTexture> result = [device newTextureWithDescriptor:descriptor];
+        if (!result) throw RendererException("Metal per-pixel render target allocation failed");
+        return result;
+    };
+    next.opaqueDepth = texture(MTLPixelFormatR32Float, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
+    next.replayDepth = texture(MTLPixelFormatDepth32Float_Stencil8, MTLTextureUsageRenderTarget);
+    next.resolved = texture(MTLPixelFormatRGBA8Unorm, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
+    const MTLTextureUsage secondaryUsage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    next.secondary = texture(MTLPixelFormatRGBA8Unorm, secondaryUsage);
+    next.secondaryCopy = texture(MTLPixelFormatRGBA8Unorm, secondaryUsage);
+    *this = std::move(next);
+}
+
+void MetalOITScratch::copyDepthStencilAspect(id<MTLCommandBuffer> command, id<MTLTexture> source,
+        id<MTLTexture> destination, bool stencil)
+{
+    const NSUInteger width = source.width, height = source.height;
+    const NSUInteger row = (width * (stencil ? 1 : 4) + 255) & ~NSUInteger(255);
+    if (!aspectBuffer || aspectBuffer.length < row * height) {
+        aspectBuffer = [source.device newBufferWithLength:row * height options:MTLResourceStorageModePrivate];
+        if (!aspectBuffer) throw RendererException("Metal per-pixel depth/stencil copy allocation failed");
+    }
     MTLBlitOption option = stencil ? MTLBlitOptionStencilFromDepthStencil : MTLBlitOptionDepthFromDepthStencil;
     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
     [blit copyFromTexture:source sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
-            sourceSize:MTLSizeMake(width,height,1) toBuffer:buffer destinationOffset:0
+            sourceSize:MTLSizeMake(width,height,1) toBuffer:aspectBuffer destinationOffset:0
             destinationBytesPerRow:row destinationBytesPerImage:row*height options:option];
-    [blit copyFromBuffer:buffer sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:row*height
+    [blit copyFromBuffer:aspectBuffer sourceOffset:0 sourceBytesPerRow:row sourceBytesPerImage:row*height
             sourceSize:MTLSizeMake(width,height,1) toTexture:destination destinationSlice:0 destinationLevel:0
             destinationOrigin:MTLOriginMake(0,0,0) options:option];
     [blit endEncoding];

@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("build", type=Path, help="configured and fully built Ninja directory")
+    parser.add_argument("--baseline-readback", metavar="REF",
+                        help="exercise writeFramebuffer from this Git revision with the current fixture")
     parser.add_argument("--resource-check", action="store_true", help="report real depth/stencil copy calls and GPU output hashes")
     parser.add_argument("--renderer-source", type=Path, help="renderer source to compare against the current fixture")
     args = parser.parse_args()
@@ -61,6 +63,23 @@ def main():
         ta = directory / "ta.o"
         overlay = directory / "overlay.o"
         renderer_source = (args.renderer_source or ROOT / "core/rend/metal/metal_renderer.mm").resolve()
+        if args.baseline_readback:
+            def method(source, signature):
+                start = source.index(signature)
+                end = source.index("{", start) + 1
+                depth = 1
+                while depth:
+                    depth += (source[end] == "{") - (source[end] == "}")
+                    end += 1
+                return source[start:end]
+
+            relative = "core/rend/metal/metal_renderer.mm"
+            current = renderer_source.read_text()
+            baseline = subprocess.check_output(["git", "show", f"{args.baseline_readback}:{relative}"],
+                                               cwd=ROOT, text=True)
+            signature = "void MetalRenderer::writeFramebuffer("
+            renderer_source = directory / "metal_renderer.mm"
+            renderer_source.write_text(current.replace(method(current, signature), method(baseline, signature), 1))
         fixture_flags = ["-fno-access-control", '-DHOLLYCAST_METAL_RENDERER_SOURCE="' + str(renderer_source) + '"']
         if args.resource_check:
             fixture_flags.append("-DHOLLYCAST_METAL_RESOURCE_CHECK")
