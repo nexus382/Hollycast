@@ -9,6 +9,11 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.util.Arrays;
+import java.io.InputStream;
+import java.io.OutputStream;
+import android.os.ParcelFileDescriptor;
+import android.net.Uri;
+import java.util.UUID;
 
 import static org.junit.Assert.*;
 
@@ -113,6 +118,102 @@ public class AndroidStorageTest {
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    @Test
+    public void saveSlotSurvivesInterruptedReplacement() {
+        final String name = "hcast-save-" + UUID.randomUUID() + ".state";
+        final String destination = new AndroidStorageUri(TREE_URI, name).value;
+        final String[] backupDocument = { null };
+        ActivityScenario<NativeGLActivity> scenario = ActivityScenario.launch(NativeGLActivity.class);
+        scenario.onActivity(activity -> {
+            AndroidStorage storage = activity.getStorage();
+            storage.setStorageDirectories(Arrays.asList(TREE_URI));
+            try {
+                byte[] oldState = "previous complete state".getBytes("UTF-8");
+                byte[] newState = "replacement complete state".getBytes("UTF-8");
+                String first = storage.createTemporaryFile(destination);
+                assertFalse(first.isEmpty());
+                writeDocument(activity, first, oldState);
+                assertTrue(storage.replaceFile(first, destination));
+                assertArrayEquals(oldState, readDocument(storage, activity, destination));
+
+                // Recreate the durable backup + marker state immediately before a provider interruption.
+                String backupName = "." + name + ".hollycast-backup";
+                String markerName = "." + name + ".hollycast-transaction";
+                writeChildDocument(storage, activity, backupName, oldState);
+                writeChildDocument(storage, activity, markerName, new byte[] { 1 });
+                writeDocument(activity, destination, "partial replacement".getBytes("UTF-8"));
+                backupDocument[0] = storage.getSubPath(TREE_URI, backupName);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        scenario.close();
+
+        ActivityScenario<NativeGLActivity> reopened = ActivityScenario.launch(NativeGLActivity.class);
+        reopened.onActivity(activity -> {
+            AndroidStorage storage = activity.getStorage();
+            storage.setStorageDirectories(Arrays.asList(TREE_URI));
+            try {
+                byte[] oldState = "previous complete state".getBytes("UTF-8");
+                byte[] newState = "replacement complete state".getBytes("UTF-8");
+                assertArrayEquals(oldState, readDocument(storage, activity, destination));
+                assertFalse(storage.replaceFile("content://invalid.invalid/document/missing", destination));
+                assertArrayEquals(oldState, readDocument(storage, activity, destination));
+                String overwrite = storage.createTemporaryFile(destination);
+                assertFalse(overwrite.isEmpty());
+                writeDocument(activity, overwrite, newState);
+                assertTrue(storage.replaceFile(overwrite, destination));
+                assertArrayEquals(newState, readDocument(storage, activity, destination));
+                storage.removeFile(backupDocument[0]);
+                storage.removeFile(storage.getSubPath(TREE_URI, "." + name + ".hollycast-transaction"));
+                storage.removeFile(destination);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        reopened.close();
+    }
+
+    private static byte[] readDocument(AndroidStorage storage, NativeGLActivity activity, String uri) throws Exception {
+        int fd = storage.openFile(uri, "r");
+        assertNotEquals(-1, fd);
+        ParcelFileDescriptor descriptor = ParcelFileDescriptor.adoptFd(fd);
+        try (InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+             java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+            assertNotNull(input);
+            byte[] buffer = new byte[1024];
+            int count;
+            while ((count = input.read(buffer)) != -1)
+                output.write(buffer, 0, count);
+            return output.toByteArray();
+        }
+    }
+
+    private static void writeDocument(NativeGLActivity activity, String uri, byte[] data) throws Exception {
+        try (OutputStream output = activity.getContentResolver().openOutputStream(Uri.parse(uri), "wt")) {
+            assertNotNull(output);
+            output.write(data);
+            output.flush();
+        }
+    }
+
+    private static void writeChildDocument(AndroidStorage storage, NativeGLActivity activity, String name, byte[] data) throws Exception {
+        try (OutputStream output = storage.openOutputStream(TREE_URI, name)) {
+            assertNotNull(output);
+            output.write(data);
+            output.flush();
+        }
+    }
+
+    private static class AndroidStorageUri {
+        final String value;
+        AndroidStorageUri(String root, String name) {
+            android.net.Uri tree = android.net.Uri.parse(root);
+            String id = android.provider.DocumentsContract.getTreeDocumentId(tree);
+            value = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, id + "/" + name).toString();
+        }
     }
 
     //@Test
