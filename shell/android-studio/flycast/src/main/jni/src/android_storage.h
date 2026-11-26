@@ -22,6 +22,7 @@
 #include "oslib/i18n.h"
 #include "jni_util.h"
 #include <jni.h>
+#include <unistd.h>
 
 namespace hostfs
 {
@@ -81,8 +82,10 @@ public:
 
 		FILE *file = fdopen(fd, mode.c_str());
 
-		if (file == nullptr)
+		if (file == nullptr) {
+			close(fd);
 			return nullptr;
+		}
 
 		return new StdFile(file);
 	}

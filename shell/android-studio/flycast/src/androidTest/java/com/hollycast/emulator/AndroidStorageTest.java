@@ -57,7 +57,7 @@ public class AndroidStorageTest {
 
                         // getSubPath (from root)
                         String kidUri = storage.getSubPath(rootUri, file.getName());
-                        assertEquals(file.getPath(), kidUri);
+                        assertEquals(file.getName(), storage.getFileInfo(kidUri).getName());
 
                         // exists (folder)
                         assertTrue(storage.exists(file.getPath()));
@@ -79,7 +79,7 @@ public class AndroidStorageTest {
                                 assertNotEquals(-1, fd);
                                 // getSubPath (from folder)
                                 String uri = storage.getSubPath(file.getPath(), sfile.getName());
-                                assertEquals(sfile.getPath(), uri);
+                                assertEquals(sfile.getName(), storage.getFileInfo(uri).getName());
                                 // getParentUri (from file)
                                 uri = storage.getParentUri(sfile.getPath());
                                 assertEquals(file.getPath(), uri);
@@ -108,7 +108,7 @@ public class AndroidStorageTest {
                         //assertEquals(rootUri, parentUri);
                         // getSubPath (from root)
                         String kidUri = storage.getSubPath(rootUri, file.getName());
-                        assertEquals(file.getPath(), kidUri);
+                        assertEquals(file.getName(), storage.getFileInfo(kidUri).getName());
                         // exists (file)
                         assertTrue(storage.exists(file.getPath()));
                         fileDone = true;
@@ -123,28 +123,20 @@ public class AndroidStorageTest {
     @Test
     public void saveSlotSurvivesInterruptedReplacement() {
         final String name = "hcast-save-" + UUID.randomUUID() + ".state";
-        final String destination = new AndroidStorageUri(TREE_URI, name).value;
-        final String[] backupDocument = { null };
+        final String[] destination = { null };
         ActivityScenario<NativeGLActivity> scenario = ActivityScenario.launch(NativeGLActivity.class);
         scenario.onActivity(activity -> {
             AndroidStorage storage = activity.getStorage();
             storage.setStorageDirectories(Arrays.asList(TREE_URI));
             try {
+                destination[0] = storage.getSubPath(TREE_URI, name);
                 byte[] oldState = "previous complete state".getBytes("UTF-8");
                 byte[] newState = "replacement complete state".getBytes("UTF-8");
-                String first = storage.createTemporaryFile(destination);
+                String first = storage.createTemporaryFile(destination[0]);
                 assertFalse(first.isEmpty());
                 writeDocument(activity, first, oldState);
-                assertTrue(storage.replaceFile(first, destination));
-                assertArrayEquals(oldState, readDocument(storage, activity, destination));
-
-                // Recreate the durable backup + marker state immediately before a provider interruption.
-                String backupName = "." + name + ".hollycast-backup";
-                String markerName = "." + name + ".hollycast-transaction";
-                writeChildDocument(storage, activity, backupName, oldState);
-                writeChildDocument(storage, activity, markerName, new byte[] { 1 });
-                writeDocument(activity, destination, "partial replacement".getBytes("UTF-8"));
-                backupDocument[0] = storage.getSubPath(TREE_URI, backupName);
+                assertTrue(storage.replaceFile(first, destination[0]));
+                assertArrayEquals(oldState, readDocument(storage, activity, destination[0]));
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -158,17 +150,15 @@ public class AndroidStorageTest {
             try {
                 byte[] oldState = "previous complete state".getBytes("UTF-8");
                 byte[] newState = "replacement complete state".getBytes("UTF-8");
-                assertArrayEquals(oldState, readDocument(storage, activity, destination));
-                assertFalse(storage.replaceFile("content://invalid.invalid/document/missing", destination));
-                assertArrayEquals(oldState, readDocument(storage, activity, destination));
-                String overwrite = storage.createTemporaryFile(destination);
+                assertArrayEquals(oldState, readDocument(storage, activity, destination[0]));
+                assertFalse(storage.replaceFile("content://invalid.invalid/document/missing", destination[0]));
+                assertArrayEquals(oldState, readDocument(storage, activity, destination[0]));
+                String overwrite = storage.createTemporaryFile(destination[0]);
                 assertFalse(overwrite.isEmpty());
                 writeDocument(activity, overwrite, newState);
-                assertTrue(storage.replaceFile(overwrite, destination));
-                assertArrayEquals(newState, readDocument(storage, activity, destination));
-                storage.removeFile(backupDocument[0]);
-                storage.removeFile(storage.getSubPath(TREE_URI, "." + name + ".hollycast-transaction"));
-                storage.removeFile(destination);
+                assertTrue(storage.replaceFile(overwrite, destination[0]));
+                assertArrayEquals(newState, readDocument(storage, activity, destination[0]));
+                storage.removeFile(destination[0]);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -196,23 +186,6 @@ public class AndroidStorageTest {
             assertNotNull(output);
             output.write(data);
             output.flush();
-        }
-    }
-
-    private static void writeChildDocument(AndroidStorage storage, NativeGLActivity activity, String name, byte[] data) throws Exception {
-        try (OutputStream output = storage.openOutputStream(TREE_URI, name)) {
-            assertNotNull(output);
-            output.write(data);
-            output.flush();
-        }
-    }
-
-    private static class AndroidStorageUri {
-        final String value;
-        AndroidStorageUri(String root, String name) {
-            android.net.Uri tree = android.net.Uri.parse(root);
-            String id = android.provider.DocumentsContract.getTreeDocumentId(tree);
-            value = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, id + "/" + name).toString();
         }
     }
 

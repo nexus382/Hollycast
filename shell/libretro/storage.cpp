@@ -16,10 +16,22 @@
  */
 #include "storage.h"
 
+#include "oslib/directory.h"
 #include <file/file_path.h>
 #include <atomic>
+#include <cerrno>
+#include <cstring>
 
 struct retro_vfs_interface* hostfs::LibretroStorage::vfs_interface = nullptr;
+
+static bool isSaveStatePath(const std::string& path)
+{
+	auto endsWith = [&path](const char *suffix) {
+		const size_t length = std::strlen(suffix);
+		return path.size() >= length && path.compare(path.size() - length, length, suffix) == 0;
+	};
+	return endsWith(".state") || endsWith(".state.net") || endsWith(".state.tmp");
+}
 
 bool hostfs::LibretroStorage::isFileWriteable(const std::string& path)
 {
@@ -94,6 +106,9 @@ std::vector<hostfs::FileInfo> hostfs::LibretroStorage::listContent(const std::st
 
 hostfs::File *hostfs::LibretroStorage::openFile(const std::string& path, const std::string& mode)
 {
+	if (isSaveStatePath(path) && !recoverInterruptedReplacement(path))
+		return nullptr;
+
 	bool extended = false;
 	bool append = false;
 	unsigned int mode_bitfield = 0;
@@ -190,6 +205,12 @@ bool hostfs::LibretroStorage::exists(const std::string& path)
 
 hostfs::File *hostfs::LibretroStorage::createTemporaryFile(const std::string& destination, std::string& temporaryPath)
 {
+	if (!recoverInterruptedReplacement(destination))
+	{
+		temporaryPath.clear();
+		return nullptr;
+	}
+
 	static std::atomic<u64> sequence{0};
 	for (int attempt = 0; attempt < 128; attempt++)
 	{
@@ -205,14 +226,144 @@ hostfs::File *hostfs::LibretroStorage::createTemporaryFile(const std::string& de
 
 bool hostfs::LibretroStorage::replaceFile(const std::string& temporaryPath, const std::string& destination)
 {
-	return vfs_interface != nullptr && vfs_interface->rename != nullptr
-		&& vfs_interface->rename(temporaryPath.c_str(), destination.c_str()) == 0;
+	if (!recoverInterruptedReplacement(destination))
+		return false;
+
+	if (vfs_interface != nullptr)
+	{
+		if (vfs_interface->rename == nullptr)
+			return false;
+		if (vfs_interface->rename(temporaryPath.c_str(), destination.c_str()) == 0)
+			return true;
+
+		// Some VFS implementations (including libretro-common on Windows) do
+		// not replace an existing destination. Move the old file aside, publish
+		// into the now-empty slot, and restore the old file if publication fails.
+		if (!exists(destination) || vfs_interface->remove == nullptr)
+			return false;
+		const std::string backup = destination + ".hollycast-vfs-backup";
+		const std::string marker = destination + ".hollycast-vfs-transaction";
+		if (exists(backup) || exists(marker) || !writeVfsTransactionMarker(destination))
+			return false;
+		if (vfs_interface->rename(destination.c_str(), backup.c_str()) != 0)
+		{
+			vfs_interface->remove(marker.c_str());
+			return false;
+		}
+		if (vfs_interface->rename(temporaryPath.c_str(), destination.c_str()) == 0)
+		{
+			// Recovery sees a live destination and completes committed cleanup.
+			recoverInterruptedReplacement(destination);
+			return true;
+		}
+
+		// If rollback itself fails, the marker and backup remain; the next
+		// open restores the original before exposing the slot.
+		recoverInterruptedReplacement(destination);
+		return false;
+	}
+	// libretro-common falls back to host stdio when no VFS interface was
+	// supplied, so publish through the same native replacement wrapper.
+	return flycast::rename(temporaryPath.c_str(), destination.c_str()) == 0;
+}
+
+bool hostfs::LibretroStorage::recoverInterruptedReplacement(const std::string& destination)
+{
+	if (vfs_interface == nullptr)
+		return true;
+	const std::string marker = destination + ".hollycast-vfs-transaction";
+	if (!exists(marker))
+		return true;
+	if (!validVfsTransactionMarker(destination))
+		return false;
+
+	const std::string backup = destination + ".hollycast-vfs-backup";
+	const bool hasBackup = exists(backup);
+	const bool hasDestination = exists(destination);
+	if (hasBackup && !hasDestination)
+	{
+		if (vfs_interface->rename == nullptr
+				|| vfs_interface->rename(backup.c_str(), destination.c_str()) != 0)
+			return false;
+	}
+	else if (!hasDestination)
+		return false;
+
+	// A destination alongside the backup means publication completed. A
+	// destination without a backup means rollback (or preparation) completed.
+	if (hasBackup && vfs_interface->remove != nullptr
+			&& vfs_interface->remove(backup.c_str()) != 0 && exists(backup))
+		return true;
+	if (vfs_interface->remove != nullptr)
+		vfs_interface->remove(marker.c_str());
+	return true;
+}
+
+bool hostfs::LibretroStorage::writeVfsTransactionMarker(const std::string& destination)
+{
+	static std::atomic<u64> sequence{0};
+	const std::string marker = destination + ".hollycast-vfs-transaction";
+	std::string temporary;
+	for (int attempt = 0; attempt < 128; attempt++)
+	{
+		temporary = marker + ".tmp-" + std::to_string(++sequence);
+		if (!exists(temporary))
+			break;
+		temporary.clear();
+	}
+	if (temporary.empty())
+		return false;
+
+	static constexpr char contents[] = "HCV1\n";
+	File *file = openFile(temporary, "wb");
+	if (file == nullptr)
+		return false;
+	bool written = file->write(contents, 1, sizeof(contents) - 1) == sizeof(contents) - 1;
+	if (!file->flush())
+		written = false;
+	if (!file->close())
+		written = false;
+	delete file;
+	if (!written)
+	{
+		removeFile(temporary);
+		return false;
+	}
+
+	if (vfs_interface == nullptr || vfs_interface->rename == nullptr
+			|| vfs_interface->rename(temporary.c_str(), marker.c_str()) != 0)
+	{
+		removeFile(temporary);
+		return false;
+	}
+	if (validVfsTransactionMarker(destination))
+		return true;
+	removeFile(marker);
+	return false;
+}
+
+bool hostfs::LibretroStorage::validVfsTransactionMarker(const std::string& destination)
+{
+	const std::string marker = destination + ".hollycast-vfs-transaction";
+	File *file = openFile(marker, "rb");
+	if (file == nullptr)
+		return false;
+	static constexpr char expected[] = "HCV1\n";
+	char actual[sizeof(expected) - 1];
+	const bool valid = file->size() == sizeof(actual)
+			&& file->read(actual, 1, sizeof(actual)) == sizeof(actual)
+			&& std::memcmp(actual, expected, sizeof(actual)) == 0;
+	const bool closed = file->close();
+	delete file;
+	return valid && closed;
 }
 
 bool hostfs::LibretroStorage::removeFile(const std::string& path)
 {
-	return vfs_interface != nullptr && vfs_interface->remove != nullptr
-		&& (vfs_interface->remove(path.c_str()) == 0 || !exists(path));
+	if (vfs_interface != nullptr)
+		return vfs_interface->remove != nullptr
+			&& (vfs_interface->remove(path.c_str()) == 0 || !exists(path));
+	return flycast::unlink(path.c_str()) == 0 || errno == ENOENT;
 }
 
 bool hostfs::LibretroStorage::addStorage(bool isDirectory, bool writeAccess, const std::string& description,
