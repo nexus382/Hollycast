@@ -17,6 +17,7 @@ git diff --stat ebf8fbb79..HEAD -- \
   'core/hw/maple/maple_devs.cpp' \
   'core/hw/maple/maple_devs.h' \
   'core/oslib/vmu_path.cpp' \
+  'tests/phone_vmu/generate_maple_sync_test.py' \
   'tests/src/oslib/VmuPathTest.cpp' \
   'tests/src/hw/VmuMigrationTest.cpp' \
   'tests/CMakeLists.txt'
@@ -70,6 +71,7 @@ Use the existing temporary data and custom-card directories for fixtures. [tests
 - `core/hw/maple/maple_devs.cpp`
 - `core/hw/maple/maple_devs.h`
 - `core/oslib/vmu_path.cpp`
+- `tests/phone_vmu/generate_maple_sync_test.py`
 - `tests/src/oslib/VmuPathTest.cpp`
 - `tests/src/hw/VmuMigrationTest.cpp` (new)
 - `tests/CMakeLists.txt`
@@ -128,6 +130,16 @@ cmake --build --preset linux-unit-tests-debug --parallel 4 && ./build-unit-tests
 
 The new ShortSourceSurvivesMigration case is registered. The selected tests run and pass.
 
+**Standalone phone VMU**
+
+```sh
+cmake -S tests/phone_vmu -B build/phone-vmu-tests -DCMAKE_BUILD_TYPE=Release
+cmake --build build/phone-vmu-tests --config Release --parallel 4
+ctest --test-dir build/phone-vmu-tests -C Release --output-on-failure
+```
+
+With Node.js 24 available, all eight cases run, including the server test that exercises Maple card synchronization.
+
 **Scope**
 
 ```sh
@@ -145,6 +157,8 @@ Both whitespace checks exit zero. Compare the change list with the scope below.
 ## Independent review
 
 Reviewed `e2355410`. On a mounted exFAT volume, hard-link publication failed as expected. A Maple block then survived a restart through the verified writable legacy card. Conflicting destinations and failed reopens returned a device write error and preserved memory. The VMU, path and GGPO regressions passed on macOS and Ubuntu arm64, including an isolated restart test.
+
+PR CI found that the standalone phone-VMU fixture also copied the new migration helpers. Reviewed `ff7ac345d`, which extracts the two production methods the fixture calls. The generated C++ matched the working `dev` fixture apart from whitespace, including after an unrelated definition was inserted beside each method. The standalone Release build and all eight CTests passed on macOS and Ubuntu arm64.
 
 ## Stop conditions
 
