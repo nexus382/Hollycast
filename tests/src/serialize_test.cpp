@@ -11,13 +11,18 @@
 #include "emulator.h"
 #include "cfg/option.h"
 #include "hw/bba/bba.h"
+#include "oslib/oslib.h"
+#include "oslib/storage.h"
 #include "serialize.h"
+#include "stdclass.h"
 #include "util/tsqueue.h"
 
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <vector>
 
 namespace {
@@ -132,11 +137,19 @@ TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
 	struct RestoreSettings
 	{
 		std::string contentPath = settings.content.path;
+		std::string fileName = settings.content.fileName;
+		std::string gameId = settings.content.gameId;
+		std::string dataPath = get_writable_data_path("");
 		int broadcast = config::Broadcast;
+		bool autoSave = config::AutoSaveState;
 		~RestoreSettings()
 		{
 			settings.content.path = contentPath;
+			settings.content.fileName = fileName;
+			settings.content.gameId = gameId;
 			config::Broadcast = broadcast;
+			config::AutoSaveState = autoSave;
+			set_user_data_dir(dataPath);
 		}
 	} restoreSettings;
 	struct RestoreMapleConfiguration
@@ -166,12 +179,22 @@ TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
 			}
 		}
 	} restoreMapleConfiguration;
-	settings.content.path = "partial-restore-test.cdi";
 	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
 
-	// Keep this synthetic state fixture independent of configured VMU devices.
+	const auto directory = std::filesystem::temp_directory_path() / ("hollycast-partial-restore-"
+			+ std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+	std::filesystem::create_directories(directory);
+	set_user_data_dir(directory.string());
+	const auto gamePath = directory / "partial-restore-test.elf";
+	std::ofstream(gamePath, std::ios::binary).put('\0');
+	// Keep this synthetic session independent of configured VMU devices.
 	mcfg_DestroyDevices(false);
-	mcfg_CreateDevices();
+	emu.loadGame(gamePath.string().c_str());
+	config::AutoSaveState = true;
+	const int autoSaveSlot = dc_getAutoSaveSlot();
+	const std::string autoSavePath = hostfs::getSavestatePath(autoSaveSlot, true);
+	const std::string savedMarker = "preserve known-good autosave";
+	{ std::ofstream marker(autoSavePath, std::ios::binary); marker << savedMarker; }
 	config::Broadcast = 99;
 	const auto partialPath = writeStateFixture(serializeDreamcastState(), "partial-restore");
 	config::Broadcast = 0;
@@ -184,23 +207,29 @@ TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
 	EXPECT_EQ(StateLoadResult::PartialApplyFailure, dc_loadstateForPathResult(partialPath.string()));
 	EXPECT_FALSE(emu.running());
 	EXPECT_EQ(0, loadEvents);
-	EXPECT_TRUE(dc_consumeAutoSaveSkipOnNextUnload());
-	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
 	emu.start();
 	EXPECT_FALSE(emu.running());
-	dc_skipAutoSaveOnNextUnload();
 	emu.unloadGame();
+	{
+		std::ifstream marker(autoSavePath, std::ios::binary);
+		const std::string contents((std::istreambuf_iterator<char>(marker)), std::istreambuf_iterator<char>());
+		EXPECT_EQ(savedMarker, contents);
+	}
 	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
+	emu.loadGame(gamePath.string().c_str());
+	config::AutoSaveState = true;
 	EXPECT_EQ(StateLoadResult::Loaded, dc_loadstateForPathResult(validPath.string()));
 	EXPECT_FALSE(emu.running());
 	EXPECT_EQ(1, loadEvents);
 	EXPECT_TRUE(dc_loadstateForPath(validPath.string()));
 	EXPECT_EQ(2, loadEvents);
+	emu.unloadGame(false);
 	EventManager::unlisten(Event::LoadState, countLoadStateEvent, &loadEvents);
 
 	std::filesystem::remove(partialPath);
 	std::filesystem::remove(validPath);
 	std::filesystem::remove(earlyRejectPath);
+	std::filesystem::remove_all(directory);
 }
 
 TEST_F(SerializeTest, TaggedV64DreamcastHeaderStillLoads)
