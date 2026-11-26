@@ -331,6 +331,7 @@ TEST(SavestateWriteTest, NativeSiblingTransactionReplacesAndCleansUp)
 	std::ifstream firstSlot(destination, std::ios::binary);
 	const std::string firstContents((std::istreambuf_iterator<char>(firstSlot)), std::istreambuf_iterator<char>());
 	EXPECT_EQ(firstContents, "first slot");
+	firstSlot.close();
 	EXPECT_EQ(std::distance(std::filesystem::directory_iterator(root), std::filesystem::directory_iterator{}), 1);
 	std::filesystem::remove_all(root);
 }
