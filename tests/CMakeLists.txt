@@ -45,6 +45,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/hw/modem/v42bisTest.cpp
         src/network/NetworkServiceTest.cpp
         src/hw/sh4/modules/TimerTest.cpp
+        src/hw/NaomiRomReadTest.cpp
         src/imgread/ChdTest.cpp
         src/imgread/CueTest.cpp
         src/imgread/GdiTest.cpp
