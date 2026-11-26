@@ -34,6 +34,7 @@ struct BackupProviderState
     std::string destination;
     std::string parentReference;
     std::string siblingName;
+    std::string backupDuringCopy;
 };
 
 class BackupProviderFile : public hostfs::File
@@ -142,6 +143,8 @@ public:
     hostfs::File *createTemporaryFile(const std::string& destination, std::string& temporary) override
     {
         ++state->createCalls;
+        if (!state->backupDuringCopy.empty())
+            state->files[destination] = state->backupDuringCopy;
         state->destination = destination;
         temporary = "provider://opaque-temporary-id/" + std::to_string(++state->temporaryNumber);
         state->files[temporary].clear();
@@ -215,6 +218,16 @@ TEST(InputMappingBackupProviderTest, PreservesUnreadableExistingBackupAndRetries
     EXPECT_TRUE(mapping_internal::createLegacyBackup(storage, BackupProvider::sourcePath));
     EXPECT_EQ(storage.state->files.at(BackupProviderFile::backupPath), historical);
     EXPECT_EQ(storage.state->createCalls, 0);
+}
+
+TEST(InputMappingBackupProviderTest, RetainsBackupThatAppearsWhileCopying)
+{
+    BackupProvider storage;
+    storage.state->files[BackupProvider::sourcePath] = "legacy source";
+    storage.state->backupDuringCopy = "earlier button bindings";
+    EXPECT_TRUE(mapping_internal::createLegacyBackup(storage, BackupProvider::sourcePath));
+    EXPECT_EQ(storage.state->files.at(BackupProviderFile::backupPath), storage.state->backupDuringCopy);
+    EXPECT_EQ(storage.state->replaceCalls, 0);
 }
 
 class InputMappingConfigFileTest : public ::testing::Test

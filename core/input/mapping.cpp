@@ -22,7 +22,6 @@
 #include "stdclass.h"
 #include "cfg/option.h"
 #include "oslib/storage.h"
-#include "oslib/directory.h"
 #include <cerrno>
 #include <cmath>
 #include <cstring>
@@ -844,9 +843,9 @@ static bool readBlock(hostfs::File& file, u8* buffer, size_t capacity, size_t& c
 	while (count < capacity)
 	{
 		const size_t read = file.read(buffer + count, 1, capacity - count);
-		count += read;
-		if (file.error())
+		if (read > capacity - count || file.error())
 			return false;
+		count += read;
 		if (file.eof())
 		{
 			eof = true;
@@ -959,7 +958,9 @@ bool createLegacyBackup(hostfs::Storage& storage, const std::string& sourcePath)
 	const bool closed = staged->close();
 	if (!copied || !flushed || !closed || !compareFiles(storage, sourcePath, transaction.temporaryPath()))
 		return false;
-	return transaction.publish();
+	if (!backupIsEmpty(storage, backupPath, empty))
+		return false;
+	return !empty || transaction.publish();
 }
 
 } // namespace mapping_internal
