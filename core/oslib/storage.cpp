@@ -22,6 +22,24 @@
 #include "nowide/stackstring.hpp"
 #include "i18n.h"
 #include <atomic>
+#include <vector>
+#include <sys/stat.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <io.h>
+#elif defined(__APPLE__)
+#include <fcntl.h>
+#include <sys/acl.h>
+#include <unistd.h>
+#elif defined(__linux__) && !defined(__ANDROID__)
+#include <fcntl.h>
+#include <sys/xattr.h>
+#include <unistd.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 // For macOS
 std::string os_PrecomposedString(std::string string);
@@ -60,6 +78,142 @@ static const std::string native_separator = "\\";
 static const std::string separators = "/";
 static const std::string native_separator = "/";
 #endif
+
+namespace {
+
+// A temporary save must have no broader access while it is being written, and
+// must inherit the existing slot's access rules before it is published.
+bool preserveNativeFileAccess(const std::string& destination, const std::string& temporaryPath, int temporaryFd)
+{
+#ifdef _WIN32
+	(void)temporaryFd;
+#ifdef TARGET_UWP
+	struct stat existing;
+	if (flycast::stat(destination.c_str(), &existing) != 0)
+		return errno == ENOENT;
+	// The UWP API surface cannot copy the native file DACL. Do not overwrite an
+	// existing slot when its access rules cannot be retained.
+	return false;
+#else
+	nowide::wstackstring sourceName, temporaryName;
+	if (!sourceName.convert(destination.c_str()) || !temporaryName.convert(temporaryPath.c_str()))
+		return false;
+	DWORD attributes = GetFileAttributesW(sourceName.get());
+	if (attributes == INVALID_FILE_ATTRIBUTES)
+	{
+		DWORD error = GetLastError();
+		return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+	}
+	if (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+		return false;
+
+	DWORD information = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+	DWORD descriptorSize = 0;
+	GetFileSecurityW(sourceName.get(), information, nullptr, 0, &descriptorSize);
+	if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || descriptorSize == 0)
+		return false;
+	std::vector<u8> descriptor(descriptorSize);
+	if (!GetFileSecurityW(sourceName.get(), information,
+			reinterpret_cast<PSECURITY_DESCRIPTOR>(descriptor.data()), descriptorSize, &descriptorSize))
+		return false;
+
+	SECURITY_DESCRIPTOR_CONTROL control;
+	DWORD revision;
+	if (!GetSecurityDescriptorControl(reinterpret_cast<PSECURITY_DESCRIPTOR>(descriptor.data()), &control, &revision))
+		return false;
+	if (control & SE_DACL_PROTECTED)
+		information |= PROTECTED_DACL_SECURITY_INFORMATION;
+	else
+		information |= UNPROTECTED_DACL_SECURITY_INFORMATION;
+	return SetFileSecurityW(temporaryName.get(), information,
+			reinterpret_cast<PSECURITY_DESCRIPTOR>(descriptor.data())) != 0;
+#endif // TARGET_UWP
+#else
+	struct stat existing;
+	if (lstat(destination.c_str(), &existing) != 0)
+		return errno == ENOENT;
+	if (!S_ISREG(existing.st_mode))
+		return false;
+
+	int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+	flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+	flags |= O_NOFOLLOW;
+#endif
+	const int sourceFd = open(destination.c_str(), flags);
+	if (sourceFd < 0)
+		return false;
+	struct stat opened;
+	bool success = fstat(sourceFd, &opened) == 0
+		&& S_ISREG(opened.st_mode)
+		&& opened.st_dev == existing.st_dev
+		&& opened.st_ino == existing.st_ino;
+	if (success && (opened.st_uid != getuid() || opened.st_gid != getgid()))
+		success = fchown(temporaryFd, opened.st_uid, opened.st_gid) == 0;
+
+#if defined(__APPLE__)
+	if (success)
+	{
+		errno = 0;
+		acl_t acl = acl_get_fd_np(sourceFd, ACL_TYPE_EXTENDED);
+		if (acl != nullptr)
+		{
+			success = acl_set_fd_np(temporaryFd, acl, ACL_TYPE_EXTENDED) == 0;
+			acl_free(acl);
+		}
+		else if (errno == ENOENT)
+		{
+			// The new file can inherit an ACL from its parent even though the old
+			// slot had none. An empty extended ACL removes that inherited ACL.
+			acl_t emptyAcl = acl_init(0);
+			if (emptyAcl == nullptr)
+				success = false;
+			else
+			{
+				success = acl_set_fd_np(temporaryFd, emptyAcl, ACL_TYPE_EXTENDED) == 0;
+				acl_free(emptyAcl);
+			}
+		}
+		else if (errno != EOPNOTSUPP && errno != ENOTSUP)
+			success = false;
+	}
+#elif defined(__linux__) && !defined(__ANDROID__)
+	if (success)
+	{
+		ssize_t aclSize = fgetxattr(sourceFd, "system.posix_acl_access", nullptr, 0);
+		if (aclSize >= 0)
+		{
+			std::vector<u8> acl(static_cast<size_t>(aclSize));
+			ssize_t readSize = fgetxattr(sourceFd, "system.posix_acl_access", acl.data(), acl.size());
+			success = readSize == aclSize
+				&& fsetxattr(temporaryFd, "system.posix_acl_access", acl.data(), acl.size(), 0) == 0;
+		}
+		else if (errno == ENODATA)
+		{
+			// A directory default ACL can be inherited by the temporary file. Do
+			// not let that ACL change access when the destination had no ACL.
+			if (fremovexattr(temporaryFd, "system.posix_acl_access") != 0
+				&& errno != ENODATA && errno != EOPNOTSUPP && errno != ENOTSUP)
+				success = false;
+		}
+		else if (errno != EOPNOTSUPP && errno != ENOTSUP)
+			success = false;
+	}
+#elif !defined(__ANDROID__)
+	// There is no portable ACL query API for the remaining native targets. Fail
+	// closed on overwrites rather than silently dropping ACLs we cannot inspect.
+	success = false;
+#endif
+	if (success)
+		success = fchmod(temporaryFd, existing.st_mode & 07777) == 0;
+	close(sourceFd);
+	return success;
+#endif
+}
+
+} // namespace
 
 class StdStorage : public Storage
 {
@@ -171,9 +325,40 @@ public:
 		for (int attempt = 0; attempt < 128; attempt++)
 		{
 			temporaryPath = destination + ".tmp-" + std::to_string(++sequence);
-			FILE *file = nowide::fopen(temporaryPath.c_str(), "wbx");
+			FILE *file = nullptr;
+#ifdef _WIN32
+			file = nowide::fopen(temporaryPath.c_str(), "wbx");
+#else
+			int flags = O_CREAT | O_EXCL | O_RDWR;
+#ifdef O_CLOEXEC
+			flags |= O_CLOEXEC;
+#endif
+			int fd = open(temporaryPath.c_str(), flags, 0600);
+			if (fd >= 0)
+			{
+				file = fdopen(fd, "wb");
+				if (file == nullptr)
+				{
+					close(fd);
+					flycast::unlink(temporaryPath.c_str());
+				}
+			}
+#endif
 			if (file != nullptr)
-				return new StdFile(file);
+			{
+				if (preserveNativeFileAccess(destination, temporaryPath,
+#ifdef _WIN32
+						_fileno(file)
+#else
+						fileno(file)
+#endif
+						))
+					return new StdFile(file);
+				fclose(file);
+				flycast::unlink(temporaryPath.c_str());
+				temporaryPath.clear();
+				return nullptr;
+			}
 			if (errno != EEXIST)
 				break;
 		}
