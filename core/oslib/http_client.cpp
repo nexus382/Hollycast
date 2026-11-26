@@ -24,10 +24,10 @@
 namespace http
 {
 
-int get(const std::string& url, std::vector<u8>& content, std::string& contentType)
+int get(const std::string& url, std::vector<u8>& content, std::string& contentType, size_t maxBodyBytes)
 {
 	Headers headers;
-	int code = get(url, content, nullptr, &headers);
+	int code = get(url, content, nullptr, &headers, 0, nullptr, maxBodyBytes);
 	for (const auto& [ key, value ] : headers)
 	{
 		if (key == "content-type") {
@@ -109,7 +109,8 @@ static void CALLBACK getCallback(HINTERNET, DWORD_PTR context, DWORD status, voi
 }
 
 static int cancellableGet(const std::string& url, std::vector<u8>& content, const Headers* reqHeaders,
-		Headers* respHeaders, int timeoutMs, const std::atomic<bool>& cancelled) {
+		Headers* respHeaders, int timeoutMs, const std::atomic<bool>& cancelled, size_t maxBodyBytes) {
+	content.clear();
 	if (cancelled.load()) return 499;
 	CrackedUrl cracked;
 	if (!crackUrl(url, cracked)) return 500;
@@ -173,21 +174,29 @@ static int cancellableGet(const std::string& url, std::vector<u8>& content, cons
 			}
 		}
 	}
-	content.clear();
+	if (maxBodyBytes != unlimitedBody) {
+		DWORD length = 0, lengthSize = sizeof(length);
+		if (HttpQueryInfoA(request.get(), HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &length, &lengthSize, nullptr)
+				&& static_cast<u64>(length) > maxBodyBytes) return bodyTooLarge;
+	}
 	for (;;) {
-		if (cancelled.load()) return 499;
+		if (cancelled.load()) { content.clear(); return 499; }
 		u8 buffer[4096]; DWORD read = 0;
 		prepare();
-		if (!wait(InternetReadFile(request.get(), buffer, sizeof(buffer), &read))) return cancelled.load() ? 499 : 500;
+		if (!wait(InternetReadFile(request.get(), buffer, sizeof(buffer), &read))) {
+			content.clear();
+			return cancelled.load() ? 499 : 500;
+		}
 		if (read == 0) break;
-		content.insert(content.end(), buffer, buffer + read);
+		if (!appendBody(content, buffer, read, maxBodyBytes)) return bodyTooLarge;
 	}
 	return static_cast<int>(status);
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled, size_t maxBodyBytes)
 {
-	if (cancelled != nullptr) return cancellableGet(url, content, reqHeaders, respHeaders, timeoutMs, *cancelled);
+	content.clear();
+	if (cancelled != nullptr) return cancellableGet(url, content, reqHeaders, respHeaders, timeoutMs, *cancelled, maxBodyBytes);
 	CrackedUrl cracked;
 	if (!crackUrl(url, cracked))
 		return 500;
@@ -263,6 +272,15 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 				}
 			}
 		}
+		if (maxBodyBytes != unlimitedBody) {
+			DWORD length = 0, lengthSize = sizeof(length);
+			if (HttpQueryInfo(hreq, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &length, &lengthSize, nullptr)
+					&& static_cast<u64>(length) > maxBodyBytes) {
+				InternetCloseHandle(hreq);
+				InternetCloseHandle(ic);
+				return bodyTooLarge;
+			}
+		}
 		u8 buffer[4096];
 		DWORD bytesRead = sizeof(buffer);
 
@@ -272,13 +290,18 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 			if (!InternetReadFile(hreq, buffer, sizeof(buffer), &bytesRead))
 			{
 				WARN_LOG(NETWORK, "InternetReadFile failed: %lx", GetLastError());
+				content.clear();
 				InternetCloseHandle(hreq);
 				InternetCloseHandle(ic);
 				return 500;
 			}
 			if (bytesRead == 0)
 				break;
-			content.insert(content.end(), buffer, buffer + bytesRead);
+			if (!appendBody(content, buffer, bytesRead, maxBodyBytes)) {
+				InternetCloseHandle(hreq);
+				InternetCloseHandle(ic);
+				return bodyTooLarge;
+			}
 		}
 	}
 	InternetCloseHandle(hreq);
@@ -441,10 +464,17 @@ void init()
 	curl_global_init(CURL_GLOBAL_ALL);
 }
 
-static size_t receiveData(void *buffer, size_t size, size_t nmemb, std::vector<u8> *recvBuffer)
+struct ReceiveContext { std::vector<u8> *buffer; size_t limit; bool exceeded = false; };
+
+static size_t receiveData(void *buffer, size_t size, size_t nmemb, ReceiveContext *context)
 {
-	recvBuffer->insert(recvBuffer->end(), (u8 *)buffer, (u8 *)buffer + size * nmemb);
-	return nmemb * size;
+	if (size != 0 && nmemb > std::numeric_limits<size_t>::max() / size) return 0;
+	const size_t bytes = size * nmemb;
+	if (!appendBody(*context->buffer, buffer, bytes, context->limit)) {
+		context->exceeded = true;
+		return 0;
+	}
+	return bytes;
 }
 
 static size_t receiveHeader(const char *buffer, size_t size, size_t nitems, Headers *headers)
@@ -475,8 +505,10 @@ static CURL *makeCurlEasy(const std::string& url)
 	return curl;
 }
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled, size_t maxBodyBytes)
 {
+	content.clear();
+	if (cancelled && cancelled->load()) return 499;
 	CURL *curl = makeCurlEasy(url);
 	if (cancelled != nullptr) {
 		curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
@@ -493,6 +525,8 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 		// DCnet GETs run on workers; libcurl must not install process-wide signals.
 		curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 	}
+	if (maxBodyBytes != unlimitedBody && maxBodyBytes <= static_cast<size_t>(std::numeric_limits<curl_off_t>::max()))
+		curl_easy_setopt(curl, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>(maxBodyBytes));
 	curl_slist *headers = nullptr;
 	if (reqHeaders != nullptr)
 	{
@@ -500,9 +534,9 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 			headers = curl_slist_append(headers, (key + ": " + value).c_str());
 		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 	}
-	std::vector<u8> recvBuffer;
+	ReceiveContext receive{&content, maxBodyBytes};
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receiveData);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &recvBuffer);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &receive);
 	if (respHeaders != nullptr) {
 		curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, receiveHeader);
 		curl_easy_setopt(curl, CURLOPT_HEADERDATA, respHeaders);
@@ -512,8 +546,9 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 	if (res == CURLE_OK)
 	{
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-		content = recvBuffer;
 	}
+	else if (receive.exceeded || res == CURLE_FILESIZE_EXCEEDED) { content.clear(); httpCode = bodyTooLarge; }
+	else content.clear();
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 
@@ -535,8 +570,9 @@ int post(const std::string& url, const char *payload, const char *contentType, s
 	}
 
 	std::vector<u8> recvBuffer;
+	ReceiveContext receive{&recvBuffer, unlimitedBody};
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receiveData);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &recvBuffer);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &receive);
 	CURLcode res = curl_easy_perform(curl);
 
 	long httpCode = 500;

@@ -67,7 +67,7 @@ std::vector<unsigned char> download(const std::string& url, size_t limit, const 
 	// The browser may be the first HTTP user, especially with artwork fetching disabled.
 	if (!transport)
 		http::init();
-	const int status = transport ? transport(url, bytes) : http::get(url, bytes);
+	const int status = transport ? transport(url, bytes, limit) : http::get(url, bytes, nullptr, nullptr, 0, nullptr, limit);
 	require(http::success(status), "Theme download failed (HTTP " + std::to_string(status) + "). Check your connection and retry.");
 	require(!bytes.empty() && bytes.size() <= limit, "Theme download is empty or exceeds the size limit.");
 	return bytes;

@@ -24,10 +24,75 @@
 #include <memory>
 #include <mutex>
 
+struct BoundedGetResult {
+	std::mutex mutex;
+	std::condition_variable changed;
+	bool done = false;
+	bool tooLarge = false;
+	bool transportFailed = false;
+	int status = 500;
+	std::vector<u8> bytes;
+	http::Headers headers;
+};
+
+@interface BoundedGetDelegate : NSObject<NSURLSessionDataDelegate> {
+@public
+	std::shared_ptr<BoundedGetResult> result;
+	size_t limit;
+}
+@end
+
+@implementation BoundedGetDelegate
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task
+	didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler
+{
+	std::lock_guard<std::mutex> lock(result->mutex);
+	if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+		NSHTTPURLResponse *reply = (NSHTTPURLResponse *)response;
+		result->status = (int)reply.statusCode;
+		for (NSString *key in reply.allHeaderFields) {
+			std::string name([key UTF8String]);
+			string_tolower(name);
+			result->headers.emplace_back(name, [[reply.allHeaderFields[key] description] UTF8String]);
+		}
+		if (limit != http::unlimitedBody && reply.expectedContentLength >= 0
+				&& static_cast<unsigned long long>(reply.expectedContentLength) > limit) {
+			result->tooLarge = true;
+			completionHandler(NSURLSessionResponseCancel);
+			return;
+		}
+	}
+	completionHandler(NSURLSessionResponseAllow);
+}
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task didReceiveData:(NSData *)data
+{
+	std::lock_guard<std::mutex> lock(result->mutex);
+	if (result->tooLarge) return;
+	if (data.length > limit - result->bytes.size()) {
+		result->tooLarge = true;
+		result->bytes.clear();
+		[task cancel];
+		return;
+	}
+	if (data.length != 0) {
+		const auto *begin = (const u8 *)data.bytes;
+		result->bytes.insert(result->bytes.end(), begin, begin + data.length);
+	}
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error
+{
+	std::lock_guard<std::mutex> lock(result->mutex);
+	if (error != nil && !result->tooLarge) { result->status = 500; result->transportFailed = true; }
+	result->done = true;
+	result->changed.notify_all();
+}
+@end
+
 namespace http {
 
-int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
+int get(const std::string& url, std::vector<u8>& content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled, size_t maxBodyBytes)
 {
+	content.clear();
 	if (cancelled && cancelled->load()) return 499;
 	NSString *nsurl = [NSString stringWithCString:url.c_str() 
                                          encoding:[NSString defaultCStringEncoding]];
@@ -48,6 +113,40 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
     }
     if (timeoutMs > 0)
         [urlRequest setTimeoutInterval:timeoutMs / 1000.0];
+	if (maxBodyBytes != unlimitedBody) {
+		auto result = std::make_shared<BoundedGetResult>();
+		BoundedGetDelegate *delegate = [BoundedGetDelegate new];
+		delegate->result = result;
+		delegate->limit = maxBodyBytes;
+		NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]
+			delegate:delegate delegateQueue:nil];
+		NSURLSessionDataTask *task = [session dataTaskWithRequest:urlRequest];
+		[task resume];
+		const auto deadline = timeoutMs > 0 ? std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs)
+			: std::chrono::steady_clock::time_point::max();
+		std::unique_lock<std::mutex> lock(result->mutex);
+		bool timedOut = false;
+		while (!result->done) {
+			result->changed.wait_for(lock, std::chrono::milliseconds(25));
+			if ((cancelled && cancelled->load()) || std::chrono::steady_clock::now() >= deadline) {
+				timedOut = !(cancelled && cancelled->load());
+				lock.unlock();
+				[task cancel];
+				lock.lock();
+				while (!result->done) result->changed.wait(lock);
+				break;
+			}
+		}
+		if (result->tooLarge) { content.clear(); lock.unlock(); [session invalidateAndCancel]; return bodyTooLarge; }
+		if (cancelled && cancelled->load()) { lock.unlock(); [session finishTasksAndInvalidate]; return 499; }
+		if (timedOut) { lock.unlock(); [session finishTasksAndInvalidate]; return 408; }
+		if (!result->transportFailed) content = std::move(result->bytes);
+		if (respHeaders) *respHeaders = std::move(result->headers);
+		const int status = result->status;
+		lock.unlock();
+		[session finishTasksAndInvalidate];
+		return status;
+	}
 	if (cancelled != nullptr) {
 		struct Result {
 			std::mutex mutex;
@@ -80,9 +179,13 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 			result->changed.wait_for(lock, std::chrono::milliseconds(25));
 			if (cancelled->load()) [task cancel];
 		}
+		if (cancelled->load()) {
+			content.clear();
+			return 499;
+		}
 		content = std::move(result->bytes);
 		if (respHeaders) *respHeaders = std::move(result->headers);
-		return cancelled->load() ? 499 : result->status;
+		return result->status;
 	}
 	NSURLResponse *response = nil;
 	NSError *error = nil;

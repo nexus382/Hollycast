@@ -48,7 +48,7 @@ private:
 class TheGamesDb : public Scraper
 {
 public:
-	using Transport = std::function<int(const std::string&, std::vector<u8>&, std::string&)>;
+	using Transport = Scraper::Transport;
 	explicit TheGamesDb(Transport transport = {}, std::shared_ptr<TheGamesDbAuthorization> authorization = {});
 	// Front/back covers, logos, banners, fanart, screenshots and title screens.
 	inline static constexpr u32 supportedMedia = 1u | (1u << 2) | (1u << 3) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 9);

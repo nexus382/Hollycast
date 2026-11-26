@@ -163,10 +163,7 @@ void saveImage(const std::string& path, const std::vector<u8>& bytes)
 namespace screenscraper {
 
 Session::Session(Credentials credentials, Transport transport, std::chrono::milliseconds retryDelay)
-	: credentials(std::move(credentials)), transport(transport ? std::move(transport)
-		: Transport([](const std::string& url, std::vector<u8>& bytes, std::string& type) {
-			return http::get(url, bytes, type);
-		})), retryDelay(retryDelay)
+	: credentials(std::move(credentials)), transport(std::move(transport)), retryDelay(retryDelay)
 {
 	account.personalAccount = !this->credentials.username.empty();
 }
@@ -279,7 +276,7 @@ void Session::fail(int code, RequestType requestType, FailureType failureType)
 }
 
 int Session::request(const std::string& endpoint, const std::string& parameters,
-		std::vector<u8>& bytes, std::string& contentType, Clock::time_point& started)
+		std::vector<u8>& bytes, std::string& contentType, Clock::time_point& started, size_t bodyLimit)
 {
 	{
 		std::unique_lock<std::mutex> lock(mutex);
@@ -320,7 +317,10 @@ int Session::request(const std::string& endpoint, const std::string& parameters,
 		+ "&softname=Hollycast&output=json&ssid=" + http::urlEncode(credentials.username)
 		+ "&sspassword=" + http::urlEncode(credentials.password) + parameters;
 	int code = 0;
-	try { code = transport(url, bytes, contentType); }
+	try {
+		code = transport ? transport(url, bytes, contentType, bodyLimit) : http::get(url, bytes, contentType, bodyLimit);
+		if (bytes.size() > bodyLimit) { bytes.clear(); code = http::bodyTooLarge; }
+	}
 	catch (...) { /* Transport exceptions can contain the URL; report only its safe failure category. */ }
 	{
 		std::unique_lock<std::mutex> lock(mutex);
@@ -383,7 +383,7 @@ json Session::requestJson(const std::string& endpoint, const std::string& parame
 	std::vector<u8> bytes;
 	std::string contentType;
 	Clock::time_point started;
-	if (request(endpoint, parameters, bytes, contentType, started) == 404)
+	if (request(endpoint, parameters, bytes, contentType, started, 4 * 1024 * 1024) == 404)
 	{
 		requestSucceeded(started);
 		return json::object();
@@ -453,7 +453,8 @@ std::vector<u8> Session::requestImage(u32 gameId, const std::string& type, const
 	Clock::time_point started;
 	const std::string selector = type + (region.empty() ? "" : "(" + region + ")");
 	if (request("mediaJeu.php", "&systemeid=23&jeuid=" + std::to_string(gameId)
-			+ "&media=" + http::urlEncode(selector) + "&outputformat=png&maxwidth=1920&maxheight=1920", bytes, contentType, started) == 404)
+			+ "&media=" + http::urlEncode(selector) + "&outputformat=png&maxwidth=1920&maxheight=1920", bytes, contentType, started,
+			32 * 1024 * 1024) == 404)
 	{
 		requestSucceeded(started);
 		return {};

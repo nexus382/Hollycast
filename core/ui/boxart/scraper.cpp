@@ -365,7 +365,8 @@ bool Scraper::downloadMediaImage(const std::string& url, const std::string& path
 {
     std::vector<u8> bytes;
     std::string type;
-    const int status = transport ? transport(url, bytes, type) : http::get(url, bytes, type);
+    constexpr size_t limit = 64 * 1024 * 1024;
+    const int status = transport ? transport(url, bytes, type, limit) : http::get(url, bytes, type, limit);
     if (status == 404) return false;
     int width = 0, height = 0, channels = 0;
     if (!http::success(status) || bytes.empty() || bytes.size() > 64 * 1024 * 1024

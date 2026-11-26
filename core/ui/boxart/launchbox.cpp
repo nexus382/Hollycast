@@ -395,7 +395,7 @@ void LaunchBox::loadCatalog()
 	try {
 		std::vector<u8> data;
 		std::string contentType;
-  const int status = transport ? transport(metadataUrl, data, contentType) : http::get(metadataUrl, data, contentType);
+  const int status = transport ? transport(metadataUrl, data, contentType, http::unlimitedBody) : http::get(metadataUrl, data, contentType);
 		if (!http::success(status)) throw std::runtime_error("LaunchBox catalog HTTP " + std::to_string(status));
 		ZipArchive archive;
 		if (!archive.Open(data.data(), data.size())) throw std::runtime_error("Invalid LaunchBox ZIP");
