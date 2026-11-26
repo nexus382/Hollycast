@@ -314,32 +314,37 @@ bool createUwpJournal(const std::string& destination, const std::string& stage, 
 	UwpSecurityDescriptor descriptor;
 	if (!getUwpSecurityDescriptor(destination, descriptor))
 		return false;
-	nowide::wstackstring name;
-	if (!name.convert((destination + uwpJournalSuffix).c_str()))
+	const std::string pendingPath = stage + uwpJournalSuffix;
+	nowide::wstackstring pendingName, journalName;
+	if (!pendingName.convert(pendingPath.c_str()) || !journalName.convert((destination + uwpJournalSuffix).c_str()))
 		return false;
 	SECURITY_ATTRIBUTES attributes = {sizeof(SECURITY_ATTRIBUTES), descriptor.get(), FALSE};
-	// CREATE_NEW both reserves the per-slot recovery record and avoids adopting an unrelated file.
-	HANDLE handle = CreateFileFromAppW(name.get(), GENERIC_READ | GENERIC_WRITE | DELETE,
-		0, &attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-	if (handle == INVALID_HANDLE_VALUE)
+	// The fixed name must always contain a complete record. An interrupted writer
+	// can leave its own staging file behind without blocking the next save.
+	UwpHandle pending(CreateFileFromAppW(pendingName.get(), GENERIC_READ | GENERIC_WRITE | DELETE,
+		FILE_SHARE_DELETE, &attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+	if (!pending.valid())
 		return false;
-	journal.reset(handle);
-	if (writeUwpJournal(journal.get(), destination, stage))
+	if (writeUwpJournal(pending.get(), destination, stage)
+			&& MoveFileFromAppW(pendingName.get(), journalName.get()))
+	{
+		journal.reset(pending.release());
 		return true;
-	journal.close();
-	deleteUwpFile(destination + uwpJournalSuffix);
+	}
+	deleteUwpFile(pendingPath);
 	return false;
 }
 
-bool recoverUwpTransaction(const std::string& destination, bool requireCleanup, bool writeOperation)
+bool recoverUwpTransaction(const std::string& destination, bool writeOperation)
 {
 	const std::string journalPath = destination + uwpJournalSuffix;
 	nowide::wstackstring journalName, destinationName;
 	if (!journalName.convert(journalPath.c_str()) || !destinationName.convert(destination.c_str()))
 		return false;
-	// Exclusive sharing serializes recovery across processes; the mutex covers in-process readers.
-	UwpHandle journal(CreateFileFromAppW(journalName.get(), GENERIC_READ | GENERIC_WRITE | DELETE,
-		0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+	// Recovery holds the record until cleanup. Delete sharing lets its owner
+	// remove it by name while still excluding every other reader and writer.
+	UwpHandle journal(CreateFileFromAppW(journalName.get(), GENERIC_READ | DELETE,
+		FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
 	if (!journal.valid())
 	{
 		DWORD error = GetLastError();
@@ -376,7 +381,7 @@ bool recoverUwpTransaction(const std::string& destination, bool requireCleanup, 
 			if (stageExists)
 				return !writeOperation;
 			if (!deleteUwpFile(backupPath))
-				return !requireCleanup;
+				return !writeOperation;
 		}
 		else if (!MoveFileFromAppW(backupName.get(), destinationName.get()))
 		{
@@ -392,10 +397,9 @@ bool recoverUwpTransaction(const std::string& destination, bool requireCleanup, 
 	}
 	if (stageExists && !deleteUwpFile(stagePath))
 		cleanupComplete = false;
-	journal.close();
 	if (!deleteUwpFile(journalPath))
 		cleanupComplete = false;
-	return cleanupComplete || !requireCleanup;
+	return cleanupComplete || !writeOperation;
 }
 #endif
 
@@ -669,7 +673,7 @@ public:
 	{
 #ifdef TARGET_UWP
 		std::lock_guard<std::mutex> lock(uwpStorageMutex);
-		if (!recoverUwpTransaction(path, false, false))
+		if (!recoverUwpTransaction(path, false))
 			return nullptr;
 #endif
 		FILE *file = nowide::fopen(path.c_str(), mode.c_str());
@@ -684,7 +688,7 @@ public:
 	{
 #ifdef TARGET_UWP
 		std::lock_guard<std::mutex> lock(uwpStorageMutex);
-		if (!recoverUwpTransaction(destination, true, true))
+		if (!recoverUwpTransaction(destination, true))
 			return nullptr;
 #endif
 		static std::atomic<u64> sequence{0};
@@ -756,7 +760,7 @@ public:
 	{
 #ifdef TARGET_UWP
 		std::lock_guard<std::mutex> lock(uwpStorageMutex);
-		if (!recoverUwpTransaction(destination, true, true))
+		if (!recoverUwpTransaction(destination, true))
 			return false;
 		bool destinationExists;
 		if (!getUwpFileExists(destination, destinationExists))
@@ -779,7 +783,6 @@ public:
 		{
 			// The new destination is committed. Keep the journal if backup cleanup
 			// fails so a later access can retry without hiding the committed file.
-			journal.close();
 			if (deleteUwpFile(backupPath))
 				deleteUwpFile(destination + uwpJournalSuffix);
 			return true;
@@ -788,7 +791,7 @@ public:
 		journal.close();
 		// State-based recovery handles 1176 (both names retained) and 1177 (the
 		// old target is at the backup path) both now and after a later restart.
-		if (!recoverUwpTransaction(destination, true, true))
+		if (!recoverUwpTransaction(destination, true))
 			WARN_LOG(COMMON, "Save replacement recovery pending for '%s' (error 0x%x)", destination.c_str(), error);
 		return false;
 #else
@@ -836,7 +839,7 @@ public:
 	{
 #ifdef TARGET_UWP
 		std::lock_guard<std::mutex> lock(uwpStorageMutex);
-		if (!recoverUwpTransaction(path, false, false))
+		if (!recoverUwpTransaction(path, false))
 			throw StorageException(strprintf(i18n::T("Cannot stat %s"), path.c_str()));
 #endif
 		FileInfo info;
@@ -914,7 +917,7 @@ public:
 	{
 #ifdef TARGET_UWP
 		std::lock_guard<std::mutex> lock(uwpStorageMutex);
-		if (!recoverUwpTransaction(path, false, false))
+		if (!recoverUwpTransaction(path, false))
 			return false;
 #endif
 #ifndef _WIN32
