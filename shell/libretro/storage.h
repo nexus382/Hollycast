@@ -102,6 +102,9 @@ protected:
 
 	static bool isFileWriteable(const std::string& path);
 	static FileInfo makeFileInfo(std::string name, std::string path);
+	bool recoverInterruptedReplacement(const std::string& destination);
+	bool writeVfsTransactionMarker(const std::string& destination);
+	bool validVfsTransactionMarker(const std::string& destination);
 
 public:
 	static void initialise(retro_environment_t environ_cb);

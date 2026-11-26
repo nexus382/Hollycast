@@ -45,8 +45,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
-import java.util.zip.CRC32;
 
 public class AndroidStorage {
     public static final int ADD_STORAGE_ACTIVITY_REQUEST = 15012010;
@@ -103,14 +101,24 @@ public class AndroidStorage {
     }
 
     public synchronized int openFile(String uri, String mode) throws FileNotFoundException {
+        if (isSavestateUri(uri)) {
+            try {
+                journal().recover(uri);
+            } catch (IOException | RuntimeException e) {
+                FileNotFoundException failure = new FileNotFoundException("Could not recover " + uri + ": " + e.getMessage());
+                failure.initCause(e);
+                throw failure;
+            }
+        }
+        Uri resolved;
         try {
-            recoverInterruptedReplacement(uri);
-        } catch (IOException e) {
-            FileNotFoundException failure = new FileNotFoundException("Could not recover " + uri + ": " + e.getMessage());
+            resolved = resolveExisting(uri);
+        } catch (IOException | RuntimeException e) {
+            FileNotFoundException failure = new FileNotFoundException(uri);
             failure.initCause(e);
             throw failure;
         }
-        ParcelFileDescriptor pfd = activity.getContentResolver().openFileDescriptor(Uri.parse(uri), mode);
+        ParcelFileDescriptor pfd = activity.getContentResolver().openFileDescriptor(resolved, mode);
         if (pfd == null)
             throw new FileNotFoundException(uri);
         return pfd.detachFd();
@@ -118,12 +126,12 @@ public class AndroidStorage {
 
     public synchronized String createTemporaryFile(String destination) {
         try {
-            recoverInterruptedReplacement(destination);
+            journal().recover(destination);
             String parent = parentUriFor(destination);
             if (parent.isEmpty())
                 return "";
             String name = documentName(destination);
-            Uri temporary = createChild(parent, "." + name + ".hollycast-tmp-" + UUID.randomUUID());
+            Uri temporary = createChild(parent, SaveSlotJournal.temporaryName(name));
             return temporary == null ? "" : temporary.toString();
         } catch (Exception e) {
             Log.w("Flycast", "Could not create save-state staging document", e);
@@ -132,74 +140,20 @@ public class AndroidStorage {
     }
 
     public synchronized boolean replaceFile(String temporary, String destination) {
-        Uri marker = null;
-        Uri backup = null;
-        boolean hadPrevious = false;
         try {
-            recoverInterruptedReplacement(destination);
-            String parent = parentUriFor(destination);
-            if (parent.isEmpty())
-                return false;
-            String name = documentName(destination);
-            marker = childOrCreate(parent, "." + name + ".hollycast-transaction");
-            backup = childOrCreate(parent, "." + name + ".hollycast-backup");
-            hadPrevious = checkedExists(destination);
-            if (hadPrevious) {
-                if (!copyAndVerify(destination, backup.toString())) {
-                    deleteDocument(backup);
-                    return false;
-                }
-            } else {
-                deleteDocument(backup);
-            }
-            try (OutputStream stream = activity.getContentResolver().openOutputStream(marker, "wt")) {
-                if (stream == null)
-                    return false;
-                stream.write(hadPrevious ? 1 : 0);
-                stream.flush();
-            }
-
-            if (!hadPrevious && !checkedExists(destination)) {
-                Uri created = createChild(parent, name);
-                if (created == null)
-                    return false;
-                if (!created.toString().equals(destination)) {
-                    deleteDocument(created);
-                    deleteDocument(marker);
-                    return false;
-                }
-            }
-
-            if (!copyAndVerify(temporary, destination)) {
-                recoverInterruptedReplacement(destination);
-                return false;
-            }
-            // Removing the marker first makes the verified new document authoritative.
-            if (!deleteDocument(marker))
-                return false;
-            try {
-                if (hadPrevious)
-                    deleteDocument(backup);
-                deleteDocument(Uri.parse(temporary));
-            } catch (IOException cleanupError) {
-                Log.w("Flycast", "Save-state committed; staging cleanup will be retried", cleanupError);
-            }
-            return true;
+            return journal().replace(temporary, destination);
         } catch (Exception e) {
             Log.w("Flycast", "Save-state replacement failed", e);
-            try {
-                if (marker != null && exists(marker.toString()))
-                    recoverInterruptedReplacement(destination);
-            } catch (Exception recoveryError) {
-                Log.e("Flycast", "Save-state recovery will be retried on next access", recoveryError);
-            }
             return false;
         }
     }
 
     public boolean removeFile(String uri) {
         try {
-            return deleteDocument(Uri.parse(uri));
+            Uri resolved = resolveExisting(uri);
+            return deleteDocument(resolved);
+        } catch (FileNotFoundException missing) {
+            return true;
         } catch (Exception e) {
             return false;
         }
@@ -215,94 +169,172 @@ public class AndroidStorage {
                 "application/octet-stream", name);
     }
 
-    private Uri childOrCreate(String parent, String name) throws IOException {
-        String child = getSubPath(parent, name);
-        if (checkedExists(child))
-            return Uri.parse(child);
-        Uri created = createChild(parent, name);
-        if (created == null)
-            throw new FileNotFoundException(child);
-        return created;
-    }
-
     private boolean deleteDocument(Uri uri) throws IOException {
         if (uri == null || !checkedExists(uri.toString()))
             return true;
+        Uri existing = resolveExisting(uri.toString());
         try {
-            return DocumentsContract.deleteDocument(activity.getContentResolver(), uri);
+            boolean deleted = DocumentsContract.deleteDocument(activity.getContentResolver(), existing);
+            return deleted || !checkedExists(existing.toString());
         } catch (RuntimeException e) {
             throw new IOException("Could not delete " + uri, e);
         }
     }
 
     private boolean checkedExists(String uriString) throws IOException {
-        try (Cursor cursor = activity.getContentResolver().query(Uri.parse(uriString),
-                new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID }, null, null, null)) {
-            if (cursor == null)
-                throw new IOException("Provider returned no query result for " + uriString);
-            return cursor.moveToFirst();
+        try {
+            Uri uri = Uri.parse(uriString);
+            String parent = pendingParent(uri);
+            if (parent != null)
+                return findChild(parent, pendingName(uri)) != null;
+            try (Cursor cursor = activity.getContentResolver().query(uri,
+                    new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID }, null, null, null)) {
+                if (cursor == null)
+                    throw new IOException("Provider returned no query result for " + uriString);
+                return cursor.moveToFirst();
+            }
         } catch (RuntimeException e) {
-            throw new IOException("Could not query " + uriString, e);
+            throw new IOException("Could not resolve " + uriString, e);
         }
     }
 
-    private boolean copyAndVerify(String source, String destination) throws IOException {
-        CRC32 expected = new CRC32();
-        long expectedSize = 0;
-        try (InputStream input = activity.getContentResolver().openInputStream(Uri.parse(source));
-             OutputStream output = activity.getContentResolver().openOutputStream(Uri.parse(destination), "wt")) {
-            if (input == null || output == null)
-                return false;
-            byte[] buffer = new byte[65536];
-            int count;
-            while ((count = input.read(buffer)) != -1) {
-                output.write(buffer, 0, count);
-                expected.update(buffer, 0, count);
-                expectedSize += count;
-            }
-            output.flush();
-        }
-        CRC32 actual = new CRC32();
-        long actualSize = 0;
-        try (InputStream input = activity.getContentResolver().openInputStream(Uri.parse(destination))) {
-            if (input == null)
-                return false;
-            byte[] buffer = new byte[65536];
-            int count;
-            while ((count = input.read(buffer)) != -1) {
-                actual.update(buffer, 0, count);
-                actualSize += count;
-            }
-        }
-        return expectedSize == actualSize && expected.getValue() == actual.getValue();
+    private static String pendingParent(Uri uri) {
+        return uri.getQueryParameter("hollycast_parent");
     }
 
-    private void recoverInterruptedReplacement(String destination) throws IOException {
-        String parent = parentUriFor(destination);
-        if (parent.isEmpty())
-            return;
-        String name = documentName(destination);
-        String markerPath = getSubPath(parent, "." + name + ".hollycast-transaction");
-        String backupPath = getSubPath(parent, "." + name + ".hollycast-backup");
-        if (!checkedExists(markerPath)) {
-            // A backup without a marker is from a commit whose verified new copy won.
-            deleteDocument(Uri.parse(backupPath));
-            return;
+    private static String pendingName(Uri uri) {
+        return uri.getQueryParameter("hollycast_name");
+    }
+
+    private String pendingChildUri(String parent, String name) {
+        return Uri.parse(parent).buildUpon()
+                .appendQueryParameter("hollycast_parent", parent)
+                .appendQueryParameter("hollycast_name", name).build().toString();
+    }
+
+    private boolean isSavestateUri(String path) {
+        Uri uri = Uri.parse(path);
+        String name = pendingName(uri);
+        if (name == null) {
+            try {
+                name = getFileInfo(path).getName();
+            } catch (Exception ignored) {
+                try {
+                    String id = DocumentsContract.getDocumentId(uri);
+                    int slash = id.lastIndexOf('/');
+                    name = slash < 0 ? id : id.substring(slash + 1);
+                } catch (IllegalArgumentException e) {
+                    return false;
+                }
+            }
         }
-        // The verified backup is the durable record of whether the slot existed.
-        // This also handles interruption while the small marker itself was written.
-        boolean hadPrevious = checkedExists(backupPath);
-        if (hadPrevious) {
-            if (!copyAndVerify(backupPath, destination))
-                throw new IOException("verified save-state backup is unavailable");
-            deleteDocument(Uri.parse(backupPath));
-        } else {
-            deleteDocument(Uri.parse(destination));
+        return name.endsWith(".state") || name.endsWith(".state.net") || name.endsWith(".state.tmp");
+    }
+
+    private String findChild(String parent, String name) throws IOException {
+        Uri parentUri = Uri.parse(parent);
+        String parentId = DocumentsContract.isDocumentUri(activity, parentUri)
+                ? DocumentsContract.getDocumentId(parentUri)
+                : DocumentsContract.getTreeDocumentId(parentUri);
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(parentUri, parentId);
+        Cursor cursor = null;
+        try {
+            cursor = activity.getContentResolver().query(children,
+                    new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
+            if (cursor == null)
+                throw new IOException("Provider returned no child query result for " + parent);
+            String match = null;
+            while (cursor.moveToNext()) {
+                if (!name.equals(cursor.getString(1)))
+                    continue;
+                if (match != null)
+                    throw new IOException("Provider returned ambiguous children named " + name);
+                match = DocumentsContract.buildDocumentUriUsingTree(parentUri, cursor.getString(0)).toString();
+            }
+            return match;
+        } catch (RuntimeException e) {
+            throw new IOException("Could not query children of " + parent, e);
+        } finally {
+            if (cursor != null)
+                cursor.close();
         }
-        deleteDocument(Uri.parse(markerPath));
+    }
+
+    private List<SaveSlotJournal.Child> listChildUris(String parent) throws IOException {
+        Uri parentUri = Uri.parse(parent);
+        String parentId = DocumentsContract.isDocumentUri(activity, parentUri)
+                ? DocumentsContract.getDocumentId(parentUri)
+                : DocumentsContract.getTreeDocumentId(parentUri);
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(parentUri, parentId);
+        Cursor cursor = null;
+        try {
+            cursor = activity.getContentResolver().query(children,
+                    new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
+            if (cursor == null)
+                throw new IOException("Provider returned no child query result for " + parent);
+            List<SaveSlotJournal.Child> results = new ArrayList<>();
+            while (cursor.moveToNext())
+                results.add(new SaveSlotJournal.Child(
+                        DocumentsContract.buildDocumentUriUsingTree(parentUri, cursor.getString(0)).toString(),
+                        cursor.getString(1)));
+            return results;
+        } catch (RuntimeException e) {
+            throw new IOException("Could not query children of " + parent, e);
+        } finally {
+            if (cursor != null)
+                cursor.close();
+        }
+    }
+
+    private Uri resolveExisting(String path) throws IOException {
+        Uri uri = Uri.parse(path);
+        String parent = pendingParent(uri);
+        if (parent != null) {
+            String child = findChild(parent, pendingName(uri));
+            if (child == null)
+                throw new FileNotFoundException(path);
+            return Uri.parse(child);
+        }
+        return uri;
+    }
+
+    private SaveSlotJournal journal() {
+        return new SaveSlotJournal(new SaveSlotJournal.Provider() {
+            @Override public String parentOf(String document) throws IOException { return parentUriFor(document); }
+            @Override public String nameOf(String document) throws IOException { return documentName(document); }
+            @Override public String findChild(String parent, String name) throws IOException {
+                return AndroidStorage.this.findChild(parent, name);
+            }
+            @Override public List<SaveSlotJournal.Child> listChildren(String parent) throws IOException {
+                return listChildUris(parent);
+            }
+            @Override public String createChild(String parent, String name) throws IOException {
+                Uri child = AndroidStorage.this.createChild(parent, name);
+                return child == null ? null : child.toString();
+            }
+            @Override public InputStream openInput(String document) throws IOException {
+                InputStream input = activity.getContentResolver().openInputStream(Uri.parse(document));
+                if (input == null) throw new IOException("Provider returned no input stream for " + document);
+                return input;
+            }
+            @Override public OutputStream openOutput(String document) throws IOException {
+                OutputStream output = activity.getContentResolver().openOutputStream(Uri.parse(document), "wt");
+                if (output == null) throw new IOException("Provider returned no output stream for " + document);
+                return output;
+            }
+            @Override public boolean delete(String document) throws IOException {
+                return deleteDocument(Uri.parse(document));
+            }
+        });
     }
 
     private String documentName(String uriString) {
+        Uri uri = Uri.parse(uriString);
+        String pending = pendingName(uri);
+        if (pending != null)
+            return pending;
         try {
             return getFileInfo(uriString).getName();
         } catch (FileNotFoundException missing) {
@@ -314,6 +346,10 @@ public class AndroidStorage {
     }
 
     private String parentUriFor(String uriString) {
+        Uri uri = Uri.parse(uriString);
+        String pending = pendingParent(uri);
+        if (pending != null)
+            return pending;
         try {
             String parent = getParentUri(uriString);
             if (!parent.isEmpty())
@@ -321,7 +357,6 @@ public class AndroidStorage {
         } catch (Exception ignored) {
             // New documents have no provider path yet; derive the selected parent from their tree ID.
         }
-        Uri uri = Uri.parse(uriString);
         String id;
         try {
             id = DocumentsContract.getDocumentId(uri);
@@ -335,30 +370,55 @@ public class AndroidStorage {
     }
 
     public InputStream openInputStream(String uri) throws FileNotFoundException {
-        return activity.getContentResolver().openInputStream(Uri.parse(uri));
+        try {
+            InputStream input = activity.getContentResolver().openInputStream(resolveExisting(uri));
+            if (input == null)
+                throw new FileNotFoundException(uri);
+            return input;
+        } catch (IOException | RuntimeException e) {
+            FileNotFoundException failure = new FileNotFoundException(uri);
+            failure.initCause(e);
+            throw failure;
+        }
     }
     public OutputStream openOutputStream(String parent, String name) throws FileNotFoundException {
-        Uri uri = Uri.parse(parent);
-        String subpath = getSubPath(parent, name);
-        if (!exists(subpath)) {
-            String documentId;
-            if (DocumentsContract.isDocumentUri(activity, uri))
-                documentId = DocumentsContract.getDocumentId(uri);
-            else
-                documentId = DocumentsContract.getTreeDocumentId(uri);
-            uri = DocumentsContract.buildDocumentUriUsingTree(uri, documentId);
-            uri = DocumentsContract.createDocument(activity.getContentResolver(), uri,
-                    "application/octet-stream", name);
+        Uri uri;
+        try {
+            uri = resolveExisting(parent);
+        } catch (IOException e) {
+            FileNotFoundException failure = new FileNotFoundException(parent);
+            failure.initCause(e);
+            throw failure;
         }
-        else {
-            uri = Uri.parse(subpath);
+        String actualParent = uri.toString();
+        String child = findChild(actualParent, name);
+        if (child == null) {
+            uri = createChild(actualParent, name);
+            if (uri == null)
+                throw new FileNotFoundException(name);
+        } else {
+            uri = Uri.parse(child);
         }
-        return activity.getContentResolver().openOutputStream(uri);
+        try {
+            OutputStream output = activity.getContentResolver().openOutputStream(uri);
+            if (output == null)
+                throw new FileNotFoundException(uri.toString());
+            return output;
+        } catch (RuntimeException e) {
+            FileNotFoundException failure = new FileNotFoundException(uri.toString());
+            failure.initCause(e);
+            throw failure;
+        }
     }
 
     public FileInfo[] listContent(String uri)
     {
-        Uri treeUri = Uri.parse(uri);
+        Uri treeUri;
+        try {
+            treeUri = resolveExisting(uri);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not resolve document directory " + uri, e);
+        }
         String documentId;
         if (DocumentsContract.isDocumentUri(activity, treeUri))
             documentId = DocumentsContract.getDocumentId(treeUri);
@@ -405,6 +465,9 @@ public class AndroidStorage {
     public String getParentUri(String uriString) throws FileNotFoundException {
         if (uriString.isEmpty())
             return "";
+        String pendingParent = pendingParent(Uri.parse(uriString));
+        if (pendingParent != null)
+            return pendingParent;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 Uri uri = Uri.parse(uriString);
@@ -428,18 +491,26 @@ public class AndroidStorage {
 
     public String getSubPath(String reference, String relative)
     {
-        Uri refUri = Uri.parse(reference);
-        String docId;
-        if (DocumentsContract.isDocumentUri(activity, refUri))
-            docId = DocumentsContract.getDocumentId(refUri);
-        else
-            docId = DocumentsContract.getTreeDocumentId(refUri);
-        return DocumentsContract.buildDocumentUriUsingTree(refUri, docId + "/" + relative).toString();
+        try {
+            Uri parent = resolveExisting(reference);
+            // Probe now so provider errors are not confused with a missing child.
+            findChild(parent.toString(), relative);
+            return pendingChildUri(parent.toString(), relative);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not resolve document child " + relative, e);
+        }
     }
 
     public FileInfo getFileInfo(String uriString) throws FileNotFoundException
     {
-        Uri uri = Uri.parse(uriString);
+        Uri uri;
+        try {
+            uri = resolveExisting(uriString);
+        } catch (IOException e) {
+            FileNotFoundException failure = new FileNotFoundException(uriString);
+            failure.initCause(e);
+            throw failure;
+        }
         DocumentFile docFile = null;
         if (DocumentsContract.isDocumentUri(activity, uri))
             docFile = DocumentFile.fromSingleUri(activity, uri);
@@ -460,9 +531,15 @@ public class AndroidStorage {
 
     public boolean exists(String uriString)
     {
-        Uri uri = Uri.parse(uriString);
-        if (!DocumentsContract.isDocumentUri(activity, uri))
-        {
+        Uri uri;
+        try {
+            uri = resolveExisting(uriString);
+        } catch (FileNotFoundException missing) {
+            return false;
+        } catch (IOException e) {
+            return false;
+        }
+        if (!DocumentsContract.isDocumentUri(activity, uri)) {
             String documentId = DocumentsContract.getTreeDocumentId(uri);
             uri = DocumentsContract.buildDocumentUriUsingTree(uri, documentId);
         }
