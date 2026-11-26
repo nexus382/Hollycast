@@ -18,7 +18,8 @@ class MetalContext final : public GraphicsContext
 	~MetalContext() override;
 	id<MTLDevice> GetDevice() const { return device; }
 	id<MTLCommandQueue> GetQueue() const { return queue; }
-	void PresentFrame(id<MTLTexture> texture, float aspectRatio);
+	void PresentFrame(id<MTLTexture> texture, float aspectRatio, id<MTLTexture> temporalOutput = nil,
+			int temporalWidth = 0, int temporalHeight = 0);
 	// The Hikaru backend owns the filter. Its retained frame can outlive it.
 	using HikaruFrameShader = std::function<bool(id<MTLTexture>, id<MTLTexture>, int, int, id<MTLTexture> __strong&, bool&)>;
 	void PresentHikaruFrame(id<MTLTexture> texture, id<MTLTexture> depth, float aspectRatio,

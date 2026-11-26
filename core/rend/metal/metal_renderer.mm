@@ -5,6 +5,7 @@
 #include "hw/pvr/ta.h"
 #include "metal_renderer.h"
 #include "metal_geometry.h"
+#include "metal_fx.h"
 #include "metal_context.h"
 #include "metal_texture.h"
 #include "metal_targets.h"
@@ -89,6 +90,7 @@ private:
               bool mirror = false, MetalOITBuffers *oit = nullptr, id<MTLTexture> opaqueDepth = nil, u32 sequence = 0,
               unsigned oitColor = 0);
     bool renderPerPixel();
+    void prepareSceneMatrices(int w, int h);
     void writeFramebuffer(id<MTLCommandBuffer> command, id<MTLTexture> image);
     MetalTextureCache textureCache;
     MetalModifierVolumes modifiers;
@@ -99,6 +101,9 @@ private:
     id<MTLLibrary> library = nil, oitLibrary = nil;
     const bool perPixel;
     MetalRenderTargets targets;
+    MetalTemporalUpscaler temporal;
+    bool temporalFrame = false;
+    int temporalWidth = 0, temporalHeight = 0;
     std::unique_ptr<MetalShaderChain> shaderChain;
     id<MTLTexture> white = nil;
     id<MTLTexture> regularSecondary = nil, regularSecondaryCopy = nil;
@@ -157,7 +162,12 @@ void MetalRenderer::Term() {
 void MetalRenderer::Process(TA_context *ctx) {
     @autoreleasepool {
     renderContext = &ctx->rend;
-    if (resetTextureCache) { clearTextureCache(); resetTextureCache = false; }
+    if (resetTextureCache) {
+        clearTextureCache();
+        resetTextureCache = false;
+        temporal = {};
+        temporalFrame = false;
+    }
     textureCache.Cleanup();
     if (!ctx->rend.isRTT && !config::EmulateFramebuffer) clearLastFrame = false;
     if (!ctx->rend.isRTT)
@@ -393,6 +403,32 @@ void MetalRenderer::draw(id<MTLRenderCommandEncoder> enc, id<MTLBuffer> indices,
     [enc drawIndexedPrimitives:primitive indexCount:count indexType:MTLIndexTypeUInt32 indexBuffer:indices indexBufferOffset:first * sizeof(u32)];
 }
 
+void MetalRenderer::prepareSceneMatrices(int w, int h) {
+    matrices.CalcMatrices(renderContext, w, h);
+    // RTT can be interleaved between rendering and presenting a screen frame.
+    if (renderContext->isRTT) return;
+    temporalFrame = false;
+    if (!config::MetalFXUpscaling || !config::MetalFXTemporal || config::EmulateFramebuffer
+            || postprocess::hasConfiguredShaderSelection() || SettingsNew::shaderLiveTuneActive()) {
+        temporal = {};
+        return;
+    }
+    int width = settings.display.width;
+    int height = std::max(1, settings.display.height - getScaledTopInset());
+    int dx, dy;
+    getWindowboxDimensions(width, height, getOutputFramebufferAspectRatio(), dx, dy, config::Rotate90);
+    width = std::max(1, width - 2 * dx);
+    height = std::max(1, height - 2 * dy);
+    if (config::Rotate90) std::swap(width, height);
+    temporalWidth = width;
+    temporalHeight = height;
+    temporalFrame = temporal.prepare(targets.output, width, height);
+    if (temporalFrame) {
+        const auto offset = temporal.jitter();
+        matrices.offsetProjection(2.f * offset.x / w, -2.f * offset.y / h);
+    }
+}
+
 bool MetalRenderer::Render() {
     if (perPixel) return renderPerPixel();
     @autoreleasepool {
@@ -401,7 +437,7 @@ bool MetalRenderer::Render() {
     if (w <= 0 || h <= 0) return false;
     bool newTarget = targets.begin(MetalContext::Instance()->GetDevice(), w, h, renderContext->isRTT);
     if (!targets.output || !targets.depth) throw RendererException("Metal framebuffer allocation failed");
-    matrices.CalcMatrices(renderContext, w, h);
+    prepareSceneMatrices(w, h);
     id<MTLDevice> device = MetalContext::Instance()->GetDevice();
     if (renderContext->verts.empty() || renderContext->idx.empty()) return false;
     id<MTLCommandBuffer> command = [MetalContext::Instance()->GetQueue() commandBuffer];
@@ -425,7 +461,7 @@ bool MetalRenderer::Render() {
     bool secondaryInitialized = false;
     const bool presentsScene = !renderContext->isRTT && !config::EmulateFramebuffer;
     // A pending chain can activate at presentation and sample this frame.
-    const bool preserveSceneDepth = presentsScene && shaderChain && postprocess::hasConfiguredShaderSelection();
+    const bool preserveSceneDepth = presentsScene && (temporalFrame || (shaderChain && postprocess::hasConfiguredShaderSelection()));
     const auto endEncoder = [&](bool final = false) {
         [enc setDepthStoreAction:final && !preserveSceneDepth ? MTLStoreActionDontCare : MTLStoreActionStore];
         [enc setStencilStoreAction:final ? MTLStoreActionDontCare : MTLStoreActionStore];
@@ -586,7 +622,7 @@ bool MetalRenderer::renderPerPixel() {
     auto newCommand = [&] { id<MTLCommandBuffer> cmd = [queue commandBuffer]; track(cmd); return cmd; };
     bool fresh = targets.begin(device, w, h, renderContext->isRTT);
     if (!targets.output || !targets.depth) throw RendererException("Metal per-pixel framebuffer allocation failed");
-    matrices.CalcMatrices(renderContext, w, h);
+    prepareSceneMatrices(w, h);
     MetalGeometryBuffers geometry = metalUploadGeometry(device, *renderContext);
     MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float width:w height:h mipmapped:NO];
     descriptor.storageMode = MTLStorageModePrivate;
@@ -879,6 +915,8 @@ void MetalRenderer::RenderFramebuffer(const FramebufferInfo& info) {
     d.storageMode = metalCpuTextureStorageMode(MetalContext::Instance()->GetDevice());
     id<MTLTexture> uploaded = [MetalContext::Instance()->GetDevice() newTextureWithDescriptor:d];
     [uploaded replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0 withBytes:blank ? &border : pixels.data() bytesPerRow:w * 4];
+    temporal = {};
+    temporalFrame = false;
     targets.setFramebuffer(uploaded); aspect = getDCFramebufferAspectRatio(); frameReady = true; clearLastFrame = false;
     performance_overlay::recordRenderedResolution(w, h, w, h);
     }
@@ -886,7 +924,14 @@ void MetalRenderer::RenderFramebuffer(const FramebufferInfo& info) {
 
 bool MetalRenderer::Present() {
     if (!frameReady || clearLastFrame || !targets.frameOutput) return false;
-    MetalContext::Instance()->PresentFrame(targets.frameOutput, aspect);
+    auto *context = MetalContext::Instance();
+    id<MTLTexture> upscaled = nil;
+    if (temporalFrame && targets.frameDepth) {
+        auto cmd = [context->GetQueue() commandBuffer];
+        upscaled = temporal.encode(cmd, targets.frameOutput, targets.frameDepth);
+        [cmd commit];
+    }
+    context->PresentFrame(targets.frameOutput, aspect, upscaled, temporalWidth, temporalHeight);
     frameReady = false;
     return true;
 }

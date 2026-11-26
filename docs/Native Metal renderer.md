@@ -13,6 +13,8 @@ cmake --build --preset darwin
 
 Choose **Settings > Video > Graphics API > Metal (Experimental)**, then per-triangle, per-strip or per-pixel sorting. Renderer IDs 0–6 retain their existing meanings; regular native Metal uses ID 7 and per-pixel Metal uses ID 8. The API entry appears only if a runtime device, queue, presentation pipeline and sampler probe succeeds. Per-pixel support additionally probes fragment atomics, primitive IDs and multiple color attachments. Saved selections fall back to Vulkan/OpenGL when Metal is unavailable, or to regular Metal when only per-pixel support is unavailable. macOS CI packages include the backend automatically.
 
+Under **Video > Rendering Options**, enable **MetalFX Upscaling** to use spatial scaling when the game image is smaller than its viewport. **Use Temporal Upscaling** adds subpixel sampling, scene depth and motion estimated from consecutive frames. It works with all three sorting methods. Framebuffer video, Hikaru and active display shader chains use spatial scaling when enlargement is needed. The controls check each scaler’s availability on the Mac. Both options default to off.
+
 The build option is restricted to standalone macOS. iOS, tvOS and libretro integration are outside this first version. The existing macOS deployment target is preserved, but runtime coverage on older macOS and Intel/AMD GPUs is still needed. Metal 4 is not required.
 
 ## Included

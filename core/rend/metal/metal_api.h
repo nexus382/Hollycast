@@ -8,3 +8,5 @@ Renderer *rend_Metal();
 Renderer *rend_Metal_OIT();
 bool metalIsAvailable();
 bool metalSupportsPerPixel();
+bool metalSupportsSpatialFX();
+bool metalSupportsTemporalFX();

@@ -1,6 +1,7 @@
 # Portions Copyright 2026 The Hollycast Authors
 set(METAL_SOURCES
     metal_context.mm
+    metal_fx.mm
     metal_imgui.mm
     metal_renderer.mm
     metal_shaders.mm
@@ -37,7 +38,7 @@ foreach(check cull_compare flat_punch_regression alpha_semantics_regression nati
         "${PROJECT_SOURCE_DIR}/core" "${PROJECT_SOURCE_DIR}/core/deps"
         "${PROJECT_SOURCE_DIR}/core/deps/nowide/include" "${PROJECT_SOURCE_DIR}/core/deps/glm")
     target_compile_options(metal_${check} PRIVATE
-        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc> -Wno-deprecated-declarations
+        -fobjc-arc -Wno-deprecated-declarations
         -ffunction-sections -fdata-sections)
     target_link_options(metal_${check} PRIVATE -Wl,-dead_strip)
     target_link_libraries(metal_${check} PRIVATE
@@ -82,7 +83,7 @@ target_include_directories(metal_oit_buffer_regression PRIVATE
     "${PROJECT_SOURCE_DIR}/core" "${PROJECT_SOURCE_DIR}/core/deps"
     "${PROJECT_SOURCE_DIR}/core/deps/nowide/include" "${PROJECT_SOURCE_DIR}/core/deps/glm")
 target_compile_options(metal_oit_buffer_regression PRIVATE
-    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc> -ffunction-sections -fdata-sections)
+    -fobjc-arc -ffunction-sections -fdata-sections)
 target_link_options(metal_oit_buffer_regression PRIVATE -Wl,-dead_strip)
 target_link_libraries(metal_oit_buffer_regression PRIVATE ${HOLLYCAST_METAL_FRAMEWORK} "-framework Foundation")
 
@@ -100,7 +101,7 @@ target_include_directories(metal_oit_blend_matrix PRIVATE
     "${PROJECT_SOURCE_DIR}/core" "${PROJECT_SOURCE_DIR}/core/deps"
     "${PROJECT_SOURCE_DIR}/core/deps/nowide/include" "${PROJECT_SOURCE_DIR}/core/deps/glm")
 target_compile_options(metal_oit_blend_matrix PRIVATE
-    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc> -ffunction-sections -fdata-sections)
+    -fobjc-arc -ffunction-sections -fdata-sections)
 target_link_options(metal_oit_blend_matrix PRIVATE -Wl,-dead_strip)
 target_link_libraries(metal_oit_blend_matrix PRIVATE ${HOLLYCAST_METAL_FRAMEWORK} "-framework Foundation")
 
@@ -111,7 +112,7 @@ target_include_directories(metal_oit_collect_regression PRIVATE
     "${PROJECT_SOURCE_DIR}/core" "${PROJECT_SOURCE_DIR}/core/deps"
     "${PROJECT_SOURCE_DIR}/core/deps/nowide/include" "${PROJECT_SOURCE_DIR}/core/deps/glm")
 target_compile_options(metal_oit_collect_regression PRIVATE
-    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc> -ffunction-sections -fdata-sections)
+    -fobjc-arc -ffunction-sections -fdata-sections)
 target_link_options(metal_oit_collect_regression PRIVATE -Wl,-dead_strip)
 target_link_libraries(metal_oit_collect_regression PRIVATE ${HOLLYCAST_METAL_FRAMEWORK} "-framework Foundation")
 
@@ -139,7 +140,7 @@ target_include_directories(metal_oit_depth_replay_regression PRIVATE
     "${PROJECT_SOURCE_DIR}/core" "${PROJECT_SOURCE_DIR}/core/deps"
     "${PROJECT_SOURCE_DIR}/core/deps/nowide/include" "${PROJECT_SOURCE_DIR}/core/deps/glm")
 target_compile_options(metal_oit_depth_replay_regression PRIVATE
-    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc> -ffunction-sections -fdata-sections)
+    -fobjc-arc -ffunction-sections -fdata-sections)
 target_link_options(metal_oit_depth_replay_regression PRIVATE -Wl,-dead_strip)
 target_link_libraries(metal_oit_depth_replay_regression PRIVATE ${HOLLYCAST_METAL_FRAMEWORK} "-framework Foundation")
 
@@ -232,7 +233,7 @@ target_include_directories(metal_context_presentation_smoke PRIVATE
     "${PROJECT_SOURCE_DIR}/core/deps/nowide/include")
 target_compile_definitions(metal_context_presentation_smoke PRIVATE USE_SDL VIDEO_ROUTING TARGET_MAC)
 target_compile_options(metal_context_presentation_smoke PRIVATE
-    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc> -ffunction-sections -fdata-sections)
+    -fobjc-arc -ffunction-sections -fdata-sections)
 target_link_options(metal_context_presentation_smoke PRIVATE -Wl,-dead_strip)
 target_link_libraries(metal_context_presentation_smoke PRIVATE
     ${HOLLYCAST_METAL_FRAMEWORK} ${HOLLYCAST_QUARTZCORE_FRAMEWORK}
@@ -264,7 +265,7 @@ target_include_directories(metal_imgui_smoke PRIVATE
     "${PROJECT_SOURCE_DIR}/core/deps/glm" "${PROJECT_SOURCE_DIR}/core/deps/imgui"
     "${PROJECT_SOURCE_DIR}/core/deps/nowide/include")
 target_compile_definitions(metal_imgui_smoke PRIVATE USE_SDL VIDEO_ROUTING TARGET_MAC IMGUI_ENABLE_HARFBUZZ)
-target_compile_options(metal_imgui_smoke PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+target_compile_options(metal_imgui_smoke PRIVATE -fobjc-arc)
 target_link_libraries(metal_imgui_smoke PRIVATE freetype harfbuzz
     ${HOLLYCAST_METAL_FRAMEWORK} ${HOLLYCAST_QUARTZCORE_FRAMEWORK}
     "-framework Cocoa" "-framework Foundation")
@@ -279,3 +280,15 @@ endif()
 add_custom_target(metal-imgui-smoke
     COMMAND ${CMAKE_COMMAND} -E env MTL_DEBUG_LAYER=1 $<TARGET_FILE:metal_imgui_smoke>
     DEPENDS metal_imgui_smoke USES_TERMINAL)
+
+# Older deployment targets can still run the standard Metal renderer.
+find_library(HOLLYCAST_METALFX_FRAMEWORK MetalFX)
+foreach(target ${PROJECT_NAME} metal_context_smoke metal_context_unavailable_smoke
+        metal_context_presentation_smoke metal_imgui_smoke)
+    if(NOT target STREQUAL PROJECT_NAME)
+        target_sources(${target} PRIVATE metal_fx.mm)
+    endif()
+    if(HOLLYCAST_METALFX_FRAMEWORK)
+        target_link_options(${target} PRIVATE "LINKER:-weak_framework,MetalFX")
+    endif()
+endforeach()
