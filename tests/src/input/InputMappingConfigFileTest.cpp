@@ -76,8 +76,10 @@ protected:
             std::error_code error;
             std::filesystem::remove(getDefaultProfilePath(name), error);
             std::filesystem::remove(getDefaultProfilePath(name).string() + ".save", error);
+            std::filesystem::remove(getDefaultProfilePath(name).string() + ".save.state", error);
             std::filesystem::remove(getCustomProfilePath(name), error);
             std::filesystem::remove(getCustomProfilePath(name).string() + ".save", error);
+            std::filesystem::remove(getCustomProfilePath(name).string() + ".save.state", error);
         }
         {
             std::error_code error;
@@ -101,6 +103,7 @@ TEST_F(InputMappingConfigFileTest, LegacyBackupPreservesOriginalBytes)
     legacyV1 += "[dreamcast]\r\nbtn_a = 100"; // no trailing newline
     ASSERT_GT(legacyV1.size(), 4096u);
     writeRawFile(getDefaultProfilePath(legacyV1Name), legacyV1);
+    writeRawFile(getDefaultProfilePath(legacyV1Name).string() + ".save", "");
 
     InputMapping::ClearMappings();
     auto v1Mapping = InputMapping::LoadMapping(legacyV1Name);
@@ -151,18 +154,25 @@ TEST_F(InputMappingConfigFileTest, LegacyBackupPreservesOriginalBytes)
     EXPECT_EQ(failedBackupMapping->get_button_code(0, DreamcastKey::DC_BTN_A), 321u);
     EXPECT_EQ(readRawFile(getCustomProfilePath(failedBackupName)), failedBackupSource);
     EXPECT_EQ(readRawFile(blockedBackup / "marker"), "keep");
+    std::filesystem::remove_all(blockedBackup);
+    InputMapping::ClearMappings();
+    failedBackupMapping = InputMapping::LoadMapping(failedBackupName);
+    ASSERT_NE(failedBackupMapping, nullptr);
+    EXPECT_EQ(readRawFile(blockedBackup), failedBackupSource);
+    EXPECT_EQ(readRawFile(getCustomProfilePath(failedBackupName)), failedBackupSource);
 
     const std::string existingBackupName = fileName + "-existing-backup";
     trackProfile(existingBackupName);
     const std::string existingBackupSource = "[emulator]\r\nversion = 2\r\n[dreamcast]\r\nbtn_a = 654";
+    const std::string historicalBackup = "[emulator]\r\nversion = 1\r\n[dreamcast]\r\nbtn_b = 987\r\n";
     writeRawFile(getCustomProfilePath(existingBackupName), existingBackupSource);
-    writeRawFile(getCustomProfilePath(existingBackupName).string() + ".save", existingBackupSource);
+    writeRawFile(getCustomProfilePath(existingBackupName).string() + ".save", historicalBackup);
 
     InputMapping::ClearMappings();
     auto existingBackupMapping = InputMapping::LoadMapping(existingBackupName);
     ASSERT_NE(existingBackupMapping, nullptr);
     EXPECT_TRUE(existingBackupMapping->is_dirty());
-    EXPECT_EQ(readRawFile(getCustomProfilePath(existingBackupName).string() + ".save"), existingBackupSource);
+    EXPECT_EQ(readRawFile(getCustomProfilePath(existingBackupName).string() + ".save"), historicalBackup);
 
     const std::string currentName = fileName + "-v4";
     trackProfile(currentName);
