@@ -11,9 +11,65 @@
 #include "emulator.h"
 #include "cfg/option.h"
 #include "hw/bba/bba.h"
+#include "oslib/oslib.h"
+#include "oslib/storage.h"
+#include "serialize.h"
+#include "ui/gui.h"
+#include "stdclass.h"
 #include "util/tsqueue.h"
 
+#include <atomic>
+#include <array>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <vector>
+
+namespace {
+
+class RestoreEvents
+{
+	static constexpr Event observed[] = {Event::LoadState, Event::Pause, Event::Resume, Event::Terminate};
+	static void record(Event event, void *context)
+	{
+		static_cast<RestoreEvents *>(context)->events.push_back(event);
+	}
+
+public:
+	std::vector<Event> events;
+	RestoreEvents()
+	{
+		for (Event event : observed)
+			EventManager::listen(event, record, this);
+	}
+	~RestoreEvents()
+	{
+		for (Event event : observed)
+			EventManager::unlisten(event, record, this);
+	}
+};
+
+std::filesystem::path writeStateFixture(const std::vector<char>& data, const char *name)
+{
+	static std::atomic<unsigned> sequence{0};
+	const auto path = std::filesystem::temp_directory_path()
+			/ (std::string("hollycast-") + name + "-" + std::to_string(sequence++) + ".state");
+	std::ofstream file(path, std::ios::binary);
+	file.write(data.data(), data.size());
+	return path;
+}
+
+std::vector<char> serializeDreamcastState()
+{
+	std::vector<char> data(30'000'000);
+	Serializer serializer(data.data(), data.size());
+	dc_serialize(serializer);
+	data.resize(serializer.size());
+	return data;
+}
+
+} // namespace
 
 class SerializeTest : public ::testing::Test {
 protected:
@@ -91,6 +147,134 @@ TEST_F(SerializeTest, DreamcastHeaderMatchesDevV63)
 	EXPECT_EQ(u32(Deserializer::V63), version);
 	EXPECT_EQ(settings.platform.ram_size, ramSize);
 	EXPECT_EQ(2 * sizeof(u32), ser.size());
+}
+
+TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
+{
+	struct RestoreSettings
+	{
+		std::string contentPath = settings.content.path;
+		std::string fileName = settings.content.fileName;
+		std::string gameId = settings.content.gameId;
+		std::string dataPath = get_writable_data_path("");
+		int broadcast = config::Broadcast;
+		bool autoSave = config::AutoSaveState;
+		bool threaded = config::ThreadedRendering;
+		std::string audioBackend = config::AudioBackend;
+		GuiState gui = gui_state;
+		~RestoreSettings()
+		{
+			settings.content.path = contentPath;
+			settings.content.fileName = fileName;
+			settings.content.gameId = gameId;
+			config::Broadcast = broadcast;
+			config::AutoSaveState = autoSave;
+			config::ThreadedRendering = threaded;
+			config::AudioBackend = audioBackend;
+			gui_state = gui;
+			set_user_data_dir(dataPath);
+		}
+	} restoreSettings;
+	struct RestoreMapleConfiguration
+	{
+		std::array<MapleDeviceType, 4> main{};
+		std::array<std::array<MapleDeviceType, 2>, 4> expansion{};
+		RestoreMapleConfiguration()
+		{
+			for (size_t bus = 0; bus < main.size(); bus++)
+			{
+				main[bus] = config::MapleMainDevices[bus];
+				config::MapleMainDevices[bus] = MDT_None;
+				for (size_t port = 0; port < expansion[bus].size(); port++)
+				{
+					expansion[bus][port] = config::MapleExpansionDevices[bus][port];
+					config::MapleExpansionDevices[bus][port] = MDT_None;
+				}
+			}
+		}
+		~RestoreMapleConfiguration()
+		{
+			for (size_t bus = 0; bus < main.size(); bus++)
+			{
+				config::MapleMainDevices[bus] = main[bus];
+				for (size_t port = 0; port < expansion[bus].size(); port++)
+					config::MapleExpansionDevices[bus][port] = expansion[bus][port];
+			}
+		}
+	} restoreMapleConfiguration;
+	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
+
+	const auto directory = std::filesystem::temp_directory_path() / ("hollycast-partial-restore-"
+			+ std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+	std::filesystem::create_directories(directory);
+	set_user_data_dir(directory.string());
+	const auto gamePath = directory / "partial-restore-test.elf";
+	std::ofstream(gamePath, std::ios::binary).put('\0');
+	// Keep this synthetic session independent of configured VMU devices.
+	mcfg_DestroyDevices(false);
+	emu.loadGame(gamePath.string().c_str());
+	config::AutoSaveState = true;
+	const int autoSaveSlot = dc_getAutoSaveSlot();
+	const std::string autoSavePath = hostfs::getSavestatePath(autoSaveSlot, true);
+	const std::string savedMarker = "preserve known-good autosave";
+	{ std::ofstream marker(autoSavePath, std::ios::binary); marker << savedMarker; }
+	config::Broadcast = 99;
+	const auto partialPath = writeStateFixture(serializeDreamcastState(), "partial-restore");
+	config::Broadcast = 0;
+	const auto validPath = writeStateFixture(serializeDreamcastState(), "valid-restore");
+	const auto earlyRejectPath = writeStateFixture(std::vector<char>(sizeof(u32), 0), "early-reject");
+
+	RestoreEvents observed;
+	EXPECT_EQ(StateLoadResult::Rejected, dc_loadstateForPathResult(earlyRejectPath.string()));
+	const int numberedSlot = (autoSaveSlot + 1) % NUM_SAVE_SLOTS;
+	const auto numberedPath = hostfs::getSavestatePath(numberedSlot, true);
+	std::filesystem::copy_file(earlyRejectPath, numberedPath);
+	// In single-threaded mode the guest only advances if the frontend asks for a frame.
+	config::ThreadedRendering = false;
+	config::AudioBackend = "null";
+	gui_state = GuiState::Closed;
+	emu.start();
+	EXPECT_TRUE(emu.running());
+	observed.events.clear();
+	gui_loadState(numberedSlot);
+	EXPECT_TRUE(emu.running());
+	EXPECT_EQ((std::vector<Event>{Event::Pause, Event::Resume}), observed.events);
+	emu.stop();
+	observed.events.clear();
+	EXPECT_EQ(StateLoadResult::PartialApplyFailure, dc_loadstateForPathResult(partialPath.string()));
+	EXPECT_FALSE(emu.running());
+	EXPECT_TRUE(observed.events.empty());
+	emu.start();
+	EXPECT_FALSE(emu.running());
+	std::filesystem::copy_file(partialPath, numberedPath, std::filesystem::copy_options::overwrite_existing);
+	gui_loadState(numberedSlot);
+	EXPECT_EQ(GuiState::Main, gui_state);
+	EXPECT_EQ((std::vector<Event>{Event::Terminate}), observed.events);
+	{
+		std::ifstream marker(autoSavePath, std::ios::binary);
+		const std::string contents((std::istreambuf_iterator<char>(marker)), std::istreambuf_iterator<char>());
+		EXPECT_EQ(savedMarker, contents);
+	}
+	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
+	emu.loadGame(gamePath.string().c_str());
+	config::AutoSaveState = true;
+	observed.events.clear();
+	EXPECT_EQ(StateLoadResult::Loaded, dc_loadstateForPathResult(validPath.string()));
+	EXPECT_FALSE(emu.running());
+	EXPECT_TRUE(dc_loadstateForPath(validPath.string()));
+	EXPECT_EQ((std::vector<Event>{Event::LoadState, Event::LoadState}), observed.events);
+	emu.unloadGame();
+	EXPECT_GT(std::filesystem::file_size(autoSavePath), savedMarker.size());
+	emu.loadGame(gamePath.string().c_str());
+	observed.events.clear();
+	EXPECT_EQ(StateLoadResult::Loaded, dc_loadstateResult(autoSaveSlot));
+	EXPECT_EQ((std::vector<Event>{Event::LoadState}), observed.events);
+	emu.unloadGame(false);
+
+	std::filesystem::remove(partialPath);
+	std::filesystem::remove(validPath);
+	std::filesystem::remove(earlyRejectPath);
+	std::filesystem::remove_all(directory);
 }
 
 TEST_F(SerializeTest, TaggedV64DreamcastHeaderStillLoads)

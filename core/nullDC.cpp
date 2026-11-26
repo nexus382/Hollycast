@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <memory>
 #include <vector>
 
 static std::string lastStateFile;
@@ -311,10 +312,10 @@ fail:
 	// delete failed savestate?
 }
 
-static bool loadState(int index, const std::string& statePath)
+static StateLoadResult loadState(int index, const std::string& statePath)
 {
 	if (!dc_savestateAllowed() || settings.raHardcoreMode)
-		return false;
+		return StateLoadResult::Rejected;
 	u32 total_size = 0;
 
 	hostfs::File *f = nullptr;
@@ -340,58 +341,88 @@ static bool loadState(int index, const std::string& statePath)
 	{
 		// regular file savestate
 		filename = statePath.empty() ? hostfs::getSavestatePath(index, false) : statePath;
-		f = hostfs::storage().openFile(filename, "rb");
+		try {
+			f = hostfs::storage().openFile(filename, "rb");
+		} catch (const std::exception& e) {
+			WARN_LOG(SAVESTATE, "Failed to open state %s: %s", filename.c_str(), e.what());
+			os_notify(i18n::T("Failed to load state"), 5000, e.what());
+			return StateLoadResult::Rejected;
+		}
 	}
 
 	if (f == nullptr)
 	{
 		WARN_LOG(SAVESTATE, "Failed to load state - could not open %s for reading", filename.c_str());
 		os_notify(i18n::T("Save state not found"), 2000);
-		return false;
+		return StateLoadResult::Rejected;
 	}
 	SavestateHeader header;
-	if (f->read(&header, sizeof(header), 1) == 1)
-	{
-		if (!header.isValid())
-			// seek to beginning of file if this isn't a valid header (legacy savestate)
+	try {
+		if (f->read(&header, sizeof(header), 1) == 1)
+		{
+			if (!header.isValid())
+				// seek to beginning of file if this isn't a valid header (legacy savestate)
+				f->seek(0, SEEK_SET);
+			else
+				// skip png data
+				f->seek(header.pngSize, SEEK_CUR);
+		}
+		else {
+			// probably not a valid savestate but we'll fail later
 			f->seek(0, SEEK_SET);
-		else
-			// skip png data
-			f->seek(header.pngSize, SEEK_CUR);
-	}
-	else {
-		// probably not a valid savestate but we'll fail later
-		f->seek(0, SEEK_SET);
+		}
+	} catch (const std::exception& e) {
+		delete f;
+		WARN_LOG(SAVESTATE, "Failed to read state header %s: %s", filename.c_str(), e.what());
+		os_notify(i18n::T("Failed to load state"), 5000, e.what());
+		return StateLoadResult::Rejected;
 	}
 
 	if (index == -1 && config::GGPOEnable)
 	{
-		long pos = f->tell();
-		MD5Sum().add(f)
-				.getDigest(settings.network.md5.savestate);
-		f->seek(pos, SEEK_SET);
+		try {
+			long pos = f->tell();
+			MD5Sum().add(f)
+					.getDigest(settings.network.md5.savestate);
+			f->seek(pos, SEEK_SET);
+		} catch (const std::exception& e) {
+			delete f;
+			WARN_LOG(SAVESTATE, "Failed to hash network state %s: %s", filename.c_str(), e.what());
+			os_notify(i18n::T("Failed to load state"), 5000, e.what());
+			return StateLoadResult::Rejected;
+		}
 	}
 	RZipFile zipFile;
-	if (zipFile.Open(f, false)) {
-		total_size = (u32)zipFile.Size();
-	}
-	else
-	{
-		long pos = f->tell();
-		f->seek(0, SEEK_END);
-		total_size = (u32)f->tell() - pos;
-		f->seek(pos, SEEK_SET);
+	try {
+		if (zipFile.Open(f, false)) {
+			total_size = (u32)zipFile.Size();
+		}
+		else
+		{
+			long pos = f->tell();
+			f->seek(0, SEEK_END);
+			total_size = (u32)f->tell() - pos;
+			f->seek(pos, SEEK_SET);
+		}
+	} catch (const std::exception& e) {
+		if (zipFile.rawFile() != nullptr)
+			zipFile.Close();
+		else
+			delete f;
+		WARN_LOG(SAVESTATE, "Failed to inspect state %s: %s", filename.c_str(), e.what());
+		os_notify(i18n::T("Failed to load state"), 5000, e.what());
+		return StateLoadResult::Rejected;
 	}
 #ifdef USE_HIKARU
 	if (settings.platform.isHikaru() && total_size > 256 * 1024 * 1024 + 64) {
 		os_notify("Hikaru save state is too large", 5000);
 		if (zipFile.rawFile() != nullptr) zipFile.Close();
 		else delete f;
-		return false;
+		return StateLoadResult::Rejected;
 	}
 #endif
-	void *data = malloc(total_size);
-	if (data == nullptr)
+	std::unique_ptr<void, decltype(&free)> data(malloc(total_size), &free);
+	if (!data)
 	{
 		WARN_LOG(SAVESTATE, "Failed to load state - could not malloc %d bytes", total_size);
 		os_notify(i18n::T("Failed to load state"), 5000, i18n::T("Not enough memory"));
@@ -399,54 +430,92 @@ static bool loadState(int index, const std::string& statePath)
 			delete f;
 		else
 			zipFile.Close();
-		return false;
+		return StateLoadResult::Rejected;
 	}
 
 	size_t read_size;
 	if (zipFile.rawFile() != nullptr)
 	{
-		read_size = zipFile.Read(data, total_size);
-		zipFile.Close();
+		try {
+			read_size = zipFile.Read(data.get(), total_size);
+			zipFile.Close();
+		} catch (const std::exception& e) {
+			zipFile.Close();
+			WARN_LOG(SAVESTATE, "Failed to decompress state %s: %s", filename.c_str(), e.what());
+			os_notify(i18n::T("Failed to load state"), 5000, e.what());
+			return StateLoadResult::Rejected;
+		}
 	}
 	else
 	{
-		read_size = f->read(data, 1, total_size);
+		try {
+			read_size = f->read(data.get(), 1, total_size);
+		} catch (const std::exception& e) {
+			delete f;
+			WARN_LOG(SAVESTATE, "Failed to read state %s: %s", filename.c_str(), e.what());
+			os_notify(i18n::T("Failed to load state"), 5000, e.what());
+			return StateLoadResult::Rejected;
+		}
 		delete f;
 	}
 	if (read_size != total_size)
 	{
 		WARN_LOG(SAVESTATE, "Failed to load state - I/O error");
 		os_notify(i18n::T("Failed to load state"), 5000, i18n::T("I/O error"));
-		free(data);
-		return false;
+		return StateLoadResult::Rejected;
 	}
 
-	bool loaded = false;
+	bool applying = false;
 	try {
-		Deserializer deser(data, total_size);
+		Deserializer deser(data.get(), total_size);
+		applying = true;
 		emu.loadstate(deser);
-		loaded = true;
 	    NOTICE_LOG(SAVESTATE, "Loaded state ver %d from %s size %d", deser.version(), filename.c_str(), total_size);
 		if (deser.size() != total_size)
 			// Note: this isn't true for RA savestates
 			WARN_LOG(SAVESTATE, "Savestate size %d but only %d bytes used", total_size, (int)deser.size());
-	} catch (const Deserializer::Exception& e) {
+		return StateLoadResult::Loaded;
+	} catch (const std::exception& e) {
 		ERROR_LOG(SAVESTATE, "%s", e.what());
 		os_notify(i18n::T("Failed to load state"), 5000, e.what());
+		if (applying)
+		{
+			// A late failure can leave devices partially restored. Prevent the
+			// next unload from saving that state over the last known-good one.
+			dc_skipAutoSaveOnNextUnload();
+			return StateLoadResult::PartialApplyFailure;
+		}
+	} catch (...) {
+		ERROR_LOG(SAVESTATE, "Unknown error while loading state");
+		os_notify(i18n::T("Failed to load state"), 5000);
+		if (applying)
+		{
+			dc_skipAutoSaveOnNextUnload();
+			return StateLoadResult::PartialApplyFailure;
+		}
 	}
 
-	free(data);
-	return loaded;
+	return StateLoadResult::Rejected;
 }
 
 void dc_loadstate(int index)
 {
-	loadState(index, "");
+	(void)dc_loadstateResult(index);
+}
+
+StateLoadResult dc_loadstateResult(int index)
+{
+	return loadState(index, "");
 }
 
 bool dc_loadstateForPath(const std::string& statePath)
 {
-	return !statePath.empty() && loadState(0, statePath);
+	return dc_loadstateForPathResult(statePath) == StateLoadResult::Loaded;
+}
+
+StateLoadResult dc_loadstateForPathResult(const std::string& statePath)
+{
+	return statePath.empty() ? StateLoadResult::Rejected : loadState(0, statePath);
 }
 
 time_t dc_getStateCreationDate(int index)

@@ -339,6 +339,8 @@ TEST_F(LibrarySavestateTest, RuntimeResolverUsesCurrentContentRootForSameBasenam
 TEST_F(LibrarySavestateTest, ExplicitMissingResumeStateReportsFailure)
 {
 	ASSERT_TRUE(dc_savestateAllowed());
+	EXPECT_EQ(StateLoadResult::Rejected, dc_loadstateForPathResult(""));
+	EXPECT_EQ(StateLoadResult::Rejected, dc_loadstateForPathResult(stateFile(directory, "missing.state").string()));
 	EXPECT_FALSE(dc_loadstateForPath(""));
 	EXPECT_FALSE(dc_loadstateForPath(stateFile(directory, "missing.state").string()));
 }
