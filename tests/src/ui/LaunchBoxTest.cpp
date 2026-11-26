@@ -453,7 +453,7 @@ TEST_F(LaunchBoxMediaTest, BulkMatchesSurviveRestartWithoutPerItemSnapshots)
  }
 	std::ifstream interruptedLogFile(restartRoot / "launchbox-matches.json.updates", std::ios::binary);
 	const std::string interruptedLog((std::istreambuf_iterator<char>(interruptedLogFile)), std::istreambuf_iterator<char>());
-	std::ofstream(restartRoot / "launchbox-matches.json.updates", std::ios::binary | std::ios::app) << "{\"sequence\":999";
+	std::ofstream(restartRoot / "launchbox-matches.json.updates", std::ios::binary | std::ios::app) << "{\"sequence\":999" << std::string(9000, 'x');
 
  // Copy only files visible at interruption, before the original provider's
  // destructor compacts the log. The second provider replays that state and

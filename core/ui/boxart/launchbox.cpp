@@ -220,19 +220,26 @@ void truncateUpdateLog(const std::string& path)
 	if (!file) throw std::runtime_error("Cannot close LaunchBox match update log: " + path);
 }
 
-void removeIncompleteUpdateTail(const std::string& path)
+std::filesystem::file_type repairUpdateLog(const std::filesystem::path& path)
 {
 	std::error_code typeError;
-	if (!std::filesystem::is_regular_file(std::filesystem::u8path(path), typeError) || typeError) return;
-	std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
-	if (!file) return;
+	const auto type = std::filesystem::status(path, typeError).type();
+	if (typeError && type != std::filesystem::file_type::not_found)
+		throw std::filesystem::filesystem_error("Cannot inspect LaunchBox match update log", path, typeError);
+	if (type != std::filesystem::file_type::regular)
+		return type;
+	std::ifstream file(path, std::ios::binary);
+	if (!file)
+		throw std::runtime_error("Cannot open LaunchBox match update log: " + path.u8string());
 	file.seekg(0, std::ios::end);
 	const std::streamoff size = file.tellg();
-	if (size <= 0) return;
+	if (size < 0)
+		throw std::runtime_error("Cannot measure LaunchBox match update log: " + path.u8string());
+	if (size == 0) return type;
 	file.seekg(-1, std::ios::end);
 	char last = 0;
 	file.get(last);
-	if (last == '\n') return;
+	if (last == '\n') return type;
 	constexpr std::streamoff chunkSize = 4096;
 	std::array<char, chunkSize> buffer{};
 	std::streamoff end = size;
@@ -245,7 +252,7 @@ void removeIncompleteUpdateTail(const std::string& path)
 		file.seekg(start, std::ios::beg);
 		file.read(buffer.data(), length);
 		if (file.gcount() != length)
-			throw std::runtime_error("Cannot read LaunchBox match update log: " + path);
+			throw std::runtime_error("Cannot read LaunchBox match update log: " + path.u8string());
 		for (std::streamoff i = length; i > 0; --i)
 			if (buffer[static_cast<size_t>(i - 1)] == '\n')
 			{
@@ -255,10 +262,9 @@ void removeIncompleteUpdateTail(const std::string& path)
 			}
 		if (end != 0) end = start;
 	}
-	std::error_code error;
-	std::filesystem::resize_file(std::filesystem::u8path(path),
-		validSize, error);
-	if (error) throw std::runtime_error("Cannot repair LaunchBox match update log: " + path);
+	file.close();
+	std::filesystem::resize_file(path, validSize);
+	return type;
 }
 } // namespace
 
@@ -525,10 +531,12 @@ bool LaunchBox::initialize(const std::string& saveDirectory)
 			{
 				WARN_LOG(COMMON, "Ignoring invalid LaunchBox match cache: %s", e.what());
 			}
-			removeIncompleteUpdateTail(directory + "launchbox-matches.json.updates");
-			std::ifstream updatesFile(std::filesystem::u8path(directory + "launchbox-matches.json.updates"), std::ios::binary);
-			if (updatesFile)
+			const auto updatePath = std::filesystem::u8path(directory + "launchbox-matches.json.updates");
+			if (repairUpdateLog(updatePath) == std::filesystem::file_type::regular)
 			{
+				std::ifstream updatesFile(updatePath, std::ios::binary);
+				if (!updatesFile)
+					throw std::runtime_error("Cannot open LaunchBox match update log: " + updatePath.u8string());
 				std::string line;
 				while (std::getline(updatesFile, line))
 				{
@@ -547,6 +555,8 @@ bool LaunchBox::initialize(const std::string& saveDirectory)
 					matchCache->matches[key] = mergeMatchEntry(existing == matchCache->matches.end() ? json::object() : *existing,
 						record["match"]);
 				}
+				if (updatesFile.bad())
+					throw std::runtime_error("Cannot read LaunchBox match update log: " + updatePath.u8string());
 			}
 			matchCache->loaded = true;
 		}
@@ -598,10 +608,13 @@ void LaunchBox::saveMatches(const std::string& key, const json& match)
 	if (bulkActive)
 	{
 		const std::string path = directory + "launchbox-matches.json.updates";
-		removeIncompleteUpdateTail(path);
+		const auto updatePath = std::filesystem::u8path(path);
+		const auto type = repairUpdateLog(updatePath);
+		if (type != std::filesystem::file_type::regular && type != std::filesystem::file_type::not_found)
+			throw std::runtime_error("LaunchBox match update path is not a file: " + path);
 		const uint64_t sequence = ++matchCache->sequence;
 		const std::string serialized = json{{"sequence", sequence}, {"key", key}, {"match", updated}}.dump() + "\n";
-		std::ofstream file(std::filesystem::u8path(path), std::ios::binary | std::ios::app);
+		std::ofstream file(updatePath, std::ios::binary | std::ios::app);
 		if (!file) throw std::runtime_error("Cannot open LaunchBox match update log: " + path);
 		file.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
 		file.flush();
