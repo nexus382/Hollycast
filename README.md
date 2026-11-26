@@ -1,5 +1,7 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 
+<h1 align="center"><strong>DOWNLOADS HERE AT <a href="https://nexus382.github.io/Hollycast/">https://nexus382.github.io/Hollycast/</a></strong></h1>
+
 # Hollycast — Sega Dreamcast and arcade emulator
 
 [Meet the people behind Hollycast — contributors, sources, and special thanks.](CREDITS.md)
