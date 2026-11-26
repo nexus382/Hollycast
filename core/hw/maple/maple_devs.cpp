@@ -446,6 +446,14 @@ bool maple_sega_vmu::writeMigrationImage(FILE *destination, const u8 *image, siz
 	return std::fwrite(image, size, 1, destination) == 1 && std::fflush(destination) == 0;
 }
 
+bool maple_sega_vmu::publishMigrationImage(const std::string& temporary, const std::string& destination)
+{
+	std::error_code error;
+	std::filesystem::create_hard_link(std::filesystem::u8path(temporary),
+			std::filesystem::u8path(destination), error);
+	return !error;
+}
+
 FILE *maple_sega_vmu::reopenMigrationDestination(const std::string& path)
 {
 	return nowide::fopen(path.c_str(), "rb+");
@@ -464,6 +472,25 @@ bool sameVmuImage(const std::string& path, const u8 *image, size_t size)
 			&& std::memcmp(buffer, image, size) == 0;
 	delete file;
 	return matches;
+}
+
+FILE *openVerifiedVmuImage(maple_sega_vmu& vmu, const std::string& path, const u8 *image, size_t size)
+{
+	if (!sameVmuImage(path, image, size))
+		return nullptr;
+	FILE *file = vmu.reopenMigrationDestination(path);
+	if (file == nullptr)
+		return nullptr;
+	std::vector<u8> reopenedImage(size);
+	const bool matches = std::fread(reopenedImage.data(), size, 1, file) == 1
+			&& std::memcmp(reopenedImage.data(), image, size) == 0
+			&& std::fseek(file, 0, SEEK_SET) == 0;
+	if (!matches)
+	{
+		std::fclose(file);
+		return nullptr;
+	}
+	return file;
 }
 
 bool readVmuImage(const std::string& path, u8 *image, size_t size)
@@ -505,8 +532,16 @@ bool migrateVmuImage(maple_sega_vmu& vmu, const std::string& source,
 	if (!isNativeVmuPath(destination))
 		return false;
 	std::error_code error;
-	if (std::filesystem::exists(std::filesystem::u8path(destination), error) || error)
+	const bool destinationExists = std::filesystem::exists(std::filesystem::u8path(destination), error);
+	if (error)
 		return false;
+	if (destinationExists)
+	{
+		// A concurrent publisher can be adopted only when it committed the exact
+		// verified source image. Leave the source alone in this case.
+		destinationFile = openVerifiedVmuImage(vmu, destination, image, size);
+		return destinationFile != nullptr;
+	}
 
 	std::string temporaryPath;
 	FILE *temporary = createVmuMigrationFile(destination, temporaryPath);
@@ -524,34 +559,21 @@ bool migrateVmuImage(maple_sega_vmu& vmu, const std::string& source,
 	}
 
 	// A hard link publishes without replacing a destination created concurrently.
-	std::filesystem::create_hard_link(std::filesystem::u8path(temporaryPath),
-			std::filesystem::u8path(destination), error);
-	if (error)
+	// Some removable filesystems do not support hard links. On those volumes the
+	// caller keeps the verified source open as backing and retries on next setup.
+	const bool published = vmu.publishMigrationImage(temporaryPath, destination);
+	if (!published)
 	{
 		std::filesystem::remove(std::filesystem::u8path(temporaryPath), error);
-		return false;
+		if (!std::filesystem::exists(std::filesystem::u8path(destination), error) || error)
+			return false;
+		destinationFile = openVerifiedVmuImage(vmu, destination, image, size);
+		return destinationFile != nullptr;
 	}
 	std::filesystem::remove(std::filesystem::u8path(temporaryPath), error);
-	destinationFile = vmu.reopenMigrationDestination(destination);
-	if (destinationFile == nullptr || std::fseek(destinationFile, 0, SEEK_SET) != 0)
-	{
-		if (destinationFile != nullptr)
-		{
-			std::fclose(destinationFile);
-			destinationFile = nullptr;
-		}
+	destinationFile = openVerifiedVmuImage(vmu, destination, image, size);
+	if (destinationFile == nullptr)
 		return false;
-	}
-	std::vector<u8> reopenedImage(size);
-	const bool reopenedMatches = std::fread(reopenedImage.data(), size, 1, destinationFile) == 1
-			&& std::memcmp(reopenedImage.data(), image, size) == 0
-			&& std::fseek(destinationFile, 0, SEEK_SET) == 0;
-	if (!reopenedMatches)
-	{
-		std::fclose(destinationFile);
-		destinationFile = nullptr;
-		return false;
-	}
 
 	// The source may be a custom-storage URL or an alias; only retire a distinct,
 	// native source after its identity and bytes have been checked.
@@ -609,9 +631,17 @@ void maple_sega_vmu::OnSetup()
 		std::string wpath = hostfs::getVmuPath(logical_port, true);
 		if (sourceRead)
 		{
-			file = nowide::fopen(wpath.c_str(), "rb+");
-			if (file == nullptr && rpath != wpath)
-				migrateVmuImage(*this, rpath, wpath, flash_data, sizeof(flash_data), file);
+			if (rpath == wpath)
+				file = nowide::fopen(wpath.c_str(), "rb+");
+			else if (!migrateVmuImage(*this, rpath, wpath, flash_data, sizeof(flash_data), file)
+					&& isNativeVmuPath(rpath) && sameVmuImage(rpath, flash_data, sizeof(flash_data)))
+			{
+				// Keep a complete, verified native legacy card writable when atomic
+				// publication is unavailable (for example, on FAT/exFAT).
+				file = nowide::fopen(rpath.c_str(), "rb+");
+			}
+			if (file == nullptr)
+				ERROR_LOG(MAPLE, "VMU %s has no writable backing file; persistent writes will fail", logical_port);
 		}
 		else if (!sourceExists)
 		{
@@ -908,6 +938,12 @@ u32 maple_sega_vmu::dma(u32 cmd)
 						INFO_LOG(MAPLE, "Failed to write VMU %s: overflow", logical_port);
 						skip(write_len);
 						return MDRE_FileError; //invalid params
+					}
+					if (file == nullptr && !memoryOnly)
+					{
+						INFO_LOG(MAPLE, "Failed to write VMU %s: no persistent backing file", logical_port);
+						skip(write_len);
+						return MDRE_FileError;
 					}
 					// Never cross a durable card write when rewinding. Keep saves on the
 					// current timeline, including games which save in several DMA phases.

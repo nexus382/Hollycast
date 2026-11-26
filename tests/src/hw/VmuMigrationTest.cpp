@@ -24,8 +24,10 @@ protected:
 	struct InjectedVmu : maple_sega_vmu
 	{
 		bool failWrite = false;
+		bool failPublish = false;
 		bool failReopen = false;
 		bool memoryOnlySession = false;
+		bool appearCorrectDestination = false;
 		std::string appearingDestination;
 
 		bool isMemoryOnlySession() const override { return memoryOnlySession; }
@@ -39,7 +41,10 @@ protected:
 			if (!appearingDestination.empty())
 			{
 				std::ofstream appeared(appearingDestination, std::ios::binary);
-				appeared << "concurrent destination";
+				if (appearCorrectDestination)
+					appeared.write(reinterpret_cast<const char *>(image), size);
+				else
+					appeared << "concurrent destination";
 			}
 			return true;
 		}
@@ -47,6 +52,11 @@ protected:
 		FILE *reopenMigrationDestination(const std::string& path) override
 		{
 			return failReopen ? nullptr : maple_sega_vmu::reopenMigrationDestination(path);
+		}
+
+		bool publishMigrationImage(const std::string& temporary, const std::string& destination) override
+		{
+			return failPublish ? false : maple_sega_vmu::publishMigrationImage(temporary, destination);
 		}
 	};
 
@@ -118,15 +128,31 @@ protected:
 	}
 
 	std::shared_ptr<maple_sega_vmu> setupVmu(bool failWrite = false, bool failReopen = false,
-			bool memoryOnlySession = false, const std::string& appearingDestination = {})
+			bool memoryOnlySession = false, const std::string& appearingDestination = {}, bool failPublish = false,
+			bool appearCorrectDestination = false)
 	{
 		auto vmu = std::make_shared<InjectedVmu>();
 		vmu->failWrite = failWrite;
+		vmu->failPublish = failPublish;
 		vmu->failReopen = failReopen;
 		vmu->memoryOnlySession = memoryOnlySession;
 		vmu->appearingDestination = appearingDestination;
+		vmu->appearCorrectDestination = appearCorrectDestination;
 		vmu->Setup(0, 0, -1, false);
 		return vmu;
+	}
+
+	u32 writeBlock(maple_sega_vmu& vmu, u32 blockNumber, u8 value)
+	{
+		std::array<u32, 131> input {};
+		std::array<u32, 131> output {};
+		input[0] = MDCF_BlockWrite;
+		input[1] = MFID_1_Storage;
+		input[2] = SWAP32(blockNumber);
+		u8 *block = reinterpret_cast<u8 *>(input.data()) + 3 * sizeof(u32);
+		std::fill(block, block + 512, value);
+		vmu.RawDma(input.data(), sizeof(input), output.data());
+		return output[0] & 0xff;
 	}
 };
 
@@ -157,6 +183,9 @@ TEST_F(VmuMigrationTest, UnreadableSourceIsNotReplacedByABlankCard)
 	{
 		auto vmu = setupVmu();
 		EXPECT_EQ(nullptr, vmu->file);
+		EXPECT_EQ(MDRE_FileError, writeBlock(*vmu, 2, 0x6d));
+		EXPECT_TRUE(std::all_of(std::begin(vmu->flash_data), std::end(vmu->flash_data),
+				[](u8 value) { return value == 0; }));
 	}
 
 	EXPECT_TRUE(fs::is_directory(source));
@@ -175,7 +204,7 @@ TEST_F(VmuMigrationTest, FailedDestinationCreationKeepsSourceAndCanRetry)
 
 	{
 		auto vmu = setupVmu();
-		EXPECT_EQ(nullptr, vmu->file);
+		ASSERT_NE(nullptr, vmu->file);
 	}
 	EXPECT_EQ(image, readImage(source));
 	EXPECT_TRUE(fs::is_regular_file(custom));
@@ -200,7 +229,7 @@ TEST_F(VmuMigrationTest, FailedMigrationWriteKeepsSourceAndCanRetry)
 
 	{
 		auto vmu = setupVmu(true, false);
-		EXPECT_EQ(nullptr, vmu->file);
+		ASSERT_NE(nullptr, vmu->file);
 	}
 	EXPECT_EQ(image, readImage(source));
 	EXPECT_FALSE(fs::exists(destination));
@@ -222,7 +251,7 @@ TEST_F(VmuMigrationTest, FailedReopenKeepsSourceAndVerifiedDestination)
 
 	{
 		auto vmu = setupVmu(false, true);
-		EXPECT_EQ(nullptr, vmu->file);
+		ASSERT_NE(nullptr, vmu->file);
 	}
 	EXPECT_EQ(image, readImage(source));
 	EXPECT_EQ(image, readImage(destination));
@@ -245,10 +274,26 @@ TEST_F(VmuMigrationTest, DestinationAppearingDuringMigrationIsNeverReplaced)
 
 	{
 		auto vmu = setupVmu(false, false, false, destination.string());
-		EXPECT_EQ(nullptr, vmu->file);
+		ASSERT_NE(nullptr, vmu->file);
 	}
 	EXPECT_EQ(image, readImage(source));
 	EXPECT_EQ(std::vector<u8>(appearedBytes.begin(), appearedBytes.end()), readImage(destination));
+}
+
+TEST_F(VmuMigrationTest, MatchingDestinationAppearingDuringMigrationIsUsedSafely)
+{
+	const fs::path source = legacyPerGamePath();
+	const fs::path destination = preferredPath();
+	const auto image = patternedImage();
+	writeImage(source, image);
+
+	{
+		auto vmu = setupVmu(false, false, false, destination.string(), false, true);
+		ASSERT_NE(nullptr, vmu->file);
+		EXPECT_TRUE(std::equal(image.begin(), image.end(), std::begin(vmu->flash_data)));
+	}
+	EXPECT_EQ(image, readImage(source));
+	EXPECT_EQ(image, readImage(destination));
 }
 
 TEST_F(VmuMigrationTest, ExistingDestinationAndSourceAreBothPreserved)
@@ -282,7 +327,7 @@ TEST_F(VmuMigrationTest, GuestReadsCardWithoutMigratingOrPersistingChanges)
 		EXPECT_TRUE(vmu->memoryOnly);
 		EXPECT_EQ(nullptr, vmu->file);
 		EXPECT_TRUE(std::equal(image.begin(), image.end(), std::begin(vmu->flash_data)));
-		vmu->flash_data[0] ^= 0xff;
+		EXPECT_EQ(MDRS_DeviceReply, writeBlock(*vmu, 2, 0x6d));
 		EXPECT_TRUE(vmu->fullSave());
 	}
 
@@ -317,6 +362,35 @@ TEST_F(VmuMigrationTest, SharedLegacyCardMovesAndBlockWritesReachCommittedFile)
 
 	auto expected = image;
 	std::fill(expected.begin() + 2 * 512, expected.begin() + 3 * 512, 0x6d);
+	EXPECT_EQ(expected, readImage(destination));
+	EXPECT_FALSE(fs::exists(source));
+}
+
+TEST_F(VmuMigrationTest, UnsupportedPublicationKeepsLegacyBackingWritableAndRetriesAfterRestart)
+{
+	const fs::path source = legacyPerGamePath();
+	const fs::path destination = preferredPath();
+	const auto image = patternedImage();
+	writeImage(source, image);
+
+	{
+		auto vmu = setupVmu(false, false, false, {}, true);
+		ASSERT_NE(nullptr, vmu->file);
+		EXPECT_TRUE(std::equal(image.begin(), image.end(), std::begin(vmu->flash_data)));
+		EXPECT_EQ(image, readImage(source));
+		EXPECT_EQ(MDRS_DeviceReply, writeBlock(*vmu, 2, 0x6d));
+	}
+
+	auto expected = image;
+	std::fill(expected.begin() + 2 * 512, expected.begin() + 3 * 512, 0x6d);
+	EXPECT_EQ(expected, readImage(source));
+	EXPECT_FALSE(fs::exists(destination));
+
+	{
+		auto vmu = setupVmu();
+		ASSERT_NE(nullptr, vmu->file);
+		EXPECT_TRUE(std::equal(expected.begin(), expected.end(), std::begin(vmu->flash_data)));
+	}
 	EXPECT_EQ(expected, readImage(destination));
 	EXPECT_FALSE(fs::exists(source));
 }
