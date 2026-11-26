@@ -606,6 +606,8 @@ extern Option<int> AutoSkipFrame;		// 0: none, 1: some, 2: more
 extern Option<int> RenderResolution;
 extern Option<bool> IntegerScale;
 extern Option<bool> LinearInterpolation;
+extern Option<bool> MetalFXUpscaling;
+extern Option<bool> MetalFXTemporal;
 extern OptionString PostProcessShader;
 extern Option<std::vector<std::string>> PostProcessShaders;
 extern Option<std::string, false> PostProcessShaderDirectory;

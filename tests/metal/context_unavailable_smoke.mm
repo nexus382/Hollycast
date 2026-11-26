@@ -18,6 +18,7 @@ int main()
 		require(!metalIsAvailable(), "Metal must be unavailable without a device");
 		require(!metalIsAvailable(), "unavailable result remains cached");
 		require(!metalSupportsPerPixel(), "per-pixel rendering requires basic Metal availability");
+		require(!metalSupportsSpatialFX() && !metalSupportsTemporalFX(), "MetalFX requires a Metal device");
 		std::puts("Metal nil-device availability check passed");
 	}
 	return 0;

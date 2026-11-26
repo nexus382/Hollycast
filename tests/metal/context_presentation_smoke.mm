@@ -9,6 +9,7 @@
 #include "context_smoke.mm"
 #undef main
 #include "rend/transform_matrix.h"
+#include "rend/metal/metal_fx.h"
 
 namespace config
 {
@@ -17,7 +18,6 @@ void saveInt(const std::string &, const std::string &, int) {}
 Option<bool, false> VideoRouting("routing", true);
 Option<bool, false> VideoRoutingScale("routingScale", false);
 Option<int, false> VideoRoutingVRes("routingHeight", 60);
-Option<bool> IntegerScale("integerScale", false);
 Option<bool> StretchToFill("stretch", false);
 Option<bool> EmulateFramebuffer("fb", true);
 Option<bool> Widescreen("wide", false);
@@ -61,6 +61,109 @@ static bool nearColor(RGB actual, RGB expected, int tolerance = 8)
 	return std::abs(actual.r - expected.r) <= tolerance && std::abs(actual.g - expected.g) <= tolerance &&
 		   std::abs(actual.b - expected.b) <= tolerance;
 }
+static void checkMetalFX(MetalContext *ctx)
+{
+	if (!metalSupportsSpatialFX()) {
+		std::puts("SKIP MetalFX: spatial scaling unsupported on this device");
+		return;
+	}
+	auto device = ctx->GetDevice();
+	auto queue = ctx->GetQueue();
+	const NSUInteger w = 80, h = 60;
+	auto desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
+	desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+	desc.storageMode = MTLStorageModePrivate;
+	auto color = [device newTextureWithDescriptor:desc];
+	desc.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+	auto depth = [device newTextureWithDescriptor:desc];
+	auto pass = [MTLRenderPassDescriptor renderPassDescriptor];
+	pass.colorAttachments[0].texture = color;
+	pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+	pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+	pass.depthAttachment.texture = depth;
+	pass.depthAttachment.loadAction = MTLLoadActionClear;
+	pass.depthAttachment.storeAction = MTLStoreActionStore;
+	pass.depthAttachment.clearDepth = 0.5;
+
+	MetalSpatialUpscaler spatial;
+	MetalTemporalUpscaler temporal;
+	const bool supportsTemporal = metalSupportsTemporalFX();
+	int viewportW = settings.display.width, viewportH = std::max(1, settings.display.height - getScaledTopInset());
+	int padX, padY;
+	getWindowboxDimensions(viewportW, viewportH, float(w) / h, padX, padY, false);
+	viewportW = std::max(1, viewportW - 2 * padX);
+	viewportH = std::max(1, viewportH - 2 * padY);
+	id<MTLTexture> temporalResult = nil;
+	for (int frame = 0; frame < 3; ++frame) {
+		auto cmd = [queue commandBuffer];
+		pass.colorAttachments[0].clearColor = MTLClearColorMake(1, frame * .25, 0, 1);
+		[[cmd renderCommandEncoderWithDescriptor:pass] endEncoding];
+		require(spatial.encode(cmd, color, w, h) == color, "native-size frame bypasses spatial scaling");
+		auto output = spatial.encode(cmd, color, w * 2, h * 2);
+		require(output != color && output.width == w * 2 && output.height == h * 2, "spatial upscale");
+		if (supportsTemporal) {
+			require(temporal.prepare(color, w * 2, h * 2), "prepare temporal scaler");
+			auto jitter = temporal.jitter();
+			output = temporal.encode(cmd, color, depth);
+			require(output && output.width == w * 2 && output.height == h * 2, "temporal upscale");
+			require(jitter.x != temporal.jitter().x, "temporal sample advances on new input");
+			temporalResult = output;
+		}
+		[cmd commit];
+		[cmd waitUntilCompleted];
+		require(cmd.status == MTLCommandBufferStatusCompleted, cmd.error.localizedDescription.UTF8String ?: "MetalFX GPU pass");
+		config::MetalFXUpscaling = true;
+		config::MetalFXTemporal = supportsTemporal;
+		ctx->PresentFrame(color, float(w) / h, supportsTemporal ? output : nil, viewportW, viewportH);
+		ctx->PresentLastFrame();
+		ctx->WaitIdle();
+		RGB center = pixel((int)captureWidth / 2, (int)captureHeight / 2);
+		require(center.r > 190 && center.b < 25, "MetalFX game image reaches presentation");
+		ctx->PresentLastFrame();
+		ctx->WaitIdle();
+		require(nearColor(pixel((int)captureWidth / 2, (int)captureHeight / 2), center, 1), "retained MetalFX frame");
+	}
+	// A framebuffer upload has no scene depth. Requesting temporal must
+	// produce the same spatial result as explicitly selecting spatial.
+	desc.pixelFormat = MTLPixelFormatRGBA8Unorm;
+	desc.storageMode = metalCpuTextureStorageMode(device);
+	desc.usage = MTLTextureUsageShaderRead;
+	auto upload = [device newTextureWithDescriptor:desc];
+	std::vector<u32> pattern(w * h);
+	for (NSUInteger y = 0; y < h; ++y)
+		for (NSUInteger x = 0; x < w; ++x)
+			pattern[y * w + x] = (x + 2 * y) % 7 < 3 ? 0xffffffff : 0xff000000;
+	[upload replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0 withBytes:pattern.data() bytesPerRow:w * 4];
+	auto captureUpload = [&](id<MTLTexture> temporalOutput = nil, int temporalW = 0, int temporalH = 0) {
+		ctx->PresentFrame(upload, float(w) / h, temporalOutput, temporalW, temporalH);
+		ctx->PresentLastFrame();
+		ctx->WaitIdle();
+		std::vector<u8> pixels;
+		const auto *bytes = (const u8 *)captured.contents;
+		for (NSUInteger y = 0; y < captureHeight; ++y)
+			pixels.insert(pixels.end(), bytes + y * captureStride, bytes + y * captureStride + captureWidth * 4);
+		return pixels;
+	};
+	config::MetalFXUpscaling = false;
+	auto unfiltered = captureUpload();
+	config::MetalFXUpscaling = true;
+	config::MetalFXTemporal = false;
+	auto spatialFrame = captureUpload();
+	require(spatialFrame != unfiltered, "spatial setting changes presented pixels");
+	config::MetalFXTemporal = true;
+	require(captureUpload() == spatialFrame, "framebuffer video uses spatial fallback");
+	if (supportsTemporal) {
+		captureUpload(temporalResult, viewportW, viewportH);
+		RGB center = pixel((int)captureWidth / 2, (int)captureHeight / 2);
+		require(center.r > 190 && center.b < 25, "matching viewport dimensions present the temporal output");
+		require(captureUpload(temporalResult, viewportW + 2, viewportH) == spatialFrame,
+				"stale temporal dimensions fall back to spatial scaling");
+	}
+	config::MetalFXUpscaling = false;
+	config::MetalFXTemporal = false;
+	std::printf("MetalFX spatial%s GPU presentation passed on %s\n", supportsTemporal ? " and temporal" : "", device.name.UTF8String);
+}
+
 int main()
 {
 	@autoreleasepool
@@ -168,6 +271,7 @@ int main()
 		require(middle.r > 70 && middle.r < 190 && middle.g > 70 && middle.g < 190 && middle.b > 70 && middle.b < 190,
 				"linear interpolation");
 		config::LinearInterpolation = false;
+		checkMetalFX(ctx);
 		config::VideoRoutingScale = true;
 		present();
 		require(captureHeight == 60 && captureWidth == (NSUInteger)(60 * w / h), "scaled routing dimensions");

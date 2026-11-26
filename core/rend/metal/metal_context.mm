@@ -4,6 +4,7 @@
 
 #include "metal_context.h"
 #include "metal_api.h"
+#include "metal_fx.h"
 #include "metal_common.h"
 #include "metal_overlay.h"
 #include "sdl/sdl.h"
@@ -52,6 +53,9 @@ struct MetalContext::Impl
 	id<MTLSamplerState> sampler = nil;
 	id<MTLSamplerState> pointSampler = nil;
 	std::unique_ptr<MetalOverlay> overlay;
+	MetalSpatialUpscaler spatial;
+	id<MTLTexture> temporalOutput = nil;
+	int temporalWidth = 0, temporalHeight = 0;
 	id<MTLTexture> lastFrame = nil;
 	id<MTLTexture> lastFrameDepth = nil;
 	std::weak_ptr<const HikaruFrameShader> hikaruFrameShader;
@@ -249,13 +253,19 @@ void MetalContext::resize()
 }
 std::string MetalContext::getDriverName() { return device.name.UTF8String ?: "Metal"; }
 std::string MetalContext::getDriverVersion() { return "Metal"; }
-void MetalContext::PresentFrame(id<MTLTexture> texture, float aspectRatio)
+void MetalContext::PresentFrame(id<MTLTexture> texture, float aspectRatio, id<MTLTexture> temporalOutput,
+		int temporalWidth, int temporalHeight)
 {
+	impl->temporalOutput = temporalOutput;
+	impl->temporalWidth = temporalWidth;
+	impl->temporalHeight = temporalHeight;
 	presentFrame(texture, nil, aspectRatio, {});
 }
 void MetalContext::PresentHikaruFrame(id<MTLTexture> texture, id<MTLTexture> depth, float aspectRatio,
 		const std::shared_ptr<const HikaruFrameShader>& shader)
 {
+	impl->temporalOutput = nil;
+	impl->temporalWidth = impl->temporalHeight = 0;
 	presentFrame(texture, depth, aspectRatio, shader);
 }
 void MetalContext::presentFrame(id<MTLTexture> texture, id<MTLTexture> depth, float aspectRatio,
@@ -438,7 +448,9 @@ void MetalContext::PresentLastFrame()
 		pass.colorAttachments[0].loadAction = MTLLoadActionClear;
 		pass.colorAttachments[0].storeAction = MTLStoreActionStore;
 		pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
-		id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:pass];
+		if (!config::MetalFXUpscaling)
+			impl->spatial = {};
+		id<MTLRenderCommandEncoder> enc = nil;
 		if (showFrame)
 		{
 			int width = (int)drawable.texture.width, height = (int)drawable.texture.height;
@@ -456,10 +468,22 @@ void MetalContext::PresentLastFrame()
 			int vw = contentWidth, vh = contentHeight;
 			if (hikaruCanvas) { dx = hikaruX; dy = hikaruY; vw = hikaruWidth; vh = hikaruHeight; }
 			else if (impl->shaderFullPresentation) { dx = dy = 0; vw = areaWidth; vh = areaHeight; }
+			const bool rotate = config::Rotate90 && !impl->shaderTransformed;
+			id<MTLTexture> source = impl->shaderOutput ?: impl->lastFrame;
+			if (config::MetalFXUpscaling) {
+				// The temporal output is sized for the render-time viewport. Resize,
+				// rotation, scaling or inset changes since then make it stale.
+				if (config::MetalFXTemporal && impl->temporalOutput && !impl->shaderOutput
+						&& impl->temporalWidth == (rotate ? vh : vw) && impl->temporalHeight == (rotate ? vw : vh))
+					source = impl->temporalOutput;
+				else
+					source = impl->spatial.encode(cmd, source, rotate ? vh : vw, rotate ? vw : vh);
+			}
+			enc = [cmd renderCommandEncoderWithDescriptor:pass];
 			performance_overlay::recordOutputViewport(vw, vh);
 			[enc setViewport:MTLViewport{(double)dx, (double)(top + dy), (double)vw, (double)vh, 0, 1}];
 			// Hikaru's canvas already positions the guest image, but still needs any pending rotation.
-			float scale[4] = {0.f, 0.f, config::Rotate90 && !impl->shaderTransformed ? 1.f : 0.f, 0.f};
+			float scale[4] = {0.f, 0.f, rotate ? 1.f : 0.f, 0.f};
 			if (!hikaruCanvas)
 			{
 				float shiftX, shiftY;
@@ -476,12 +500,14 @@ void MetalContext::PresentLastFrame()
 			[enc setScissorRect:MTLScissorRect{(NSUInteger)dx, (NSUInteger)(top + dy), (NSUInteger)vw, (NSUInteger)vh}];
 			[enc setRenderPipelineState:impl->pipeline];
 			[enc setVertexBytes:scale length:sizeof(scale) atIndex:0];
-			[enc setFragmentTexture:impl->shaderOutput ? impl->shaderOutput : impl->lastFrame atIndex:0];
+			[enc setFragmentTexture:source atIndex:0];
 			[enc setFragmentSamplerState:config::LinearInterpolation ? impl->sampler : impl->pointSampler atIndex:0];
 			[enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 			[enc setViewport:MTLViewport{0, 0, (double)width, (double)height, 0, 1}];
 			[enc setScissorRect:MTLScissorRect{0, 0, (NSUInteger)width, (NSUInteger)height}];
 		}
+		else
+			enc = [cmd renderCommandEncoderWithDescriptor:pass];
 		if (!gui_is_open() && impl->lastFrame)
 			impl->overlay->draw(enc, (int)drawable.texture.width, (int)drawable.texture.height,
 								settings.display.uiScale, config::FloatVMUs, true);

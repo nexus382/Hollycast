@@ -6,8 +6,8 @@
 // Standalone (Homebrew SDL2):
 // clang++ -std=c++17 -fobjc-arc -DUSE_SDL -Icore -Icore/deps -Icore/deps/glm \
 //   -Icore/deps/imgui -Icore/deps/nowide/include -Icore/deps/SDL/include \
-//   -I/opt/homebrew/include/SDL2 tests/metal/context_smoke.mm core/rend/metal/metal_context.mm \
-//   -L/opt/homebrew/lib -lSDL2 -framework Cocoa -framework Metal -framework QuartzCore \
+//   -I/opt/homebrew/include/SDL2 tests/metal/context_smoke.mm core/rend/metal/metal_context.mm core/rend/metal/metal_fx.mm \
+//   -L/opt/homebrew/lib -lSDL2 -framework Cocoa -framework Metal -weak_framework MetalFX -framework QuartzCore \
 //   -o /tmp/hollycast-metal-context-smoke
 #include "rend/metal/metal_context.h"
 #include "rend/metal/metal_api.h"
@@ -42,6 +42,9 @@ void deleteEntry(const std::string &, const std::string &) {}
 bool isTransient(const std::string &, const std::string &) { return false; }
 bool loadBool(const std::string &, const std::string &, bool fallback) { return fallback; }
 void saveBool(const std::string &, const std::string &, bool) {}
+Option<bool> IntegerScale("integerScale", false);
+Option<bool> MetalFXUpscaling("fx", false);
+Option<bool> MetalFXTemporal("temporal", false);
 Option<bool> LinearInterpolation("linear", false);
 Option<bool> VSync("vsync", true);
 Option<bool> Rotate90("rotate", false);

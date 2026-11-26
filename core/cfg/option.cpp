@@ -159,6 +159,8 @@ Option<int> AutoSkipFrame("pvr.AutoSkipFrame", 0);
 Option<int> RenderResolution("rend.Resolution", 480);
 Option<bool> IntegerScale("rend.IntegerScale", false);
 Option<bool> LinearInterpolation("rend.LinearInterpolation", true);
+Option<bool> MetalFXUpscaling("rend.MetalFXUpscaling", false);
+Option<bool> MetalFXTemporal("rend.MetalFXTemporal", false);
 OptionString PostProcessShader("rend.PostProcessShader");
 Option<std::vector<std::string>> PostProcessShaders("rend.PostProcessShaders");
 Option<std::string, false> PostProcessShaderDirectory("rend.PostProcessShaderDirectory");

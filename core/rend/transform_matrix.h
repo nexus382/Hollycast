@@ -68,6 +68,11 @@ public:
 	}
 
 	void CalcMatrices(const rend_context *renderingContext, int width = 0, int height = 0);
+	// Subpixel translation in clip space. Hardware scissor rectangles stay fixed.
+	void offsetProjection(float x, float y) {
+		normalMatrix[3][0] += x;
+		normalMatrix[3][1] += y;
+	}
 	Rect getBaseScissor() const;
 	TileClipping getTileClip(u32 val, Rect& clipRect);
 

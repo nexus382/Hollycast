@@ -6070,6 +6070,41 @@ void renderVideoTab()
 			);
 		}
 
+#ifdef USE_METAL
+		if (renderApi == 4)
+		{
+			const bool spatial = metalSupportsSpatialFX();
+			RenderGeneralToggleSettingRow("MetalFXUpscaling", ICON_FA_DISPLAY, T("MetalFX Upscaling"),
+				spatial ? T("Use spatial upscaling when the game image is smaller than its display area.")
+				        : T("MetalFX spatial upscaling is unavailable on this Mac."),
+				spatial && config::MetalFXUpscaling,
+				[](bool enabled) { config::MetalFXUpscaling.set(enabled); },
+				T(
+					"MetalFX Upscaling\n"
+					"Uses Apple's MetalFX spatial upscaler when the game image is smaller than its display area, improving sharpness compared to plain bilinear scaling.\n"
+					"Requires macOS 13 or later and a supported GPU.\n\n"
+					"Off by default. If the image looks soft when stretched to a large window or display, enable it for a sharper result."
+				),
+				!spatial);
+			if (spatial && config::MetalFXUpscaling && !hikaruPlatform)
+			{
+				const bool temporal = metalSupportsTemporalFX();
+				RenderGeneralToggleSettingRow("MetalFXTemporal", ICON_FA_WAND_MAGIC, T("Use Temporal Upscaling"),
+					temporal ? T("Use depth and motion from successive frames. Frames without temporal inputs use spatial upscaling.")
+					         : T("MetalFX temporal upscaling is unavailable on this Mac."),
+					temporal && config::MetalFXTemporal,
+					[](bool enabled) { config::MetalFXTemporal.set(enabled); },
+					T(
+						"Use Temporal Upscaling\n"
+						"Reconstructs the upscaled image using depth and motion information from successive frames for higher quality than spatial upscaling alone.\n"
+						"Frames without valid temporal inputs fall back to spatial upscaling. Requires MetalFX Upscaling, macOS 13 or later and a supported GPU.\n\n"
+						"Experimental: fast motion or transparency may show artifacts. Off by default."
+					),
+					!temporal);
+			}
+		}
+#endif
+
 		RenderGeneralToggleSettingRow(
 			"IntegerScaling",
 			ICON_FA_COMPRESS,
