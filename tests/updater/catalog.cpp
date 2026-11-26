@@ -58,8 +58,11 @@ void fails(const std::function<void()>& action, const char* message) {
 }
 namespace http {
 void init() {}
-int get(const std::string&, std::vector<u8>& bytes, const Headers*, Headers*, int, const std::atomic<bool>*) {
-    bytes.assign(httpBody.begin(), httpBody.end()); return httpStatus;
+int get(const std::string&, std::vector<u8>& bytes, const Headers*, Headers*, int, const std::atomic<bool>*, size_t limit) {
+    bytes.clear();
+    if (!appendBody(bytes, httpBody.data(), httpBody.size(), limit))
+        return bodyTooLarge;
+    return httpStatus;
 }
 }
 int main() {

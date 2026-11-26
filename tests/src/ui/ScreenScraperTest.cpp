@@ -193,6 +193,24 @@ TEST_F(ScreenScraperTest, DownloadsOnlySelectedMediaAndPersistsCredentialFreePat
 	EXPECT_TRUE(needsMedia(art, 3));
 }
 
+TEST_F(ScreenScraperTest, PassesJsonAndImageBudgetsToLimitAwareTransport)
+{
+	std::vector<size_t> limits;
+	Session session(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&, size_t limit) {
+		limits.push_back(limit);
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		bytes = png();
+		return 200;
+	});
+	session.login();
+	ASSERT_EQ(limits.size(), 1u);
+	EXPECT_EQ(limits.back(), 4u * 1024 * 1024);
+	EXPECT_EQ(session.requestImage(1234, "box-2D", "us").size(), png().size());
+	ASSERT_EQ(limits.size(), 2u);
+	EXPECT_EQ(limits.back(), 32u * 1024 * 1024);
+}
+
 TEST_F(ScreenScraperTest, AmbiguousMatchesPreserveExistingArtworkAndDoNotRepeat)
 {
 	int searches = 0;

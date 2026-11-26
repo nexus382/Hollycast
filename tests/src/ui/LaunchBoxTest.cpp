@@ -257,12 +257,13 @@ protected:
  }
  void TearDown() override { std::filesystem::remove_all(root); }
  LaunchBox source() {
-  return LaunchBox([&](const std::string& url, std::vector<u8>& bytes, std::string& type) {
+  return LaunchBox([&](const std::string& url, std::vector<u8>& bytes, std::string& type, size_t maxBytes) {
    ++downloads;
    if (url.find("Metadata.zip") != std::string::npos) { ADD_FAILURE() << "The cached catalog should be reused"; return 500; }
    if (failLogo && url.find("logo.png") != std::string::npos) return 503;
    if (url.find("https://images.launchbox-app.com/") == 0)
    {
+    mediaLimit = maxBytes;
     if (observeMatchCacheDuringImages && imageRequests > 0 && std::filesystem::exists(root / "launchbox-matches.json"))
      matchCachePresentDuringLaterImage = true;
     ++imageRequests;
@@ -275,7 +276,7 @@ protected:
    return 200;
   });
  }
- std::filesystem::path root; GameBoxart item; int downloads = 0, imageRequests = 0;
+ std::filesystem::path root; GameBoxart item; int downloads = 0, imageRequests = 0; size_t mediaLimit = 0;
  bool failLogo = false, observeMatchCacheDuringImages = false, matchCachePresentDuringLaterImage = false;
 };
 
@@ -283,6 +284,7 @@ TEST_F(LaunchBoxMediaTest, CoversStayAutomaticAndManualRequestsFillDistinctSlots
 {
  auto scraper = source(); ASSERT_TRUE(scraper.initialize(root.string()));
  scraper.scrape(item);
+ EXPECT_EQ(mediaLimit, 64u * 1024 * 1024);
  ASSERT_EQ(1, downloads); ASSERT_EQ(1u, item.launchboxMedia.size());
  const auto cover = item.boxartPath;
  item.requestedMedia = artwork::allMedia; scraper.scrape(item);

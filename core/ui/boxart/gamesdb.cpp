@@ -135,7 +135,7 @@ json TheGamesDb::httpGet(const std::string& url)
     };
     std::vector<u8> bytes;
     std::string type;
-    const int status = transport ? transport(url, bytes, type) : http::get(url, bytes, type);
+    const int status = transport ? transport(url, bytes, type, http::unlimitedBody) : http::get(url, bytes, type);
     checkAuthorization(status);
     if (!http::success(status) || bytes.empty())
     {
