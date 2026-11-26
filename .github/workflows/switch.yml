@@ -8,7 +8,8 @@ jobs:
   build:
     name: Switch ${{ matrix.config.name }}
     runs-on: ubuntu-latest
-    container: devkitpro/devkita64:latest
+    # SDK bump: inspect the candidate digest, then run both Release install variants below.
+    container: devkitpro/devkita64@sha256:82575ea78651b530b2e232bb3799cfd1fe331514e053d5f724bb4b28191fb79d
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -36,8 +37,8 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-switch-${{ matrix.config.name }}-${{ github.sha }}
-          restore-keys: ccache-switch-${{ matrix.config.name }}-
+          key: ccache-switch-${{ matrix.config.name }}-${{ hashFiles('.github/workflows/switch.yml') }}-${{ github.sha }}
+          restore-keys: ccache-switch-${{ matrix.config.name }}-${{ hashFiles('.github/workflows/switch.yml') }}-
 
       - name: CMake
         env:
