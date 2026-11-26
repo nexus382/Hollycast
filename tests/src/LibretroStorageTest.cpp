@@ -161,37 +161,82 @@ bool RETRO_CALLCONV environment(unsigned command, void *data)
 	return true;
 }
 
-void initializeVfs(const std::filesystem::path& root)
+bool RETRO_CALLCONV defaultEnvironment(unsigned command, void *data)
 {
-	std::filesystem::create_directories(root);
-	vfs = {};
-	vfs.open = openFile;
-	vfs.close = closeFile;
-	vfs.size = fileSize;
-	vfs.tell = fileTell;
-	vfs.seek = fileSeek;
-	vfs.read = fileRead;
-	vfs.write = fileWrite;
-	vfs.flush = fileFlush;
-	vfs.remove = removeFile;
-	vfs.rename = renameFile;
-	vfs.stat = pathStat;
-	hostfs::LibretroStorage::initialise(environment);
-	std::lock_guard<std::mutex> lock(callbacks.mutex);
-	callbacks.target.clear();
-	callbacks.failPublish = false;
-	callbacks.failRollback = false;
-	callbacks.failBackupCleanup = false;
-	callbacks.blockBackupRename = false;
-	callbacks.backupRenameEntered = false;
-	callbacks.releaseBackupRename = false;
+	if (command != RETRO_ENVIRONMENT_GET_VFS_INTERFACE)
+		return false;
+	auto *info = static_cast<retro_vfs_interface_info *>(data);
+	info->iface = nullptr;
+	return true;
 }
 
-std::filesystem::path makeRoot()
+std::filesystem::path createUniqueRoot()
 {
-	return std::filesystem::temp_directory_path()
-			/ ("hollycast-libretro-storage-" + std::to_string(++rootId));
+	for (unsigned attempt = 0; attempt < 128; ++attempt)
+	{
+		const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+		const auto root = std::filesystem::temp_directory_path()
+				/ ("hollycast-libretro-storage-" + std::to_string(stamp) + "-" + std::to_string(++rootId));
+		std::error_code error;
+		if (std::filesystem::create_directory(root, error))
+			return root;
+	}
+	throw std::runtime_error("Could not create a unique libretro storage test directory");
 }
+
+class ScopedVfs
+{
+public:
+	ScopedVfs() : root(createUniqueRoot())
+	{
+		vfs = {};
+		vfs.open = openFile;
+		vfs.close = closeFile;
+		vfs.size = fileSize;
+		vfs.tell = fileTell;
+		vfs.seek = fileSeek;
+		vfs.read = fileRead;
+		vfs.write = fileWrite;
+		vfs.flush = fileFlush;
+		vfs.remove = removeFile;
+		vfs.rename = renameFile;
+		vfs.stat = pathStat;
+		{
+			std::lock_guard<std::mutex> lock(callbacks.mutex);
+			callbacks.target.clear();
+			callbacks.failPublish = false;
+			callbacks.failRollback = false;
+			callbacks.failBackupCleanup = false;
+			callbacks.blockBackupRename = false;
+			callbacks.backupRenameEntered = false;
+			callbacks.releaseBackupRename = false;
+		}
+		hostfs::LibretroStorage::initialise(environment);
+	}
+
+	~ScopedVfs()
+	{
+		hostfs::LibretroStorage::initialise(defaultEnvironment);
+		vfs = {};
+		{
+			std::lock_guard<std::mutex> lock(callbacks.mutex);
+			callbacks.target.clear();
+			callbacks.failPublish = false;
+			callbacks.failRollback = false;
+			callbacks.failBackupCleanup = false;
+			callbacks.blockBackupRename = false;
+			callbacks.backupRenameEntered = false;
+			callbacks.releaseBackupRename = false;
+		}
+		std::error_code error;
+		std::filesystem::remove_all(root, error);
+	}
+
+	const std::filesystem::path& path() const { return root; }
+
+private:
+	std::filesystem::path root;
+};
 
 void writeBytes(const std::filesystem::path& path, const std::string& bytes)
 {
@@ -225,8 +270,8 @@ std::string stage(hostfs::AllStorage& storage, const std::string& destination, c
 
 TEST(LibretroStorageTest, AllStorageRecoversSavestateAndMappingOnFirstLookup)
 {
-	const auto root = makeRoot();
-	initializeVfs(root);
+	ScopedVfs scopedVfs;
+	const auto& root = scopedVfs.path();
 	hostfs::AllStorage& storage = hostfs::storage();
 
 	for (const std::string name : {"slot.state", "mapping.cfg.save"})
@@ -256,13 +301,15 @@ TEST(LibretroStorageTest, AllStorageRecoversSavestateAndMappingOnFirstLookup)
 
 TEST(LibretroStorageTest, FrontendStatRecognizesConfiguredDirectoryForNewChildren)
 {
-	const auto root = makeRoot();
-	initializeVfs(root);
+	ScopedVfs scopedVfs;
+	const auto& root = scopedVfs.path();
 	hostfs::AllStorage& storage = hostfs::storage();
 	const std::string destination = (root / "fresh.state").string();
 
 	EXPECT_TRUE(hostfs::customStorage().isKnownPath(root.string()));
 	EXPECT_TRUE(hostfs::customStorage().isKnownPathForWrite(destination));
+	vfs.opendir = nullptr;
+	EXPECT_TRUE(storage.listContent(root.string()).empty());
 	std::string temporary;
 	std::unique_ptr<hostfs::File> file(storage.createTemporaryFile(destination, temporary));
 	ASSERT_NE(file, nullptr);
@@ -274,8 +321,8 @@ TEST(LibretroStorageTest, FrontendStatRecognizesConfiguredDirectoryForNewChildre
 
 TEST(LibretroStorageTest, PublicLookupRetriesRollbackAfterInitialFailure)
 {
-	const auto root = makeRoot();
-	initializeVfs(root);
+	ScopedVfs scopedVfs;
+	const auto& root = scopedVfs.path();
 	const auto destination = root / "slot.state";
 	const std::string destinationPath = destination.string();
 	writeBytes(destination, "old bytes");
@@ -304,8 +351,8 @@ TEST(LibretroStorageTest, PublicLookupRetriesRollbackAfterInitialFailure)
 
 TEST(LibretroStorageTest, FailedCommittedCleanupKeepsBothCompleteVersions)
 {
-	const auto root = makeRoot();
-	initializeVfs(root);
+	ScopedVfs scopedVfs;
+	const auto& root = scopedVfs.path();
 	const auto destination = root / "slot.state";
 	const std::string destinationPath = destination.string();
 	writeBytes(destination, "old bytes");
@@ -332,8 +379,8 @@ TEST(LibretroStorageTest, FailedCommittedCleanupKeepsBothCompleteVersions)
 
 TEST(LibretroStorageTest, ReaderWaitsForStagedOverwriteTransaction)
 {
-	const auto root = makeRoot();
-	initializeVfs(root);
+	ScopedVfs scopedVfs;
+	const auto& root = scopedVfs.path();
 	const auto destination = root / "slot.state";
 	const std::string destinationPath = destination.string();
 	writeBytes(destination, "old bytes");

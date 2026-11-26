@@ -114,6 +114,10 @@ std::vector<hostfs::FileInfo> hostfs::LibretroStorage::listContent(const std::st
 	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
 	std::vector<FileInfo> list;
 
+	if (vfs_interface == nullptr || vfs_interface->opendir == nullptr
+			|| vfs_interface->readdir == nullptr || vfs_interface->dirent_get_name == nullptr
+			|| vfs_interface->closedir == nullptr)
+		return list;
 	struct retro_vfs_dir_handle* dir = vfs_interface->opendir(path.c_str(), true);
 
 	if (dir == nullptr)
@@ -122,6 +126,8 @@ std::vector<hostfs::FileInfo> hostfs::LibretroStorage::listContent(const std::st
 	while (vfs_interface->readdir(dir))
 	{
 		const auto entry_name = vfs_interface->dirent_get_name(dir);
+		if (entry_name == nullptr)
+			continue;
 		const auto entry_path = path + PATH_DEFAULT_SLASH_C() + entry_name;
 
 		list.emplace_back(makeFileInfo(entry_name, entry_path));
