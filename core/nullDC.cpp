@@ -19,6 +19,7 @@
 #include "lua/lua.h"
 #include "stdclass.h"
 #include "serialize.h"
+#include <memory>
 #include "oslib/i18n.h"
 #include "input/dreamlink/maplelinkregistry.h"
 #include "input/dreamlink/maplelink.h"
@@ -248,6 +249,7 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 	}
 
 	hostfs::File *f = nullptr;
+	std::unique_ptr<hostfs::AtomicFile> atomicFile;
 	std::string filename = "";
 #ifdef HAS_FMEMOPEN
 	if (index == -2)
@@ -262,14 +264,18 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 		}
 		else
 #endif
-			f = new hostfs::StdFile(fmemopen(quicksave_buf, QUICKSAVE_DEFAULT_SIZE, "wb"));
+		{
+			if (FILE *stream = fmemopen(quicksave_buf, QUICKSAVE_DEFAULT_SIZE, "wb"))
+				f = new hostfs::StdFile(stream);
+		}
 	}
 	else
 #endif
 	{
 		// regular file savestate
 		filename = hostfs::getSavestatePath(index, true);
-		f = hostfs::storage().openFile(filename.c_str(), "wb");
+		atomicFile = std::make_unique<hostfs::AtomicFile>(hostfs::storage(), filename);
+		f = atomicFile->file();
 	}
 
 	if (f == nullptr)
@@ -289,10 +295,23 @@ void dc_savestate(int index, const u8 *pngData, u32 pngSize)
 		goto fail;
 
 	if (!zipFile.Open(f, true))
+	{
+#ifdef HAS_FMEMOPEN
+		if (index == -2)
+			delete f;
+#endif
+		f = nullptr;
 		goto fail;
+	}
+	if (atomicFile != nullptr)
+		atomicFile->takeFile();
+	f = nullptr;
 	if (zipFile.Write(data.data(), ser.size()) != ser.size())
 		goto fail;
-	zipFile.Close();
+	if (!zipFile.Finish())
+		goto fail;
+	if (atomicFile != nullptr && !atomicFile->publish())
+		goto fail;
 
 #if defined(HAS_FMEMOPEN) && defined(USE_HIKARU)
 	if (index == -2 && settings.platform.isHikaru()) hikaru_quicksave_buf.swap(ramState);
@@ -305,8 +324,8 @@ fail:
 	WARN_LOG(SAVESTATE, "Failed to save state - error writing %s", filename.c_str());
 	os_notify(i18n::T("Error saving state"), 5000);
 	if (zipFile.rawFile() != nullptr)
-		zipFile.Close();
-	else
+		zipFile.Finish();
+	else if (atomicFile == nullptr)
 		delete f;
 	// delete failed savestate?
 }

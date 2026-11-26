@@ -34,6 +34,9 @@ public:
 		jstorage = env->NewGlobalRef(storage);
 		jni::Class clazz(env->GetObjectClass(storage));
 		jopenFile = env->GetMethodID(clazz, "openFile", "(Ljava/lang/String;Ljava/lang/String;)I");
+		jcreateTemporaryFile = env->GetMethodID(clazz, "createTemporaryFile", "(Ljava/lang/String;)Ljava/lang/String;");
+		jreplaceFile = env->GetMethodID(clazz, "replaceFile", "(Ljava/lang/String;Ljava/lang/String;)Z");
+		jremoveFile = env->GetMethodID(clazz, "removeFile", "(Ljava/lang/String;)Z");
 		jlistContent = env->GetMethodID(clazz, "listContent", "(Ljava/lang/String;)[Lcom/hollycast/emulator/FileInfo;");
 		jgetParentUri = env->GetMethodID(clazz, "getParentUri", "(Ljava/lang/String;)Ljava/lang/String;");
 		jgetSubPath = env->GetMethodID(clazz, "getSubPath", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
@@ -82,6 +85,32 @@ public:
 			return nullptr;
 
 		return new StdFile(file);
+	}
+
+	File *createTemporaryFile(const std::string& destination, std::string& temporaryPath) override
+	{
+		jni::String jdestination(destination);
+		jni::String jtemporary(jni::env()->CallObjectMethod(jstorage, jcreateTemporaryFile, (jstring)jdestination));
+		checkException();
+		temporaryPath = jtemporary;
+		return temporaryPath.empty() ? nullptr : openFile(temporaryPath, "wb");
+	}
+
+	bool replaceFile(const std::string& temporaryPath, const std::string& destination) override
+	{
+		jni::String jtemporary(temporaryPath);
+		jni::String jdestination(destination);
+		bool result = jni::env()->CallBooleanMethod(jstorage, jreplaceFile, (jstring)jtemporary, (jstring)jdestination);
+		checkException();
+		return result;
+	}
+
+	bool removeFile(const std::string& path) override
+	{
+		jni::String jpath(path);
+		bool result = jni::env()->CallBooleanMethod(jstorage, jremoveFile, (jstring)jpath);
+		checkException();
+		return result;
 	}
 
 	std::vector<FileInfo> listContent(const std::string& uri) override
@@ -231,6 +260,9 @@ private:
 
 	jobject jstorage;
 	jmethodID jopenFile;
+	jmethodID jcreateTemporaryFile;
+	jmethodID jreplaceFile;
+	jmethodID jremoveFile;
 	jmethodID jlistContent;
 	jmethodID jgetParentUri;
 	jmethodID jaddStorage;

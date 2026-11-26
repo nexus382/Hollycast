@@ -58,6 +58,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
         src/oslib/DirectoryTest.cpp
+        src/oslib/SavestateWriteTest.cpp
         src/rend/SampleTextureFilterTest.cpp
         src/rend/TextureAtlasTest.cpp
         src/rend/CustomTextureDumpTest.cpp
