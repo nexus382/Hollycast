@@ -100,6 +100,7 @@ if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/RewindTest.cpp
         src/util/RewindBufferTest.cpp
+        src/hw/VmuMigrationTest.cpp
         src/oslib/VmuPathTest.cpp
         src/DcnetProbeTest.cpp
         src/network/HttpTimeoutTest.cpp
