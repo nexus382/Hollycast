@@ -474,16 +474,14 @@ bool sameVmuImage(const std::string& path, const u8 *image, size_t size)
 	return matches;
 }
 
-FILE *openVerifiedVmuImage(maple_sega_vmu& vmu, const std::string& path, const u8 *image, size_t size)
+FILE *verifyVmuBacking(FILE *file, const u8 *image, size_t size)
 {
-	if (!sameVmuImage(path, image, size))
-		return nullptr;
-	FILE *file = vmu.reopenMigrationDestination(path);
 	if (file == nullptr)
 		return nullptr;
 	std::vector<u8> reopenedImage(size);
 	const bool matches = std::fread(reopenedImage.data(), size, 1, file) == 1
 			&& std::memcmp(reopenedImage.data(), image, size) == 0
+			&& std::fgetc(file) == EOF && !std::ferror(file)
 			&& std::fseek(file, 0, SEEK_SET) == 0;
 	if (!matches)
 	{
@@ -539,7 +537,7 @@ bool migrateVmuImage(maple_sega_vmu& vmu, const std::string& source,
 	{
 		// A concurrent publisher can be adopted only when it committed the exact
 		// verified source image. Leave the source alone in this case.
-		destinationFile = openVerifiedVmuImage(vmu, destination, image, size);
+		destinationFile = verifyVmuBacking(vmu.reopenMigrationDestination(destination), image, size);
 		return destinationFile != nullptr;
 	}
 
@@ -567,11 +565,11 @@ bool migrateVmuImage(maple_sega_vmu& vmu, const std::string& source,
 		std::filesystem::remove(std::filesystem::u8path(temporaryPath), error);
 		if (!std::filesystem::exists(std::filesystem::u8path(destination), error) || error)
 			return false;
-		destinationFile = openVerifiedVmuImage(vmu, destination, image, size);
+		destinationFile = verifyVmuBacking(vmu.reopenMigrationDestination(destination), image, size);
 		return destinationFile != nullptr;
 	}
 	std::filesystem::remove(std::filesystem::u8path(temporaryPath), error);
-	destinationFile = openVerifiedVmuImage(vmu, destination, image, size);
+	destinationFile = verifyVmuBacking(vmu.reopenMigrationDestination(destination), image, size);
 	if (destinationFile == nullptr)
 		return false;
 
@@ -634,11 +632,10 @@ void maple_sega_vmu::OnSetup()
 			if (rpath == wpath)
 				file = nowide::fopen(wpath.c_str(), "rb+");
 			else if (!migrateVmuImage(*this, rpath, wpath, flash_data, sizeof(flash_data), file)
-					&& isNativeVmuPath(rpath) && sameVmuImage(rpath, flash_data, sizeof(flash_data)))
+					&& isNativeVmuPath(rpath) && hostfs::getVmuPath(logical_port, false) == rpath)
 			{
-				// Keep a complete, verified native legacy card writable when atomic
-				// publication is unavailable (for example, on FAT/exFAT).
-				file = nowide::fopen(rpath.c_str(), "rb+");
+				// Only acknowledge writes to a legacy card if the next setup will select it.
+				file = verifyVmuBacking(nowide::fopen(rpath.c_str(), "rb+"), flash_data, sizeof(flash_data));
 			}
 			if (file == nullptr)
 				ERROR_LOG(MAPLE, "VMU %s has no writable backing file; persistent writes will fail", logical_port);

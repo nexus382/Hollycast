@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gtest/gtest.h"
 #include "cfg/option.h"
+#include "emulator.h"
+#include "hw/mem/addrspace.h"
 #include "hw/maple/maple_devs.h"
 #include "oslib/vmu_path.h"
 #include "stdclass.h"
@@ -21,6 +23,13 @@ namespace fs = std::filesystem;
 class VmuMigrationTest : public ::testing::Test
 {
 protected:
+	static void SetUpTestSuite()
+	{
+		// Maple block writes timestamp the card with the emulated SH4 clock.
+		ASSERT_TRUE(addrspace::reserve());
+		emu.init();
+	}
+
 	struct InjectedVmu : maple_sega_vmu
 	{
 		bool failWrite = false;
@@ -251,7 +260,8 @@ TEST_F(VmuMigrationTest, FailedReopenKeepsSourceAndVerifiedDestination)
 
 	{
 		auto vmu = setupVmu(false, true);
-		ASSERT_NE(nullptr, vmu->file);
+		EXPECT_EQ(MDRE_FileError, writeBlock(*vmu, 2, 0x6d));
+		EXPECT_TRUE(std::equal(image.begin(), image.end(), std::begin(vmu->flash_data)));
 	}
 	EXPECT_EQ(image, readImage(source));
 	EXPECT_EQ(image, readImage(destination));
@@ -274,7 +284,8 @@ TEST_F(VmuMigrationTest, DestinationAppearingDuringMigrationIsNeverReplaced)
 
 	{
 		auto vmu = setupVmu(false, false, false, destination.string());
-		ASSERT_NE(nullptr, vmu->file);
+		EXPECT_EQ(MDRE_FileError, writeBlock(*vmu, 2, 0x6d));
+		EXPECT_TRUE(std::equal(image.begin(), image.end(), std::begin(vmu->flash_data)));
 	}
 	EXPECT_EQ(image, readImage(source));
 	EXPECT_EQ(std::vector<u8>(appearedBytes.begin(), appearedBytes.end()), readImage(destination));
