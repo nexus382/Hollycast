@@ -268,6 +268,18 @@ std::string stage(hostfs::AllStorage& storage, const std::string& destination, c
 
 } // namespace
 
+TEST(LibretroStorageTest, DecliningTheFrontendRestoresNativeStorage)
+{
+	ScopedVfs scopedVfs;
+	const auto existing = (scopedVfs.path() / "native.state").string();
+	writeBytes(existing, "native slot");
+	ASSERT_TRUE(hostfs::customStorage().isKnownPath(existing));
+	hostfs::LibretroStorage::initialise([](unsigned, void *) -> bool { return false; });
+	EXPECT_FALSE(hostfs::customStorage().isKnownPath(existing));
+	EXPECT_FALSE(hostfs::customStorage().isKnownPathForWrite(existing));
+	EXPECT_EQ("native slot", readStorageFile(hostfs::storage(), existing));
+}
+
 TEST(LibretroStorageTest, AllStorageRecoversSavestateAndMappingOnFirstLookup)
 {
 	ScopedVfs scopedVfs;

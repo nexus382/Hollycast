@@ -62,12 +62,10 @@ hostfs::FileInfo hostfs::LibretroStorage::makeFileInfo(std::string name, std::st
 
 void hostfs::LibretroStorage::initialise(retro_environment_t environ_cb)
 {
-	retro_vfs_interface_info vfs_interface_info;
-	vfs_interface_info.required_interface_version = 3; // We really want those directory functions.
-
+	retro_vfs_interface_info vfs_interface_info{};
+	vfs_interface_info.required_interface_version = 3;
 	if (!environ_cb(RETRO_ENVIRONMENT_GET_VFS_INTERFACE, &vfs_interface_info))
-		return;
-
+		vfs_interface_info.iface = nullptr;
 	vfs_interface = vfs_interface_info.iface;
 
 	filestream_vfs_init(&vfs_interface_info);
@@ -77,6 +75,8 @@ void hostfs::LibretroStorage::initialise(retro_environment_t environ_cb)
 bool hostfs::LibretroStorage::isKnownPath(const std::string& path)
 {
 	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (vfs_interface == nullptr)
+		return false;
 	if (isTransactionalReplacementPath(path))
 	{
 		recoverInterruptedReplacementUnlocked(path);
@@ -90,6 +90,8 @@ bool hostfs::LibretroStorage::isKnownPath(const std::string& path)
 bool hostfs::LibretroStorage::isKnownPathForWrite(const std::string& path)
 {
 	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (vfs_interface == nullptr)
+		return false;
 	if (isTransactionalReplacementPath(path))
 		recoverInterruptedReplacementUnlocked(path);
 	if (rawPathExists(path))

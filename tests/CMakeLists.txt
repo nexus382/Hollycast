@@ -78,27 +78,15 @@ target_sources(${PROJECT_NAME} PRIVATE
 
 if(LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp)
-elseif(BUILD_TESTING)
-    # Exercise the production libretro backend in the normal Google Test
-    # executable, without adding tests or a runner to the libretro shared core.
-    set(libretro_storage_test_sources
-        ${PROJECT_SOURCE_DIR}/shell/libretro/storage.cpp
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/memmap/memalign.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/file/file_path.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/file/file_path_io.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/vfs/vfs_implementation.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/encodings/encoding_utf.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/compat/compat_strl.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/compat/fopen_utf8.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/compat/compat_strcasestr.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/file/retro_dirent.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/streams/file_stream.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/time/rtime.c
-        ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/string/stdstring.c)
-    target_sources(${PROJECT_NAME} PRIVATE src/LibretroStorageTest.cpp ${libretro_storage_test_sources})
-    target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/include)
-    set_property(SOURCE ${PROJECT_SOURCE_DIR}/core/oslib/storage.cpp
-        ${PROJECT_SOURCE_DIR}/shell/libretro/storage.cpp ${libretro_storage_test_sources}
+elseif(NOT ANDROID AND NOT IOS AND NOT NINTENDO_SWITCH AND NOT WINDOWS_STORE)
+    # The desktop test executable can install a frontend VFS for this suite.
+    # With no frontend installed, AllStorage continues to use native files.
+    set(storage_test_source ${CMAKE_CURRENT_SOURCE_DIR}/src/LibretroStorageTest.cpp)
+    set(vfs_backend_source ${PROJECT_SOURCE_DIR}/shell/libretro/storage.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE ${storage_test_source} ${vfs_backend_source} ${libretro_vfs_sources})
+    set_property(SOURCE ${storage_test_source} ${vfs_backend_source} ${libretro_vfs_sources}
+        DIRECTORY ${PROJECT_SOURCE_DIR} APPEND PROPERTY INCLUDE_DIRECTORIES ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/include)
+    set_property(SOURCE ${PROJECT_SOURCE_DIR}/core/oslib/storage.cpp ${vfs_backend_source} ${libretro_vfs_sources}
         DIRECTORY ${PROJECT_SOURCE_DIR} APPEND PROPERTY COMPILE_DEFINITIONS LIBRETRO)
     if(ENABLE_CTEST)
         # Build with: cmake --build <build-dir> --target Hollycast
