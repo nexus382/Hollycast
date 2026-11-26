@@ -156,7 +156,8 @@ struct StateHeader
 	u32 pngSize = 0;
 };
 
-bool save(FakeStorage& storage, const std::string& path, const std::vector<u8>& payload,
+template<typename StorageType>
+bool save(StorageType& storage, const std::string& path, const std::vector<u8>& payload,
 		const std::vector<u8>& preview = {})
 {
 	hostfs::AtomicFile transaction(storage, path);
@@ -176,7 +177,8 @@ bool save(FakeStorage& storage, const std::string& path, const std::vector<u8>& 
 	return transaction.publish();
 }
 
-bool load(FakeStorage& storage, const std::string& path, std::vector<u8>& payload,
+template<typename StorageType>
+bool load(StorageType& storage, const std::string& path, std::vector<u8>& payload,
 		std::vector<u8>& preview)
 {
 	std::unique_ptr<hostfs::File> file(storage.openFile(path, "rb"));
@@ -385,6 +387,28 @@ TEST(SavestateWriteTest, NativeSiblingTransactionReplacesAndCleansUp)
 	std::filesystem::remove_all(root);
 }
 
+TEST(SavestateWriteTest, NativeSaveAndReplacementReloadPayload)
+{
+	const auto root = std::filesystem::temp_directory_path()
+		/ ("hollycast-save-reload-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+	ASSERT_TRUE(std::filesystem::create_directory(root));
+	const auto destination = root / "slot.state";
+	ASSERT_TRUE(save(hostfs::storage(), destination.string(), oldPayload, preview));
+	std::vector<u8> loaded, loadedPreview;
+	ASSERT_TRUE(load(hostfs::storage(), destination.string(), loaded, loadedPreview));
+	EXPECT_EQ(loaded, oldPayload);
+	EXPECT_EQ(loadedPreview, preview);
+
+	ASSERT_TRUE(save(hostfs::storage(), destination.string(), newPayload));
+	loaded.clear();
+	loadedPreview.clear();
+	ASSERT_TRUE(load(hostfs::storage(), destination.string(), loaded, loadedPreview));
+	EXPECT_EQ(loaded, newPayload);
+	EXPECT_TRUE(loadedPreview.empty());
+	EXPECT_EQ(std::distance(std::filesystem::directory_iterator(root), std::filesystem::directory_iterator{}), 1);
+	std::filesystem::remove_all(root);
+}
+
 #ifndef _WIN32
 TEST(SavestateWriteTest, NativeOverwritePreservesPrivateModeAndAccessAcl)
 {
@@ -517,7 +541,7 @@ TEST(SavestateWriteTest, NativeOverwritePreservesPrivateModeAndAccessAcl)
 		oldFile << "slot without an ACL";
 	}
 	ASSERT_EQ(chmod(inheritedDestination.c_str(), 0640), 0);
-	const int removeAclResult = fremovexattr(inheritedDestination.c_str(), "system.posix_acl_access");
+	const int removeAclResult = removexattr(inheritedDestination.c_str(), "system.posix_acl_access");
 	ASSERT_TRUE(removeAclResult == 0 || errno == ENODATA || errno == EOPNOTSUPP || errno == ENOTSUP);
 	const PosixAclEntry defaultAclEntries[] = {
 		{1, 7, 0xffffffffu},
