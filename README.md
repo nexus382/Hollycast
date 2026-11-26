@@ -1,6 +1,6 @@
 <!-- Portions Copyright 2026 The Hollycast Authors -->
 
-<h1 align="center"><strong>DOWNLOADS HERE AT <a href="https://nexus382.github.io/Hollycast/">https://nexus382.github.io/Hollycast/</a></strong></h1>
+### Find all Hollycast download links at [nexus382.github.io/Hollycast](https://nexus382.github.io/Hollycast/)
 
 # Hollycast — Sega Dreamcast and arcade emulator
 
@@ -40,7 +40,7 @@ Hollycast is an open-source emulator for Sega Dreamcast, NAOMI, NAOMI 2 and Atom
 
 ## Download
 
-Prebuilt binaries for every platform are on the **[latest release page](https://github.com/nexus382/Hollycast/releases/latest)**. Each release includes a `SHA256SUMS.txt` file so you can check your download.
+Find downloads for all platforms at **[nexus382.github.io/Hollycast](https://nexus382.github.io/Hollycast/)**. Prebuilt binaries are also on the **[latest release page](https://github.com/nexus382/Hollycast/releases/latest)**, along with a `SHA256SUMS.txt` file so you can check your download.
 
 | Platform | Release file |
 | --- | --- |
@@ -52,13 +52,13 @@ Prebuilt binaries for every platform are on the **[latest release page](https://
 | Nintendo Switch | `Hollycast-<version>-switch.nro` |
 | RetroArch (libretro core) | `windows-libretro-x64.zip`, `linux-libretro-x64.zip`, `linux-libretro-arm64.zip`, `switch-libretro.zip` |
 
-Stable releases are built from `master`. The [latest development build](https://github.com/nexus382/Hollycast/releases/tag/latest-dev) contains newer, less-tested changes from `dev`. It updates once Android, Windows, Linux, macOS, Switch and Xbox / UWP downloads are all ready for the same commit. Until then, the previous complete build stays available.
+Stable releases are built from `master`. Find stable and development downloads on the [Hollycast downloads page](https://nexus382.github.io/Hollycast/). The [latest development build](https://github.com/nexus382/Hollycast/releases/tag/latest-dev) contains newer, less-tested changes from `dev`. It updates once Android, Windows, Linux, macOS, Switch and Xbox / UWP downloads are all ready for the same commit. Until then, the previous complete build stays available.
 
 In standalone Hollycast, open **Help → Check for Updates** to read release notes and check for a new build. Startup checks are available in Settings. GitHub builds let you choose the stable or development track. Google Play manages updates for Play installations.
 
 ## What Hollycast adds
 
-Hollycast builds on Flycast's RetroAchievements, resolution upscaling and widescreen support. The standalone app adds its own library, online dashboard and tools for players. RetroArch users can download the libretro core.
+Hollycast builds on Flycast's RetroAchievements, resolution upscaling and widescreen support. The standalone app adds its own library, online dashboard and tools for players. RetroArch users can find the libretro core on the [Hollycast downloads page](https://nexus382.github.io/Hollycast/).
 
 ### Game library, artwork and themes
 
