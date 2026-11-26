@@ -9,6 +9,11 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.util.Arrays;
+import java.io.InputStream;
+import java.io.OutputStream;
+import android.os.ParcelFileDescriptor;
+import android.net.Uri;
+import java.util.UUID;
 
 import static org.junit.Assert.*;
 
@@ -113,6 +118,176 @@ public class AndroidStorageTest {
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    @Test
+    public void directlySharedStateOpensWithoutTreeAccess() {
+        try (ActivityScenario<NativeGLActivity> scenario = ActivityScenario.launch(NativeGLActivity.class)) {
+            scenario.onActivity(activity -> {
+                try {
+                    java.io.File file = java.io.File.createTempFile("shared-slot-", ".state", activity.getFilesDir());
+                    try {
+                        byte[] expected = "shared state".getBytes("UTF-8");
+                        try (OutputStream out = new java.io.FileOutputStream(file)) {
+                            out.write(expected);
+                        }
+                        String uri = androidx.core.content.FileProvider.getUriForFile(activity,
+                                activity.getPackageName() + ".provider", file).toString();
+                        AndroidStorage storage = activity.getStorage();
+                        assertTrue(storage.exists(uri));
+                        assertArrayEquals(expected, readDocument(storage, activity, uri));
+                        try (InputStream input = storage.openInputStream(uri)) {
+                            assertEquals(expected[0], input.read());
+                        }
+                    } finally {
+                        file.delete();
+                    }
+                } catch (Exception e) {
+                    throw new AssertionError(e);
+                }
+            });
+        }
+    }
+
+    @Test
+    public void canonicalChildrenAndKnownTransactionsUseNormalStorageApis() {
+        ActivityScenario<NativeGLActivity> scenario = ActivityScenario.launch(NativeGLActivity.class);
+        scenario.onActivity(activity -> {
+            AndroidStorage storage = activity.getStorage();
+            storage.setStorageDirectories(Arrays.asList(TREE_URI));
+            try {
+                assertTransactionRecovery(storage, activity,
+                        "hcast-selected-" + UUID.randomUUID() + ".state", "exists");
+                assertTransactionRecovery(storage, activity,
+                        "hcast-selected-" + UUID.randomUUID() + ".state.net", "open");
+                assertTransactionRecovery(storage, activity,
+                        "hcast-mapping-" + UUID.randomUUID() + ".cfg.save", "metadata");
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        scenario.close();
+    }
+
+    @Test
+    public void saveSlotSurvivesInterruptedReplacement() {
+        final String name = "hcast-save-" + UUID.randomUUID() + ".state";
+        final String[] destination = { null };
+        ActivityScenario<NativeGLActivity> scenario = ActivityScenario.launch(NativeGLActivity.class);
+        scenario.onActivity(activity -> {
+            AndroidStorage storage = activity.getStorage();
+            storage.setStorageDirectories(Arrays.asList(TREE_URI));
+            try {
+                destination[0] = storage.getSubPath(TREE_URI, name);
+                byte[] oldState = "previous complete state".getBytes("UTF-8");
+                byte[] newState = "replacement complete state".getBytes("UTF-8");
+                String first = storage.createTemporaryFile(destination[0]);
+                assertFalse(first.isEmpty());
+                writeDocument(activity, first, oldState);
+                assertTrue(storage.replaceFile(first, destination[0]));
+                assertArrayEquals(oldState, readDocument(storage, activity, destination[0]));
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        scenario.close();
+
+        ActivityScenario<NativeGLActivity> reopened = ActivityScenario.launch(NativeGLActivity.class);
+        reopened.onActivity(activity -> {
+            AndroidStorage storage = activity.getStorage();
+            storage.setStorageDirectories(Arrays.asList(TREE_URI));
+            try {
+                byte[] oldState = "previous complete state".getBytes("UTF-8");
+                byte[] newState = "replacement complete state".getBytes("UTF-8");
+                assertArrayEquals(oldState, readDocument(storage, activity, destination[0]));
+                assertFalse(storage.replaceFile("content://invalid.invalid/document/missing", destination[0]));
+                assertArrayEquals(oldState, readDocument(storage, activity, destination[0]));
+                String overwrite = storage.createTemporaryFile(destination[0]);
+                assertFalse(overwrite.isEmpty());
+                writeDocument(activity, overwrite, newState);
+                assertTrue(storage.replaceFile(overwrite, destination[0]));
+                assertArrayEquals(newState, readDocument(storage, activity, destination[0]));
+                storage.removeFile(destination[0]);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        reopened.close();
+    }
+
+    private static byte[] readDocument(AndroidStorage storage, NativeGLActivity activity, String uri) throws Exception {
+        int fd = storage.openFile(uri, "r");
+        assertNotEquals(-1, fd);
+        ParcelFileDescriptor descriptor = ParcelFileDescriptor.adoptFd(fd);
+        try (InputStream input = new ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+             java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+            assertNotNull(input);
+            byte[] buffer = new byte[1024];
+            int count;
+            while ((count = input.read(buffer)) != -1)
+                output.write(buffer, 0, count);
+            return output.toByteArray();
+        }
+    }
+
+    private static byte[] readRawDocument(NativeGLActivity activity, String uri) throws Exception {
+        try (InputStream input = activity.getContentResolver().openInputStream(Uri.parse(uri));
+             java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+            assertNotNull(input);
+            byte[] buffer = new byte[1024];
+            int count;
+            while ((count = input.read(buffer)) != -1)
+                output.write(buffer, 0, count);
+            return output.toByteArray();
+        }
+    }
+
+    private static void assertTransactionRecovery(AndroidStorage storage, NativeGLActivity activity,
+                                                 String name, String access) throws Exception {
+        byte[] previous = ("complete previous " + name).getBytes("UTF-8");
+        byte[] partial = "interrupted replacement".getBytes("UTF-8");
+        String token = UUID.randomUUID().toString();
+        String backupName = SaveSlotJournal.backupName(name, token);
+        String markerName = SaveSlotJournal.markerName(name, 'r', token);
+        String marker = "HCSJ1\tR\t1\t" + backupName + "\n";
+        writeChildDocument(storage, TREE_URI, name, partial);
+        writeChildDocument(storage, TREE_URI, backupName, previous);
+        writeChildDocument(storage, TREE_URI, markerName, marker.getBytes("UTF-8"));
+
+        String destination = storage.getSubPath(TREE_URI, name);
+        switch (access) {
+            case "exists":
+                assertTrue(storage.exists(destination));
+                assertArrayEquals(previous, readRawDocument(activity, storage.getSubPath(TREE_URI, name)));
+                break;
+            case "open":
+                assertArrayEquals(previous, readDocument(storage, activity, destination));
+                break;
+            case "metadata":
+                assertEquals(name, storage.getFileInfo(destination).getName());
+                assertArrayEquals(previous, readRawDocument(activity, storage.getSubPath(TREE_URI, name)));
+                break;
+            default:
+                throw new AssertionError("Unknown storage API " + access);
+        }
+        assertFalse(storage.exists(storage.getSubPath(TREE_URI, backupName)));
+        storage.removeFile(destination);
+    }
+
+    private static void writeChildDocument(AndroidStorage storage, String parent, String name, byte[] data) throws Exception {
+        try (OutputStream output = storage.openOutputStream(parent, name)) {
+            assertNotNull(output);
+            output.write(data);
+            output.flush();
+        }
+    }
+
+    private static void writeDocument(NativeGLActivity activity, String uri, byte[] data) throws Exception {
+        try (OutputStream output = activity.getContentResolver().openOutputStream(Uri.parse(uri), "wt")) {
+            assertNotNull(output);
+            output.write(data);
+            output.flush();
+        }
     }
 
     //@Test

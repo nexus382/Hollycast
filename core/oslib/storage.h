@@ -19,7 +19,17 @@
 #pragma once
 #include "types.h"
 
+#include <limits>
 #include <vector>
+
+// Keep File's 64-bit offsets intact; long is only 32 bits on Windows.
+#if defined(_WIN32)
+#define HOSTFS_FSEEK _fseeki64
+#define HOSTFS_FTELL _ftelli64
+#else
+#define HOSTFS_FSEEK fseeko
+#define HOSTFS_FTELL ftello
+#endif
 
 namespace hostfs
 {
@@ -54,22 +64,21 @@ public:
 	virtual s64 size() = 0;
 	virtual int eof() = 0;
 	virtual int error() = 0;
+	virtual bool flush() = 0;
+	virtual bool close() = 0;
 };
 
 class StdFile : public File
 {
 protected:
-	FILE* const file;
+	FILE* file;
 
 public:
 	StdFile(FILE* file)
 		: file(file)
 	{}
 
-	~StdFile() override
-	{
-		std::fclose(file);
-	}
+	~StdFile() override { close(); }
 
 	size_t read(void* buffer, size_t size, size_t count) override
 	{
@@ -83,12 +92,17 @@ public:
 
 	s64 tell() override
 	{
-		return std::ftell(file);
+		return HOSTFS_FTELL(file);
 	}
 
 	int seek(s64 offset, int whence) override
 	{
-		return std::fseek(file, offset, whence);
+#ifndef _WIN32
+		if constexpr (sizeof(off_t) < sizeof(offset))
+			if (offset < std::numeric_limits<off_t>::min() || offset > std::numeric_limits<off_t>::max())
+				return -1;
+#endif
+		return HOSTFS_FSEEK(file, offset, whence);
 	}
 
 	char* gets(char* str, int count) override
@@ -98,12 +112,13 @@ public:
 
 	s64 size() override
 	{
-		std::fpos_t position;
-		std::fgetpos(file, &position);
-		std::fseek(file, 0, SEEK_END);
-		s64 size = tell();
-		std::fsetpos(file, &position);
-		return size;
+		const s64 position = tell();
+		if (position < 0 || seek(0, SEEK_END) != 0)
+			return -1;
+		const s64 fileSize = tell();
+		if (seek(position, SEEK_SET) != 0)
+			return -1;
+		return fileSize;
 	}
 
 	int eof() override
@@ -113,9 +128,22 @@ public:
 
 	int error() override
 	{
-		return std::ferror(file);
+		return file == nullptr ? 0 : std::ferror(file);
+	}
+
+	bool flush() override { return file != nullptr && std::fflush(file) == 0; }
+	bool close() override
+	{
+		if (file == nullptr)
+			return true;
+		FILE *closing = file;
+		file = nullptr;
+		return std::fclose(closing) == 0;
 	}
 };
+
+#undef HOSTFS_FSEEK
+#undef HOSTFS_FTELL
 
 class StorageException : public FlycastException
 {
@@ -133,6 +161,9 @@ public:
 	virtual std::string getSubPath(const std::string& reference, const std::string& subpath) = 0;
 	virtual FileInfo getFileInfo(const std::string& path) = 0;
 	virtual bool exists(const std::string& path) = 0;
+	virtual File *createTemporaryFile(const std::string& destination, std::string& temporaryPath) { return nullptr; }
+	virtual bool replaceFile(const std::string& temporaryPath, const std::string& destination) { return false; }
+	virtual bool removeFile(const std::string& path) { return false; }
 
 	virtual ~Storage() = default;
 };
@@ -140,6 +171,7 @@ public:
 class CustomStorage : public Storage
 {
 public:
+	virtual bool isKnownPathForWrite(const std::string& path) { return isKnownPath(path); }
 	virtual bool addStorage(bool isDirectory, bool writeAccess, const std::string& description,
 			void (*callback)(bool cancelled, std::string selectedPath), const std::string& mimeType) = 0;
 };
@@ -155,7 +187,32 @@ public:
 	std::string getSubPath(const std::string& reference, const std::string& subpath) override;
 	FileInfo getFileInfo(const std::string& path) override;
 	bool exists(const std::string& path) override;
+	File *createTemporaryFile(const std::string& destination, std::string& temporaryPath) override;
+	bool replaceFile(const std::string& temporaryPath, const std::string& destination) override;
+	bool removeFile(const std::string& path) override;
 	std::string getDefaultDirectory();
+};
+
+// Owns a sibling staging path. The writer takes ownership of the File via takeFile();
+// publish is valid only after the writer has successfully finished and closed it.
+class AtomicFile
+{
+public:
+	explicit AtomicFile(Storage& storage, std::string destination);
+	~AtomicFile();
+	AtomicFile(const AtomicFile&) = delete;
+	AtomicFile& operator=(const AtomicFile&) = delete;
+	File *file() const { return stream; }
+	File *takeFile();
+	bool publish();
+	const std::string& temporaryPath() const { return temporary; }
+
+private:
+	Storage& storage;
+	std::string destination;
+	std::string temporary;
+	File *stream = nullptr;
+	bool published = false;
 };
 
 AllStorage& storage();

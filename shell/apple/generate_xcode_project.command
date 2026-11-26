@@ -5,6 +5,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 cd "$script_dir/../../"
+source "$script_dir/init_submodules.sh"
 
 MOLTENVK_TAG="v1.4.2-pre.973bb08"
 MOLTENVK_ROOT="$PWD/build/deps/MoltenVK-${MOLTENVK_TAG}"
@@ -35,24 +36,6 @@ ensure_homebrew() {
         install_homebrew
     else
         exit 1
-    fi
-}
-
-init_submodules() {
-    if [ -d .git ]; then
-        if git rev-parse --verify HEAD >/dev/null 2>&1; then
-            git submodule update --init --recursive
-        else
-            git fetch --depth 1 origin master
-            git reset --hard FETCH_HEAD
-            git submodule update --init --recursive
-        fi
-    else
-        git init
-        git remote add origin https://github.com/nexus382/Hollycast.git
-        git fetch --depth 1 origin master
-        git reset --hard FETCH_HEAD
-        git submodule update --init --recursive
     fi
 }
 

@@ -21,6 +21,7 @@
 
 #include "types.h"
 #include "json.hpp"
+#include "oslib/http_client.h"
 
 #include <array>
 #include <chrono>
@@ -130,7 +131,7 @@ struct GameBoxart
 class Scraper
 {
 public:
- using Transport = std::function<int(const std::string&, std::vector<u8>&, std::string&)>;
+ using Transport = http::LimitAwareTransport<const std::string&, std::vector<u8>&, std::string&>;
 	virtual bool initialize(const std::string& saveDirectory) {
 		this->saveDirectory = saveDirectory;
 		return true;
@@ -138,6 +139,8 @@ public:
 
 	virtual void scrape(GameBoxart& item) = 0;
 	virtual bool ready() const { return true; }
+	virtual void beginBulk() {}
+	virtual void endBulk() {}
 
 	virtual void scrape(std::vector<GameBoxart>& items) {
 		for (GameBoxart& item : items)

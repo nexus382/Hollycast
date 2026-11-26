@@ -25,6 +25,9 @@ public:
 	bool prepare(id<MTLTexture> color, NSUInteger width, NSUInteger height);
 	simd_float2 jitter() const;
 	id<MTLTexture> encode(id<MTLCommandBuffer> cmd, id<MTLTexture> color, id<MTLTexture> depth);
+#if defined(METAL_FX_TEST_READBACK)
+	id<MTLTexture> motionTextureForTesting() const { return motion; }
+#endif
 
 private:
 	std::array<NSUInteger, 5> configuration {};

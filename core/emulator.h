@@ -39,9 +39,18 @@ int flycast_init(int argc, char* argv[]);
 void flycast_term();
 void dc_exit();
 void dc_savestate(int index = 0, const u8 *pngData = nullptr, u32 pngSize = 0);
+enum class StateLoadResult
+{
+	Loaded,
+	Rejected,
+	PartialApplyFailure
+};
 void dc_loadstate(int index = 0);
+StateLoadResult dc_loadstateResult(int index = 0);
+bool dc_consumeAutoSaveSkipOnNextUnload();
 // Resume uses the exact file inspected in the library, independent of the active-slot path cache.
 bool dc_loadstateForPath(const std::string& statePath);
+StateLoadResult dc_loadstateForPathResult(const std::string& statePath);
 struct SavestateInfo {
 	std::string path;
 	time_t creationDate = 0;
@@ -179,7 +188,7 @@ public:
 	 * Return whether the emulator is currently running.
 	 */
 	bool running() const {
-		return state == Running;
+		return state == Running && !partialRestoreFailed;
 	}
 	/**
 	 * Wait for the next frame and render it. If in single-thread mode, it will run the emulator until a frame is rendered.
@@ -272,6 +281,7 @@ private:
 		Terminated,
 	};
 	std::atomic<State> state{Uninitialized};
+	std::atomic<bool> partialRestoreFailed{false};
 	std::shared_future<void> threadResult;
 	bool resetRequested = false;
 	bool singleStep = false;

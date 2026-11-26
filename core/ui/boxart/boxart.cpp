@@ -1534,6 +1534,7 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 						if (!fallback->initialize(directory)) throw std::runtime_error("Cannot open fallback artwork cache.");
 						initialized = true;
 					}
+					if (provider == 2) fallback->beginBulk();
 					while (!fallback->ready() && screenGeneration == generation
 							&& (provider != 0 || !theGamesDbAuthorizationRejected()))
 					{
@@ -1568,6 +1569,23 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 					continue;
 				}
 				finish(item);
+			}
+			if (provider == 2 && launchbox && launchboxInitialized)
+			{
+				bool drained = false;
+				{
+					std::lock_guard<std::mutex> lock(mutex);
+					drained = toFetch.empty() && !mediaBatchPending && !physicalWorking && !activeScreenJobs;
+					for (const auto& entry : games)
+						if (entry.second.busy && !entry.second.arcade
+								&& ArtworkAdapter::nextProvider(entry.second, entry.second.requestedMedia) >= 1)
+							drained = false;
+				}
+				if (drained)
+				{
+					try { launchbox->endBulk(); }
+					catch (const std::exception& error) { INFO_LOG(COMMON, "Artwork fallback cache flush: %s", error.what()); }
+				}
 			}
 		}
 		saveDatabase();
@@ -1792,6 +1810,7 @@ void Boxart::fetchBoxart()
 				if (provider == 0 || useScreenScraper) arcadeScraper->scrape(boxart);
 				if (!useScreenScraper && !tgdbPaused)
 				{
+					scraper->beginBulk();
 					scraper->scrape(boxart);
 				}
 				{
@@ -1819,6 +1838,17 @@ void Boxart::fetchBoxart()
 			std::lock_guard<std::mutex> guard(mutex);
 			for (GameBoxart& b : boxart)
 				completeArtworkWork(b, false, provider);
+		}
+		bool drainScraper = false;
+		{
+			std::lock_guard<std::mutex> guard(mutex);
+			drainScraper = scraper && toFetch.empty() && !mediaBatchPending && !physicalWorking;
+		}
+		if (drainScraper)
+		{
+			try { scraper->endBulk(); }
+			catch (const std::exception& error) { INFO_LOG(COMMON, "Artwork cache flush: %s", error.what()); }
+			catch (...) { INFO_LOG(COMMON, "Artwork cache flush failed"); }
 		}
 		saveDatabase();
 	});
@@ -1897,10 +1927,14 @@ void Boxart::saveDatabase(bool checkpoint)
 
 void Boxart::recoverDatabases(const std::string& databaseDir, const std::string& artworkDir)
 {
+	const auto recoveryStarted = std::chrono::steady_clock::now();
+	const auto recordRecoveryElapsed = [this, recoveryStarted]() {
+		recoveryElapsed = std::chrono::steady_clock::now() - recoveryStarted;
+	};
 	std::vector<std::string> databasePaths;
-	std::unordered_map<std::string, std::string> imagePathsByName;
 	try {
 		hostfs::DirectoryTree tree(databaseDir);
+		++recoveryDirectoryScans;
 		for (auto it = tree.begin(); it != tree.end(); ++it)
 		{
 			const hostfs::FileInfo& entry = *it;
@@ -1911,7 +1945,23 @@ void Boxart::recoverDatabases(const std::string& databaseDir, const std::string&
 				databasePaths.push_back(entry.path);
 			}
 		}
+	} catch (const std::exception& e) {
+		WARN_LOG(COMMON, "Boxart database recovery scan failed: %s", e.what());
+		recordRecoveryElapsed();
+		return;
+	}
+
+	if (databasePaths.size() <= 1)
+	{
+		recordRecoveryElapsed();
+		return;
+	}
+
+	std::unordered_map<std::string, std::string> imagePathsByName;
+	try {
 		hostfs::DirectoryTree artworkTree(artworkDir);
+		++recoveryDirectoryScans;
+		++recoveryImageIndexBuilds;
 		for (auto it = artworkTree.begin(); it != artworkTree.end(); ++it)
 		{
 			const hostfs::FileInfo& entry = *it;
@@ -1923,11 +1973,9 @@ void Boxart::recoverDatabases(const std::string& databaseDir, const std::string&
 		}
 	} catch (const std::exception& e) {
 		WARN_LOG(COMMON, "Boxart database recovery scan failed: %s", e.what());
+		recordRecoveryElapsed();
 		return;
 	}
-
-	if (databasePaths.size() <= 1)
-		return;
 
 	const std::string mainDbPath = appendFilesystemPath(databaseDir, DB_NAME);
 	std::unordered_map<std::string, GameBoxart> mergedGames;
@@ -1966,7 +2014,10 @@ void Boxart::recoverDatabases(const std::string& databaseDir, const std::string&
 	}
 
 	if (mergedGames.empty())
+	{
+		recordRecoveryElapsed();
 		return;
+	}
 
 	json array;
 	for (const auto& game : mergedGames)
@@ -1975,10 +2026,12 @@ void Boxart::recoverDatabases(const std::string& databaseDir, const std::string&
 	if (!writeFileAtomically(mainDbPath, array.dump(4, ' ', false, json::error_handler_t::replace)))
 	{
 		WARN_LOG(COMMON, "Can't write recovered boxart database to %s: error %d", mainDbPath.c_str(), errno);
+		recordRecoveryElapsed();
 		return;
 	}
 
 	INFO_LOG(COMMON, "Recovered %d games from %d boxart databases without deleting source files", (int)mergedGames.size(), (int)databasePaths.size());
+	recordRecoveryElapsed();
 }
 
 void Boxart::loadDatabase()

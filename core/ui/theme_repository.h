@@ -1,6 +1,7 @@
 // Copyright 2026 The Hollycast Authors
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
+#include "oslib/http_client.h"
 #include <functional>
 #include <string>
 #include <vector>
@@ -12,7 +13,7 @@ struct Theme
 	std::string id, name, creator, description, version, packageUrl;
 	std::vector<std::string> screenshots;
 };
-using Transport = std::function<int(const std::string&, std::vector<unsigned char>&)>;
+using Transport = http::LimitAwareTransport<const std::string&, std::vector<unsigned char>&>;
 
 // Catalogue URLs and all referenced downloads must use HTTPS.
 std::vector<Theme> parse(const std::string& json, const std::string& catalogUrl);

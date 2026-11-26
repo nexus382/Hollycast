@@ -24,6 +24,8 @@
 #include "oslib/storage.h"
 #include <cerrno>
 #include <cmath>
+#include <cstring>
+#include <memory>
 
 static struct
 {
@@ -831,6 +833,138 @@ void InputMapping::ClearMappings()
 	loaded_mappings.clear();
 }
 
+namespace mapping_internal
+{
+
+static bool readBlock(hostfs::File& file, u8* buffer, size_t capacity, size_t& count, bool& eof)
+{
+	count = 0;
+	eof = false;
+	while (count < capacity)
+	{
+		const size_t read = file.read(buffer + count, 1, capacity - count);
+		if (read > capacity - count || file.error())
+			return false;
+		count += read;
+		if (file.eof())
+		{
+			eof = true;
+			break;
+		}
+		if (read == 0)
+			return false;
+	}
+	return true;
+}
+
+static bool compareFiles(hostfs::Storage& storage, const std::string& sourcePath, const std::string& stagedPath)
+{
+	std::unique_ptr<hostfs::File> source(storage.openFile(sourcePath, "rb"));
+	std::unique_ptr<hostfs::File> staged(storage.openFile(stagedPath, "rb"));
+	if (source == nullptr || staged == nullptr)
+	{
+		if (source != nullptr)
+			source->close();
+		if (staged != nullptr)
+			staged->close();
+		return false;
+	}
+
+	u8 sourceBuffer[4096];
+	u8 stagedBuffer[4096];
+	bool matches = true;
+	while (true)
+	{
+		size_t sourceCount, stagedCount;
+		bool sourceEof, stagedEof;
+		if (!readBlock(*source, sourceBuffer, sizeof(sourceBuffer), sourceCount, sourceEof)
+			|| !readBlock(*staged, stagedBuffer, sizeof(stagedBuffer), stagedCount, stagedEof)
+			|| sourceCount != stagedCount
+			|| std::memcmp(sourceBuffer, stagedBuffer, sourceCount) != 0)
+		{
+			matches = false;
+			break;
+		}
+		if (sourceEof && stagedEof)
+			break;
+	}
+	const bool sourceClosed = source->close();
+	const bool stagedClosed = staged->close();
+	return matches && sourceClosed && stagedClosed;
+}
+
+static bool backupIsEmpty(hostfs::Storage& storage, const std::string& path, bool& empty)
+{
+	if (!storage.exists(path))
+	{
+		empty = true;
+		return true;
+	}
+	if (storage.getFileInfo(path).isDirectory)
+		return false;
+	std::unique_ptr<hostfs::File> file(storage.openFile(path, "rb"));
+	if (file == nullptr)
+		return false;
+	u8 byte;
+	const size_t count = file->read(&byte, 1, 1);
+	const bool readable = !file->error() && (count != 0 || file->eof());
+	const bool closed = file->close();
+	if (!readable || !closed)
+		return false;
+	empty = count == 0;
+	return true;
+}
+
+bool createLegacyBackup(hostfs::Storage& storage, const std::string& sourcePath)
+{
+	const hostfs::FileInfo sourceInfo = storage.getFileInfo(sourcePath);
+	if (sourceInfo.name.empty())
+		return false;
+	const std::string parentPath = storage.getParentPath(sourcePath);
+	if (parentPath.empty())
+		return false;
+	const std::string backupPath = storage.getSubPath(parentPath, sourceInfo.name + ".save");
+
+	bool empty;
+	if (!backupIsEmpty(storage, backupPath, empty))
+		return false;
+	if (!empty)
+		return true;
+
+	std::unique_ptr<hostfs::File> source(storage.openFile(sourcePath, "rb"));
+	if (source == nullptr)
+		return false;
+	hostfs::AtomicFile transaction(storage, backupPath);
+	if (transaction.file() == nullptr)
+		return false;
+	std::unique_ptr<hostfs::File> staged(transaction.takeFile());
+	u8 buffer[4096];
+	bool copied = true;
+	while (true)
+	{
+		size_t count;
+		bool eof;
+		if (!readBlock(*source, buffer, sizeof(buffer), count, eof)
+			|| (count != 0 && (staged->write(buffer, 1, count) != count || staged->error())))
+		{
+			copied = false;
+			break;
+		}
+		if (eof)
+			break;
+	}
+	copied = source->close() && copied;
+	const bool flushed = staged->flush();
+	const bool closed = staged->close();
+	if (!copied || !flushed || !closed || !compareFiles(storage, sourcePath, transaction.temporaryPath()))
+		return false;
+	if (!backupIsEmpty(storage, backupPath, empty))
+		return false;
+	return !empty || transaction.publish();
+}
+
+} // namespace mapping_internal
+
 std::shared_ptr<InputMapping> InputMapping::LoadMapping(const std::string& name)
 {
 	auto it = loaded_mappings.find(name);
@@ -873,26 +1007,14 @@ std::shared_ptr<InputMapping> InputMapping::LoadMapping(const std::string& name)
 
 	if (mapping->is_dirty())
 	{
-		// Make a backup of the current mapping file
-		hostfs::File *out = hostfs::storage().openFile((path + ".save").c_str(), "w");
-		if (out == nullptr)
-			WARN_LOG(INPUT, "Can't backup controller mapping file %s", path.c_str());
-		else
+		try
 		{
-			fp = hostfs::storage().openFile(path.c_str(), "r");
-			if (fp != nullptr)
-			{
-				u8 buf[4096];
-				while (true)
-				{
-					size_t n = fp->read(buf, 1, sizeof(buf));
-					if (n <= 0)
-						break;
-					fp->write(buf, 1, n);
-				}
-				delete fp;
-			}
-			delete out;
+			if (!mapping_internal::createLegacyBackup(hostfs::storage(), path))
+				WARN_LOG(INPUT, "Failed to create or verify backup of controller mapping file %s", path.c_str());
+		}
+		catch (const hostfs::StorageException& e)
+		{
+			WARN_LOG(INPUT, "Can't backup controller mapping file %s: %s", path.c_str(), e.what());
 		}
 	}
 
