@@ -5,6 +5,7 @@
 #include "types.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #if __has_include(<MetalFX/MetalFX.h>)
 #import <MetalFX/MetalFX.h>
 #endif
@@ -155,11 +156,19 @@ kernel void prepareMotion(texture2d<float> current [[texture(0)]], texture2d<flo
 		for (uint x = 0; x < 4; ++x) {
 			uint2 p = base + uint2(x, y);
 			if (all(p < size)) {
-				motion.write(float4(best, 0, 0), p);
+				motion.write(float4(best * MOTION_VECTOR_TEST_SCALE, 0, 0), p);
 				depthOut.write(float4(depth.read(p)), p);
 			}
 		}
 })";
+#if defined(METAL_FX_TEST_READBACK)
+	// The smoke's negative control deliberately corrupts the actual generated
+	// vectors before both readback and MetalFX consumption.
+	NSString *testScale = std::getenv("METAL_FX_TEST_REVERSE_MOTION") ? @"-1.0" : @"1.0";
+	source = [source stringByReplacingOccurrencesOfString:@"MOTION_VECTOR_TEST_SCALE" withString:testScale];
+#else
+	source = [source stringByReplacingOccurrencesOfString:@"MOTION_VECTOR_TEST_SCALE" withString:@"1.0"];
+#endif
 	NSError *error = nil;
 	auto lib = [device newLibraryWithSource:source options:nil error:&error];
 	auto pipeline = lib ? [device newComputePipelineStateWithFunction:[lib newFunctionWithName:@"prepareMotion"] error:&error] : nil;
