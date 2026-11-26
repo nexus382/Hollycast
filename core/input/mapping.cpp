@@ -24,6 +24,8 @@
 #include "oslib/storage.h"
 #include <cerrno>
 #include <cmath>
+#include <cstring>
+#include <memory>
 
 static struct
 {
@@ -873,26 +875,97 @@ std::shared_ptr<InputMapping> InputMapping::LoadMapping(const std::string& name)
 
 	if (mapping->is_dirty())
 	{
-		// Make a backup of the current mapping file
-		hostfs::File *out = hostfs::storage().openFile((path + ".save").c_str(), "w");
-		if (out == nullptr)
-			WARN_LOG(INPUT, "Can't backup controller mapping file %s", path.c_str());
-		else
+		// Acquire the source before opening a destination that could truncate it.
+		const std::string backupPath = path + ".save";
+		try
 		{
-			fp = hostfs::storage().openFile(path.c_str(), "r");
-			if (fp != nullptr)
+			std::unique_ptr<hostfs::File> source(hostfs::storage().openFile(path, "rb"));
+			if (source == nullptr)
+				WARN_LOG(INPUT, "Can't read controller mapping file %s for backup", path.c_str());
+			else
 			{
-				u8 buf[4096];
-				while (true)
+				const bool backupExists = hostfs::storage().exists(backupPath);
+				const bool existingBackupIsDirectory = backupExists
+						&& hostfs::storage().getFileInfo(backupPath).isDirectory;
+				if (existingBackupIsDirectory)
+					WARN_LOG(INPUT, "Can't create backup of controller mapping file %s: backup path is a directory", path.c_str());
+				else if (!backupExists)
 				{
-					size_t n = fp->read(buf, 1, sizeof(buf));
-					if (n <= 0)
-						break;
-					fp->write(buf, 1, n);
+					std::unique_ptr<hostfs::File> out(hostfs::storage().openFile(backupPath, "wb"));
+					if (out == nullptr)
+						WARN_LOG(INPUT, "Can't create backup of controller mapping file %s", path.c_str());
+					else
+					{
+						u8 buf[4096];
+						bool copyOk = true;
+						while (true)
+						{
+							const size_t n = source->read(buf, 1, sizeof(buf));
+							if (n != 0 && (out->write(buf, 1, n) != n || out->error()))
+							{
+								copyOk = false;
+								break;
+							}
+							if (source->error())
+							{
+								copyOk = false;
+								break;
+							}
+							if (n < sizeof(buf))
+							{
+								if (source->eof())
+									break;
+								if (n == 0)
+								{
+									copyOk = false;
+									break;
+								}
+							}
+						}
+						if (out->error())
+							copyOk = false;
+						out.reset();
+						if (copyOk)
+						{
+							std::unique_ptr<hostfs::File> sourceCheck(hostfs::storage().openFile(path, "rb"));
+							std::unique_ptr<hostfs::File> backupCheck(hostfs::storage().openFile(backupPath, "rb"));
+							if (sourceCheck == nullptr || backupCheck == nullptr)
+								copyOk = false;
+							else
+							{
+								u8 sourceBuf[4096];
+								u8 backupBuf[4096];
+								while (true)
+								{
+									const size_t sourceBytes = sourceCheck->read(sourceBuf, 1, sizeof(sourceBuf));
+									const size_t backupBytes = backupCheck->read(backupBuf, 1, sizeof(backupBuf));
+									if (sourceBytes != backupBytes
+											|| std::memcmp(sourceBuf, backupBuf, sourceBytes) != 0
+											|| sourceCheck->error() || backupCheck->error())
+									{
+										copyOk = false;
+										break;
+									}
+									if (sourceBytes < sizeof(sourceBuf)
+											&& sourceCheck->eof() && backupCheck->eof())
+										break;
+									if (sourceBytes == 0)
+									{
+										copyOk = false;
+										break;
+									}
+								}
+							}
+						}
+						if (!copyOk)
+							WARN_LOG(INPUT, "Failed to copy or finalize backup of controller mapping file %s", path.c_str());
+					}
 				}
-				delete fp;
 			}
-			delete out;
+		}
+		catch (const hostfs::StorageException& e)
+		{
+			WARN_LOG(INPUT, "Can't backup controller mapping file %s: %s", path.c_str(), e.what());
 		}
 	}
 
