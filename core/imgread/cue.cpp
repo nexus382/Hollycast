@@ -55,6 +55,7 @@ struct CueTrackLayout
 	std::optional<u32> index00;
 	std::optional<u32> index01;
 	u32 pregap = 0;
+	u64 index00ByteOffset = 0;
 	u64 index01ByteOffset = 0;
 };
 
@@ -141,6 +142,8 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 
 		CueTrackLayout& firstTrack = fileTracks.front();
 		firstTrack.index01ByteOffset = checkedMultiply(*firstTrack.index01, firstTrack.sectorSize);
+		if (firstTrack.index00.has_value())
+			firstTrack.index00ByteOffset = checkedMultiply(*firstTrack.index00, firstTrack.sectorSize);
 		for (size_t i = 1; i < fileTracks.size(); i++) {
 			CueTrackLayout& previous = fileTracks[i - 1];
 			CueTrackLayout& track = fileTracks[i];
@@ -149,6 +152,7 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 				throw FlycastException(i18n::T("Invalid or out-of-range INDEX in CUE file"));
 			u64 offset = checkedAdd(previous.index01ByteOffset,
 					checkedMultiply(boundary - *previous.index01, previous.sectorSize));
+			track.index00ByteOffset = offset;
 			if (track.index00.has_value())
 				offset = checkedAdd(offset, checkedMultiply(*track.index01 - boundary, track.sectorSize));
 			track.index01ByteOffset = offset;
@@ -177,13 +181,18 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 		for (CueTrackLayout& layout : fileTracks) {
 			const u64 trackStartFAD = checkedAdd(fileStartFAD,
 					checkedAdd(*layout.index01, checkedAdd(priorSyntheticPregap, layout.pregap)));
+			const u64 storedPregapFrames = layout.index00.has_value() ? *layout.index01 - *layout.index00 : 0;
+			const u64 readStartFAD = trackStartFAD - storedPregapFrames;
 			const u64 trackEndFAD = fileEndFAD - 1;
 			if (trackStartFAD > std::numeric_limits<u32>::max() || trackEndFAD > std::numeric_limits<u32>::max()
-					|| layout.index01ByteOffset > (u64)std::numeric_limits<s64>::max())
+					|| readStartFAD > std::numeric_limits<u32>::max()
+					|| layout.index01ByteOffset > (u64)std::numeric_limits<s64>::max()
+					|| layout.index00ByteOffset > (u64)std::numeric_limits<s64>::max())
 				throw FlycastException(i18n::T("CUE file layout exceeds the supported range"));
 
 			Track track;
 			track.StartFAD = (u32)trackStartFAD;
+			track.ReadStartFAD = layout.index00.has_value() ? (u32)readStartFAD : 0;
 			track.EndFAD = (u32)trackEndFAD;
 			track.CTRL = (layout.type == "AUDIO" || layout.type == "CDG") ? 0 : 4;
 			track.isrc = layout.isrc;
@@ -192,11 +201,14 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 			hostfs::File *trackFile = hostfs::storage().openFile(track_filename, "rb");
 			if (trackFile == nullptr)
 				throw FlycastException(strprintf(i18n::T("CUE file: cannot open track %s"), track_filename.c_str()));
-			track.file = new RawTrackFile(trackFile, layout.index01ByteOffset, track.StartFAD, layout.sectorSize);
+			const u64 byteOffset = layout.index00.has_value() ? layout.index00ByteOffset : layout.index01ByteOffset;
+			const u32 firstFAD = layout.index00.has_value() ? track.ReadStartFAD : track.StartFAD;
+			track.file = new RawTrackFile(trackFile, byteOffset, firstFAD, layout.sectorSize);
 			disc->tracks.push_back(track);
 			if (disc->tracks.size() >= 2) {
 				Track& previous = disc->tracks[disc->tracks.size() - 2];
-				previous.EndFAD = std::min(previous.EndFAD, track.StartFAD - 1);
+				const u32 pregapStartFAD = (u32)(readStartFAD - layout.pregap);
+				previous.EndFAD = std::min(previous.EndFAD, pregapStartFAD - 1);
 			}
 			priorSyntheticPregap = checkedAdd(priorSyntheticPregap, layout.pregap);
 		}

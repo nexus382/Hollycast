@@ -1,6 +1,8 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "imgread/common.h"
+#include <algorithm>
+#include <iterator>
 #include <locale>
 #include <chrono>
 #include <filesystem>
@@ -253,8 +255,46 @@ TEST_F(CueTest, AccountsForStoredAndSyntheticPregapsAcrossFiles)
 		"    INDEX 01 00:00:04\n");
 	disk = OpenDisc(sameFileCue);
 	ASSERT_EQ(154, disk->tracks[1].StartFAD);
+	EXPECT_EQ(155, disk->LeadOut.StartFAD);
+	EXPECT_EQ(152, disk->tracks[1].ReadStartFAD);
+	std::vector<u8> publicRead(2 * 2352);
+	ASSERT_EQ(2u, disk->ReadSectors(152, 2, publicRead.data(), 2352));
+	EXPECT_TRUE(std::all_of(publicRead.begin(), publicRead.begin() + 2352, [](u8 value) { return value == 0x63; }));
+	EXPECT_TRUE(std::all_of(publicRead.begin() + 2352, publicRead.end(), [](u8 value) { return value == 0x64; }));
+	ASSERT_EQ(1u, disk->ReadSectors(154, 1, sector, 2352));
+	EXPECT_TRUE(std::all_of(std::begin(sector), std::begin(sector) + 2352, [](u8 value) { return value == 0x65; }));
 	ASSERT_TRUE(disk->tracks[1].Read(154, sector, &format, nullptr, nullptr));
 	EXPECT_EQ(0x65, sector[0]);
+	delete disk;
+}
+
+TEST_F(CueTest, SyntheticPregapDoesNotReadProgramData)
+{
+	TemporaryCue fixture;
+	fixture.writeSectors("synthetic.bin", {
+		{2048, 0x51}, {2048, 0x52}, {2352, 0x70}, {2352, 0x71}
+	});
+	const std::string cue = fixture.writeCue(
+		"FILE \"synthetic.bin\" BINARY\n"
+		"  TRACK 01 MODE1/2048\n"
+		"    INDEX 01 00:00:00\n"
+		"  TRACK 02 AUDIO\n"
+		"    PREGAP 00:00:01\n"
+		"    INDEX 01 00:00:02\n");
+
+	Disc* disk = OpenDisc(cue);
+	ASSERT_EQ(2, disk->tracks.size());
+	EXPECT_EQ(153, disk->tracks[1].StartFAD);
+	EXPECT_EQ(155, disk->LeadOut.StartFAD);
+	u8 sector[2352];
+	bool readError = false;
+	ASSERT_EQ(1u, disk->ReadSectors(152, 1, sector, sizeof(sector), false, nullptr, &readError));
+	EXPECT_TRUE(readError);
+	EXPECT_TRUE(std::all_of(std::begin(sector), std::end(sector), [](u8 value) { return value == 0; }));
+	readError = false;
+	ASSERT_EQ(1u, disk->ReadSectors(153, 1, sector, sizeof(sector), false, nullptr, &readError));
+	EXPECT_FALSE(readError);
+	EXPECT_TRUE(std::all_of(std::begin(sector), std::end(sector), [](u8 value) { return value == 0x70; }));
 	delete disk;
 }
 

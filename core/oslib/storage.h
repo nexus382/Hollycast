@@ -21,6 +21,15 @@
 
 #include <vector>
 
+// Keep File's 64-bit offsets intact; long is only 32 bits on Windows.
+#if defined(_WIN32)
+#define HOSTFS_FSEEK _fseeki64
+#define HOSTFS_FTELL _ftelli64
+#else
+#define HOSTFS_FSEEK fseeko
+#define HOSTFS_FTELL ftello
+#endif
+
 namespace hostfs
 {
 
@@ -83,12 +92,12 @@ public:
 
 	s64 tell() override
 	{
-		return std::ftell(file);
+		return HOSTFS_FTELL(file);
 	}
 
 	int seek(s64 offset, int whence) override
 	{
-		return std::fseek(file, offset, whence);
+		return HOSTFS_FSEEK(file, offset, whence);
 	}
 
 	char* gets(char* str, int count) override
@@ -98,12 +107,13 @@ public:
 
 	s64 size() override
 	{
-		std::fpos_t position;
-		std::fgetpos(file, &position);
-		std::fseek(file, 0, SEEK_END);
-		s64 size = tell();
-		std::fsetpos(file, &position);
-		return size;
+		const s64 position = tell();
+		if (position < 0 || seek(0, SEEK_END) != 0)
+			return -1;
+		const s64 fileSize = tell();
+		if (seek(position, SEEK_SET) != 0)
+			return -1;
+		return fileSize;
 	}
 
 	int eof() override
@@ -116,6 +126,9 @@ public:
 		return std::ferror(file);
 	}
 };
+
+#undef HOSTFS_FSEEK
+#undef HOSTFS_FTELL
 
 class StorageException : public FlycastException
 {

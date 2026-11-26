@@ -89,6 +89,7 @@ struct Track
 {
 	TrackFile* file = nullptr;	// handler for actual IO
 	u32 StartFAD = 0;			// Start FAD
+	u32 ReadStartFAD = 0;		// Optional earlier start for stored pregap sectors
 	u32 EndFAD = 0;				// End FAD
 	u8 CTRL = 0;
 	u8 ADR = 0;
@@ -96,7 +97,8 @@ struct Track
 
 	bool Read(u32 FAD, u8 *dst, SectorFormat *sector_type, u8 *subcode, SubcodeFormat *subcode_type)
 	{
-		if (FAD >= StartFAD && (FAD <= EndFAD || EndFAD == 0) && file != nullptr)
+		const u32 readStartFAD = ReadStartFAD != 0 ? ReadStartFAD : StartFAD;
+		if (FAD >= readStartFAD && (FAD <= EndFAD || EndFAD == 0) && file != nullptr)
 			return file->Read(FAD, dst, sector_type, subcode, subcode_type);
 		else
 			return false;
