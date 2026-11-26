@@ -88,14 +88,18 @@ void naomi_cart::loadGameBlob(ArchiveFile& file, u32 type, Cartridge& cartridge,
 
 	case InterleavedWord:
 		{
-			u32 mappedLength = length * 2;
+			if (length == 0)
+				break;
+			// The final word uses its own two bytes at the end of the lane.
+			const u64 span = (u64)length * 2 - sizeof(u16);
+			if (length % sizeof(u16) != 0 || span > cartridge.getSize())
+				throw NaomiCartException(strprintf(T("Invalid ROM: truncated %s"), component));
+			u32 mappedLength = (u32)span;
 			u8 *destination = (u8 *)cartridge.GetPtr(offset, mappedLength);
 			if (destination == nullptr)
 				throw NaomiCartException(strprintf(T("Invalid ROM: truncated %s"), component));
-			u16 *to = (u16 *)destination;
-			u16 *from = (u16 *)data.data();
-			for (u32 i = length / 2; i > 0; --i, ++to)
-				*to++ = *from++;
+			for (u32 i = 0; i < length; i += sizeof(u16))
+				memcpy(destination + (size_t)i * 2, data.data() + i, sizeof(u16));
 			if (hash)
 				md5.add(destination, length);
 		}
@@ -949,7 +953,7 @@ void* Cartridge::GetPtr(u32 offset, u32& size)
 {
 	offset &= 0x1fffffff;
 
-	if (offset >= RomSize || offset + size > RomSize)
+	if (offset >= RomSize || size > RomSize - offset)
 	{
 		WARN_LOG(NAOMI, "Invalid naomi cart: offset %x size %x rom size %x", offset, size, RomSize);
 		size = 0;

@@ -184,6 +184,26 @@ TEST(NaomiRomReadTest, InterleavedWordPreservesLaneLayoutAndDigest)
 	EXPECT_EQ(1u, archive.stats.calls);
 }
 
+TEST(NaomiRomReadTest, HighLaneCanEndAtTheCartridgeBoundary)
+{
+	TestCartridge cartridge(8);
+	MemoryArchive low({ 0x10, 0x11, 0x30, 0x31 });
+	MemoryArchive high({ 0x20, 0x21, 0x40, 0x41 });
+	auto lowFile = openFile(low);
+	auto highFile = openFile(high);
+	std::vector<u8> eeprom;
+	MD5Sum md5;
+
+	naomi_cart::loadGameBlob(*lowFile, InterleavedWord, cartridge, 0, 4, "low", md5, true, eeprom);
+	naomi_cart::loadGameBlob(*highFile, InterleavedWord, cartridge, 2, 4, "high", md5, true, eeprom);
+
+	const std::array<u8, 8> expected{ 0x10, 0x11, 0x20, 0x21, 0x30, 0x31, 0x40, 0x41 };
+	EXPECT_EQ(0, memcmp(expected.data(), cartridge.bytes(), expected.size()));
+	// GGPO hashes each lane's original contiguous slice after that lane is mapped.
+	const std::array<u8, 8> hashed{ 0x10, 0x11, 0xff, 0xff, 0x20, 0x21, 0x30, 0x31 };
+	EXPECT_EQ(MD5Sum().add(hashed).getDigest(), digest(md5));
+}
+
 TEST(NaomiRomReadTest, KeyAndDefaultEepromPublishOnlyAfterExactReads)
 {
 	TestCartridge cartridge(16);
