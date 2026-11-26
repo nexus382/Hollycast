@@ -166,9 +166,8 @@ final class SaveSlotJournal {
 
         if (ready == null) {
             // PREPARE precedes backup creation and all destination writes.
-            // Removing its partial backup is therefore safe and retryable.
-            if (prepare != null && prepare.state.hadPrevious)
-                deleteIfPresent(parent, prepare.state.backupName);
+            // The slot is untouched; remove the records before best-effort
+            // cleanup so a refused backup deletion cannot block later reads.
             for (MarkerDocument marker : markers)
                 deleteMarker(marker.uri);
             removeOrphanBackups(parent, name);
@@ -190,13 +189,11 @@ final class SaveSlotJournal {
                 throw new IOException("Could not remove the incomplete first save");
         }
 
-        // READY stays until rollback is complete. PREPARE can finish cleanup
-        // without touching the slot if READY deletion is interrupted.
-        deleteMarker(ready.uri);
-        if (state.hadPrevious)
-            deleteIfPresent(parent, state.backupName);
+        // Remove records only after rollback is complete. If either deletion
+        // is interrupted, the remaining record repeats the verified rollback.
         if (prepare != null)
             deleteMarker(prepare.uri);
+        deleteMarker(ready.uri);
         for (MarkerDocument marker : markers)
             if (marker != ready && marker != prepare)
                 deleteMarker(marker.uri);
@@ -351,12 +348,6 @@ final class SaveSlotJournal {
         return result;
     }
 
-    private void deleteIfPresent(String parent, String name) throws IOException {
-        String child = provider.findChild(parent, name);
-        if (child != null && !provider.delete(child))
-            throw new IOException("Could not delete save transaction document " + name);
-    }
-
     private void deleteMarker(String marker) throws IOException {
         if (!provider.delete(marker))
             throw new IOException("Could not remove save transaction marker");
@@ -368,8 +359,12 @@ final class SaveSlotJournal {
             if (!child.name.startsWith(prefix)
                     || !isTransactionToken(child.name.substring(prefix.length())))
                 continue;
-            if (!provider.delete(child.uri))
-                throw new IOException("Could not remove orphan save backup " + child.name);
+            try {
+                provider.delete(child.uri);
+            } catch (IOException | RuntimeException ignored) {
+                // Record removal is the commit point. Orphan cleanup cannot
+                // make a verified live slot unreadable.
+            }
         }
     }
 
@@ -420,6 +415,10 @@ final class SaveSlotJournal {
 
     static String markerPrefix(String name) {
         return artifactStem(name) + MARKER_SUFFIX;
+    }
+
+    static String backupName(String name, String token) {
+        return backupPrefix(name) + token;
     }
 
     private static String backupPrefix(String name) {

@@ -166,12 +166,8 @@ public:
 	{
 		jni::String juri(uri);
 		bool ret = jni::env()->CallBooleanMethod(jstorage, jexists, (jstring)juri);
-		try {
-			checkException();
-			return ret;
-		} catch (...) {
-			return false;
-		}
+		checkException();
+		return ret;
 	}
 
 	bool addStorage(bool isDirectory, bool writeAccess, const std::string& description,
