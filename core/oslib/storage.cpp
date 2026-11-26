@@ -22,11 +22,14 @@
 #include "nowide/stackstring.hpp"
 #include "i18n.h"
 #include <atomic>
+#include <cstring>
+#include <mutex>
 #include <vector>
 #include <sys/stat.h>
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <fcntl.h>
 #include <io.h>
 #ifdef TARGET_UWP
 #include <aclapi.h>
@@ -90,7 +93,7 @@ static const std::string native_separator = "/";
 
 namespace {
 
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(TARGET_UWP)
 bool windowsAclUnsupported(DWORD error)
 {
 	return error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED;
@@ -98,8 +101,42 @@ bool windowsAclUnsupported(DWORD error)
 #endif
 
 #if defined(TARGET_UWP)
-constexpr char uwpRecoverySuffix[] = ".hollycast-recovery";
+constexpr char uwpJournalSuffix[] = ".hollycast-journal";
+constexpr char uwpBackupSuffix[] = ".hollycast-backup";
 constexpr char uwpTemporaryMarker[] = ".tmp-";
+constexpr char uwpJournalMagic[] = "HOLLYCAST-SAVE-JOURNAL-1\n";
+std::mutex uwpStorageMutex;
+
+class UwpHandle
+{
+public:
+	explicit UwpHandle(HANDLE handle = INVALID_HANDLE_VALUE) : handle(handle) {}
+	~UwpHandle() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+	UwpHandle(const UwpHandle&) = delete;
+	UwpHandle& operator=(const UwpHandle&) = delete;
+	HANDLE get() const { return handle; }
+	HANDLE release() { HANDLE released = handle; handle = INVALID_HANDLE_VALUE; return released; }
+	bool valid() const { return handle != INVALID_HANDLE_VALUE; }
+	void close() { if (valid()) { CloseHandle(handle); handle = INVALID_HANDLE_VALUE; } }
+	void reset(HANDLE replacement) { close(); handle = replacement; }
+
+private:
+	HANDLE handle;
+};
+
+class UwpSecurityDescriptor
+{
+public:
+	UwpSecurityDescriptor() = default;
+	UwpSecurityDescriptor(const UwpSecurityDescriptor&) = delete;
+	UwpSecurityDescriptor& operator=(const UwpSecurityDescriptor&) = delete;
+	~UwpSecurityDescriptor() { if (descriptor != nullptr) LocalFree(descriptor); }
+	PSECURITY_DESCRIPTOR* output() { return &descriptor; }
+	PSECURITY_DESCRIPTOR get() const { return descriptor; }
+
+private:
+	PSECURITY_DESCRIPTOR descriptor = nullptr;
+};
 
 bool getUwpFileExists(const std::string& path, bool& exists)
 {
@@ -128,6 +165,31 @@ bool uwpFileNamesEqual(const std::string& first, const std::string& second)
 		&& CompareStringOrdinal(firstName.get(), -1, secondName.get(), -1, TRUE) == CSTR_EQUAL;
 }
 
+bool isUwpStagePath(const std::string& destination, const std::string& stage)
+{
+	const std::string prefix = destination + uwpTemporaryMarker;
+	if (stage.size() <= prefix.size() || !uwpFileNamesEqual(stage.substr(0, prefix.size()), prefix))
+		return false;
+	bool hasFirstDigit = false;
+	bool hasSecondDigit = false;
+	bool foundSeparator = false;
+	for (size_t i = prefix.size(); i < stage.size(); ++i)
+	{
+		if (stage[i] >= '0' && stage[i] <= '9')
+		{
+			if (foundSeparator)
+				hasSecondDigit = true;
+			else
+				hasFirstDigit = true;
+		}
+		else if (stage[i] == '-' && !foundSeparator && hasFirstDigit && i + 1 < stage.size())
+			foundSeparator = true;
+		else
+			return false;
+	}
+	return foundSeparator && hasSecondDigit;
+}
+
 bool deleteUwpFile(const std::string& path)
 {
 	nowide::wstackstring name;
@@ -139,120 +201,201 @@ bool deleteUwpFile(const std::string& path)
 	return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
 }
 
-bool isUwpRecoveryFileName(const std::string& name)
+bool getUwpSecurityDescriptor(const std::string& path, UwpSecurityDescriptor& descriptor)
 {
-	const size_t suffixLength = sizeof(uwpRecoverySuffix) - 1;
-	if (name.size() <= suffixLength
-		|| name.compare(name.size() - suffixLength, suffixLength, uwpRecoverySuffix) != 0)
+	nowide::wstackstring name;
+	if (!name.convert(path.c_str()))
 		return false;
-	const std::string stagedName = name.substr(0, name.size() - suffixLength);
-	const size_t marker = stagedName.rfind(uwpTemporaryMarker);
-	if (marker == std::string::npos || marker == 0
-		|| marker + sizeof(uwpTemporaryMarker) - 1 == stagedName.size())
+	WIN32_FILE_ATTRIBUTE_DATA attributes;
+	if (!GetFileAttributesExFromAppW(name.get(), GetFileExInfoStandard, &attributes))
+	{
+		DWORD error = GetLastError();
+		if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+			return true;
 		return false;
-	for (size_t i = marker + sizeof(uwpTemporaryMarker) - 1; i < stagedName.size(); ++i)
-		if ((stagedName[i] < '0' || stagedName[i] > '9') && stagedName[i] != '-')
-			return false;
+	}
+	if (attributes.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+		return false;
+	UwpHandle source(CreateFileFromAppW(name.get(), READ_CONTROL,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL, nullptr));
+	if (!source.valid())
+		return false;
+	DWORD result = GetSecurityInfo(source.get(), SE_FILE_OBJECT,
+		OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+		nullptr, nullptr, nullptr, nullptr, descriptor.output());
+	return result == ERROR_SUCCESS && descriptor.get() != nullptr;
+}
+
+bool createUwpTemporaryFile(const std::string& destination, const std::string& temporaryPath,
+		FILE **file, int& error)
+{
+	*file = nullptr;
+	error = ERROR_SUCCESS;
+	UwpSecurityDescriptor descriptor;
+	if (!getUwpSecurityDescriptor(destination, descriptor))
+		return false;
+	nowide::wstackstring temporaryName;
+	if (!temporaryName.convert(temporaryPath.c_str()))
+	{
+		error = ERROR_INVALID_NAME;
+		return false;
+	}
+	SECURITY_ATTRIBUTES attributes = {sizeof(SECURITY_ATTRIBUTES), descriptor.get(), FALSE};
+	UwpHandle handle(CreateFileFromAppW(temporaryName.get(), GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &attributes, CREATE_NEW,
+		FILE_ATTRIBUTE_NORMAL, nullptr));
+	if (!handle.valid())
+	{
+		error = GetLastError();
+		return false;
+	}
+	const intptr_t rawHandle = reinterpret_cast<intptr_t>(handle.release());
+	const int fd = _open_osfhandle(rawHandle, _O_BINARY | _O_RDWR);
+	if (fd < 0)
+	{
+		CloseHandle(reinterpret_cast<HANDLE>(rawHandle));
+		deleteUwpFile(temporaryPath);
+		error = ERROR_NOT_ENOUGH_MEMORY;
+		return false;
+	}
+	*file = _fdopen(fd, "wb");
+	if (*file == nullptr)
+	{
+		_close(fd);
+		deleteUwpFile(temporaryPath);
+		error = ERROR_NOT_ENOUGH_MEMORY;
+		return false;
+	}
+	error = ERROR_SUCCESS;
 	return true;
 }
 
-bool recoverUwpBackup(const std::string& destination, const std::string& backup, bool requireCleanup)
+bool writeUwpJournal(HANDLE journal, const std::string& destination, const std::string& stage)
 {
-	bool backupExists;
-	if (!getUwpFileExists(backup, backupExists))
+	if (!isUwpStagePath(destination, stage))
 		return false;
-	if (!backupExists)
-		return true;
-	bool destinationExists;
-	if (!getUwpFileExists(destination, destinationExists))
+	DWORD written;
+	if (!WriteFile(journal, uwpJournalMagic, sizeof(uwpJournalMagic) - 1, &written, nullptr)
+		|| written != sizeof(uwpJournalMagic) - 1)
 		return false;
-	if (destinationExists)
-	{
-		// The replacement committed before shutdown. Remove its stale backup so
-		// it cannot be mistaken for a later rollback copy.
-		const bool removed = deleteUwpFile(backup);
-		if (!removed && requireCleanup)
-			return false;
-		if (removed)
-			deleteUwpFile(backup.substr(0, backup.size() - (sizeof(uwpRecoverySuffix) - 1)));
-		return true;
-	}
+	if (stage.size() > MAXDWORD
+		|| !WriteFile(journal, stage.data(), static_cast<DWORD>(stage.size()), &written, nullptr)
+		|| written != static_cast<DWORD>(stage.size()))
+		return false;
+	return FlushFileBuffers(journal) != 0;
+}
 
-	nowide::wstackstring backupName, destinationName;
-	if (!backupName.convert(backup.c_str()) || !destinationName.convert(destination.c_str()))
+bool readUwpJournal(HANDLE journal, const std::string& destination, std::string& stage)
+{
+	// GetFileSizeEx is unavailable in the UWP app partition; FileStandardInfo is supported.
+	FILE_STANDARD_INFO fileInfo;
+	if (!GetFileInformationByHandleEx(journal, FileStandardInfo, &fileInfo, sizeof(fileInfo))
+		|| fileInfo.Directory || fileInfo.EndOfFile.QuadPart < static_cast<long long>(sizeof(uwpJournalMagic) - 1)
+		|| fileInfo.EndOfFile.QuadPart > 262144)
 		return false;
-	if (MoveFileFromAppW(backupName.get(), destinationName.get()))
-	{
-		deleteUwpFile(backup.substr(0, backup.size() - (sizeof(uwpRecoverySuffix) - 1)));
+	std::vector<char> contents(static_cast<size_t>(fileInfo.EndOfFile.QuadPart));
+	LARGE_INTEGER start{};
+	if (!SetFilePointerEx(journal, start, nullptr, FILE_BEGIN))
+		return false;
+	DWORD read;
+	if (!ReadFile(journal, contents.data(), static_cast<DWORD>(contents.size()), &read, nullptr)
+		|| read != static_cast<DWORD>(contents.size()))
+		return false;
+	const size_t magicSize = sizeof(uwpJournalMagic) - 1;
+	if (std::memcmp(contents.data(), uwpJournalMagic, magicSize) != 0)
+		return false;
+	stage.assign(contents.data() + magicSize, contents.size() - magicSize);
+	return isUwpStagePath(destination, stage);
+}
+
+bool createUwpJournal(const std::string& destination, const std::string& stage, UwpHandle& journal)
+{
+	UwpSecurityDescriptor descriptor;
+	if (!getUwpSecurityDescriptor(destination, descriptor))
+		return false;
+	nowide::wstackstring name;
+	if (!name.convert((destination + uwpJournalSuffix).c_str()))
+		return false;
+	SECURITY_ATTRIBUTES attributes = {sizeof(SECURITY_ATTRIBUTES), descriptor.get(), FALSE};
+	// CREATE_NEW both reserves the per-slot recovery record and avoids adopting an unrelated file.
+	HANDLE handle = CreateFileFromAppW(name.get(), GENERIC_READ | GENERIC_WRITE | DELETE,
+		0, &attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (handle == INVALID_HANDLE_VALUE)
+		return false;
+	journal.reset(handle);
+	if (writeUwpJournal(journal.get(), destination, stage))
 		return true;
-	}
-	DWORD error = GetLastError();
-	if (error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS)
-	{
-		if (!getUwpFileExists(destination, destinationExists))
-			return false;
-		if (destinationExists)
-			return !requireCleanup || deleteUwpFile(backup);
-	}
+	journal.close();
+	deleteUwpFile(destination + uwpJournalSuffix);
 	return false;
 }
 
-bool recoverUwpBackupsInDirectory(const std::string& directory, const std::string *targetName = nullptr,
-		bool requireCleanup = true)
+bool recoverUwpTransaction(const std::string& destination, bool requireCleanup, bool writeOperation)
 {
-	DIR *dir = flycast::opendir(directory.c_str());
-	if (dir == nullptr)
+	const std::string journalPath = destination + uwpJournalSuffix;
+	nowide::wstackstring journalName, destinationName;
+	if (!journalName.convert(journalPath.c_str()) || !destinationName.convert(destination.c_str()))
 		return false;
-	struct RecoveryRecord
+	// Exclusive sharing serializes recovery across processes; the mutex covers in-process readers.
+	UwpHandle journal(CreateFileFromAppW(journalName.get(), GENERIC_READ | GENERIC_WRITE | DELETE,
+		0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+	if (!journal.valid())
 	{
-		std::string destination;
-		std::string backup;
-	};
-	std::vector<RecoveryRecord> records;
-	while (dirent *entry = flycast::readdir(dir))
-	{
-		const std::string name(entry->d_name);
-		if (!isUwpRecoveryFileName(name))
-			continue;
-		const size_t suffixLength = sizeof(uwpRecoverySuffix) - 1;
-		const std::string stagedName = name.substr(0, name.size() - suffixLength);
-		const size_t marker = stagedName.rfind(uwpTemporaryMarker);
-		const std::string destinationName = stagedName.substr(0, marker);
-		if (targetName != nullptr && !uwpFileNamesEqual(destinationName, *targetName))
-			continue;
-		std::string destination = directory;
-		if (destination.find_last_of(separators) != destination.size() - 1)
-			destination += native_separator;
-		destination += destinationName;
-		const std::string backup = directory + (directory.find_last_of(separators) == directory.size() - 1
-			? "" : native_separator) + name;
-		records.push_back({std::move(destination), backup});
+		DWORD error = GetLastError();
+		if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
+			return true;
+		// Reads still attempt the committed path when recovery metadata cannot
+		// be opened; the content open itself decides whether that path is readable.
+		return !writeOperation;
 	}
-	flycast::closedir(dir);
-	bool success = true;
-	for (const auto& record : records)
-		if (!recoverUwpBackup(record.destination, record.backup, requireCleanup))
-			success = false;
-	return success;
-}
-
-bool recoverUwpBackupsForPath(const std::string& path, bool requireCleanup = true)
-{
-	const size_t separator = path.find_last_of(separators);
-	std::string directory;
-	if (separator == std::string::npos)
-		directory = ".";
-	else if (separator == 0)
-		directory = native_separator;
-#ifdef _WIN32
-	else if (separator == 2 && path.size() > 2 && path[1] == ':')
-		directory = path.substr(0, separator + 1);
-#endif
-	else
-		directory = path.substr(0, separator);
-	const std::string targetName = separator == std::string::npos
-		? path : path.substr(separator + 1);
-	return recoverUwpBackupsInDirectory(directory, &targetName, requireCleanup);
+	std::string stagePath;
+	if (!readUwpJournal(journal.get(), destination, stagePath))
+	{
+		// An unrecognized record does not authorize touching any sibling file.
+		return !writeOperation;
+	}
+	const std::string backupPath = stagePath + uwpBackupSuffix;
+	nowide::wstackstring backupName;
+	if (!backupName.convert(backupPath.c_str()))
+		return false;
+	bool backupExists;
+	bool destinationExists;
+	bool stageExists;
+	if (!getUwpFileExists(backupPath, backupExists) || !getUwpFileExists(destination, destinationExists)
+		|| !getUwpFileExists(stagePath, stageExists))
+		return !writeOperation;
+	bool cleanupComplete = true;
+	if (backupExists)
+	{
+		if (destinationExists)
+		{
+			// If the staged replacement still exists, this was not a completed
+			// publication. Leave both siblings untouched; the destination remains
+			// readable, but another writer must not discard the backup.
+			if (stageExists)
+				return !writeOperation;
+			if (!deleteUwpFile(backupPath))
+				return !requireCleanup;
+		}
+		else if (!MoveFileFromAppW(backupName.get(), destinationName.get()))
+		{
+			DWORD error = GetLastError();
+			if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS)
+				return !writeOperation;
+			if (!getUwpFileExists(destination, destinationExists) || !destinationExists)
+				return !writeOperation;
+			// Another writer created the destination during recovery. Keep the
+			// backup until the destination can safely be restored.
+			return !writeOperation;
+		}
+	}
+	if (stageExists && !deleteUwpFile(stagePath))
+		cleanupComplete = false;
+	journal.close();
+	if (!deleteUwpFile(journalPath))
+		cleanupComplete = false;
+	return cleanupComplete || !requireCleanup;
 }
 #endif
 
@@ -264,51 +407,10 @@ bool preserveNativeFileAccess(const std::string& destination, const std::string&
 	(void)temporaryFd;
 #ifdef TARGET_UWP
 	(void)temporaryPath;
-	nowide::wstackstring sourceName;
-	if (!sourceName.convert(destination.c_str()))
-		return false;
-	WIN32_FILE_ATTRIBUTE_DATA attributes;
-	if (!GetFileAttributesExFromAppW(sourceName.get(), GetFileExInfoStandard, &attributes))
-	{
-		DWORD error = GetLastError();
-		return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
-	}
-	if (attributes.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
-		return false;
-	HANDLE source = CreateFileFromAppW(sourceName.get(), READ_CONTROL,
-		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-		FILE_ATTRIBUTE_NORMAL, nullptr);
-	if (source == INVALID_HANDLE_VALUE)
-		return windowsAclUnsupported(GetLastError());
-	HANDLE staged = reinterpret_cast<HANDLE>(_get_osfhandle(temporaryFd));
-	if (staged == INVALID_HANDLE_VALUE)
-	{
-		CloseHandle(source);
-		return false;
-	}
-	PACL dacl = nullptr;
-	PSECURITY_DESCRIPTOR descriptor = nullptr;
-	DWORD result = GetSecurityInfo(source, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-		nullptr, nullptr, &dacl, nullptr, &descriptor);
-	if (result == ERROR_SUCCESS)
-	{
-		SECURITY_DESCRIPTOR_CONTROL control;
-		DWORD revision;
-		if (!GetSecurityDescriptorControl(descriptor, &control, &revision))
-			result = GetLastError();
-		else
-		{
-			SECURITY_INFORMATION information = DACL_SECURITY_INFORMATION;
-			information |= control & SE_DACL_PROTECTED
-				? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION;
-			result = SetSecurityInfo(staged, SE_FILE_OBJECT, information,
-				nullptr, nullptr, dacl, nullptr);
-		}
-	}
-	if (descriptor != nullptr)
-		LocalFree(descriptor);
-	CloseHandle(source);
-	return result == ERROR_SUCCESS || windowsAclUnsupported(result);
+	(void)destination;
+	// createUwpTemporaryFile applies the source security descriptor atomically
+	// as the staged inode is created; no post-creation WRITE_DAC access is needed.
+	return true;
 #else
 	nowide::wstackstring sourceName, temporaryName;
 	if (!sourceName.convert(destination.c_str()) || !temporaryName.convert(temporaryPath.c_str()))
@@ -482,12 +584,6 @@ public:
 	{
 		if (path.empty())
 			return listRoots();
-
-#ifdef TARGET_UWP
-		if (!recoverUwpBackupsInDirectory(path, nullptr, false))
-			WARN_LOG(COMMON, "Cannot recover interrupted save replacement in '%s'", path.c_str());
-#endif
-
 		DIR *dir = flycast::opendir(path.c_str());
 		if (dir == nullptr) {
 			WARN_LOG(COMMON, "Cannot read directory '%s' errno 0x%x", path.c_str(), errno);
@@ -502,10 +598,6 @@ public:
 
 			FileInfo entry;
 			entry.name = direntry->d_name;
-#ifdef TARGET_UWP
-			if (isUwpRecoveryFileName(entry.name))
-				continue;
-#endif
 #ifdef __APPLE__
 			entry.name = os_PrecomposedString(entry.name);
 #endif
@@ -576,7 +668,8 @@ public:
 	File *openFile(const std::string& path, const std::string& mode) override
 	{
 #ifdef TARGET_UWP
-		if (!recoverUwpBackupsForPath(path, false))
+		std::lock_guard<std::mutex> lock(uwpStorageMutex);
+		if (!recoverUwpTransaction(path, false, false))
 			return nullptr;
 #endif
 		FILE *file = nowide::fopen(path.c_str(), mode.c_str());
@@ -590,7 +683,8 @@ public:
 	File *createTemporaryFile(const std::string& destination, std::string& temporaryPath) override
 	{
 #ifdef TARGET_UWP
-		if (!recoverUwpBackupsForPath(destination))
+		std::lock_guard<std::mutex> lock(uwpStorageMutex);
+		if (!recoverUwpTransaction(destination, true, true))
 			return nullptr;
 #endif
 		static std::atomic<u64> sequence{0};
@@ -605,13 +699,17 @@ public:
 			FILE *file = nullptr;
 #ifdef _WIN32
 #ifdef TARGET_UWP
-			bool backupExists;
-			if (!getUwpFileExists(temporaryPath + uwpRecoverySuffix, backupExists))
+			int createError = ERROR_SUCCESS;
+			if (!createUwpTemporaryFile(destination, temporaryPath, &file, createError))
+			{
+				if (createError == ERROR_FILE_EXISTS || createError == ERROR_ALREADY_EXISTS)
+					continue;
 				break;
-			if (backupExists)
-				continue;
+			}
 #endif
+#ifndef TARGET_UWP
 			file = nowide::fopen(temporaryPath.c_str(), "wbx");
+#endif
 #else
 			int flags = O_CREAT | O_EXCL | O_RDWR;
 #ifdef O_CLOEXEC
@@ -643,8 +741,12 @@ public:
 				temporaryPath.clear();
 				return nullptr;
 			}
+#ifdef TARGET_UWP
+			break;
+#else
 			if (errno != EEXIST)
 				break;
+#endif
 		}
 		temporaryPath.clear();
 		return nullptr;
@@ -653,38 +755,41 @@ public:
 	bool replaceFile(const std::string& temporaryPath, const std::string& destination) override
 	{
 #ifdef TARGET_UWP
-		if (!recoverUwpBackupsForPath(destination))
+		std::lock_guard<std::mutex> lock(uwpStorageMutex);
+		if (!recoverUwpTransaction(destination, true, true))
 			return false;
 		bool destinationExists;
 		if (!getUwpFileExists(destination, destinationExists))
 			return false;
 		nowide::wstackstring temporaryName, destinationName, backupName;
-		const std::string backupPath = temporaryPath + uwpRecoverySuffix;
-		if (!temporaryName.convert(temporaryPath.c_str()) || !destinationName.convert(destination.c_str())
-			|| !backupName.convert(backupPath.c_str()))
-			return false;
-		bool backupExists;
-		if (!getUwpFileExists(backupPath, backupExists) || backupExists)
+		const std::string backupPath = temporaryPath + uwpBackupSuffix;
+		if (!temporaryName.convert(temporaryPath.c_str()) || !destinationName.convert(destination.c_str()))
 			return false;
 		if (!destinationExists)
 			return MoveFileFromAppW(temporaryName.get(), destinationName.get()) != 0;
+		bool backupExists;
+		if (!getUwpFileExists(backupPath, backupExists) || backupExists)
+			return false;
+		if (!backupName.convert(backupPath.c_str()))
+			return false;
+		UwpHandle journal;
+		if (!createUwpJournal(destination, temporaryPath, journal))
+			return false;
 		if (ReplaceFileFromAppW(destinationName.get(), temporaryName.get(), backupName.get(), 0, nullptr, nullptr))
 		{
-			// The replacement is committed. A failed backup cleanup is harmless and
-			// is retried by the next access or directory listing.
-			deleteUwpFile(backupPath);
+			// The new destination is committed. Keep the journal if backup cleanup
+			// fails so a later access can retry without hiding the committed file.
+			journal.close();
+			if (deleteUwpFile(backupPath))
+				deleteUwpFile(destination + uwpJournalSuffix);
 			return true;
 		}
 		const DWORD error = GetLastError();
-		if (error == 1177)
-		{
-			if (!recoverUwpBackup(destination, backupPath))
-				WARN_LOG(COMMON, "Save replacement rollback pending for '%s'", destination.c_str());
-		}
-		if (error == 1176)
-			return false; // Both original paths remain in place when a backup is specified.
-		// Other documented failures leave the original slot in place, or the
-		// stage-specific backup is picked up by recoverUwpBackupsInDirectory.
+		journal.close();
+		// State-based recovery handles 1176 (both names retained) and 1177 (the
+		// old target is at the backup path) both now and after a later restart.
+		if (!recoverUwpTransaction(destination, true, true))
+			WARN_LOG(COMMON, "Save replacement recovery pending for '%s' (error 0x%x)", destination.c_str(), error);
 		return false;
 #else
 		return flycast::rename(temporaryPath.c_str(), destination.c_str()) == 0;
@@ -730,7 +835,8 @@ public:
 	FileInfo getFileInfo(const std::string& path) override
 	{
 #ifdef TARGET_UWP
-		if (!recoverUwpBackupsForPath(path, false))
+		std::lock_guard<std::mutex> lock(uwpStorageMutex);
+		if (!recoverUwpTransaction(path, false, false))
 			throw StorageException(strprintf(i18n::T("Cannot stat %s"), path.c_str()));
 #endif
 		FileInfo info;
@@ -807,7 +913,8 @@ public:
 	bool exists(const std::string& path) override
 	{
 #ifdef TARGET_UWP
-		if (!recoverUwpBackupsForPath(path, false))
+		std::lock_guard<std::mutex> lock(uwpStorageMutex);
+		if (!recoverUwpTransaction(path, false, false))
 			return false;
 #endif
 #ifndef _WIN32
