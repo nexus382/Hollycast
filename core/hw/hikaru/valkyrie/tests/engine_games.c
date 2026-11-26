@@ -23,14 +23,35 @@ int hikaru_vendor_test_frame_packet_ownership(HikaruEngine *);
 int hikaru_vendor_test_texture_snapshot(void *, HikaruFrame *, unsigned);
 int hikaru_vendor_test_memctl_dma(vk_device_t *, uint32_t, uint32_t, uint32_t, uint32_t, int);
 int hikaru_vendor_test_write_value(sh4_t *, unsigned, uint32_t, uint64_t);
+uint64_t hikaru_vendor_test_read_value(sh4_t *, unsigned, uint32_t);
 static unsigned checks, failures;
+static unsigned mie_read_size, mie_write_size;
+static uint32_t mie_read_address, mie_write_address;
+static uint64_t mie_write_value;
 #define CHECK(condition) do { ++checks; if (!(condition)) { \
     fprintf(stderr, "line %u: %s\n", __LINE__, #condition); ++failures; } } while (0)
 static void reset(void *opaque) { (void)opaque; }
 static int read_bus(void *opaque, unsigned size, uint32_t address, uint64_t *value)
-{ (void)opaque; (void)size; (void)address; *value = 0; return 0; }
+{
+    (void)opaque;
+    *value = 0;
+    if (address == 0x00838200) {
+        mie_read_size = size;
+        mie_read_address = address;
+        *value = 0xff34ff12;
+    }
+    return 0;
+}
 static int write_bus(void *opaque, unsigned size, uint32_t address, uint64_t value)
-{ (void)opaque; (void)size; (void)address; (void)value; return 0; }
+{
+    (void)opaque;
+    if (address == 0x00838200) {
+        mie_write_size = size;
+        mie_write_address = address;
+        mie_write_value = value;
+    }
+    return 0;
+}
 static int advance(void *opaque, uint32_t cycles)
 { (void)opaque; (void)cycles; return 0; }
 static void inputs(void *opaque, const HikaruEngineInputs *value)
@@ -815,6 +836,16 @@ int main(int argc, char **argv)
     check_board(engine, "swracer", 4, 8, false);
     check_state_roundtrip(engine);
     board = (hikaru_t *)engine->machine;
+    // Star Wars reads MIE data with longword instructions during startup.
+    uint32_t mie_value = 0;
+    mie_read_size = mie_write_size = 0;
+    const int mie_read_ok = !vk_mmap_get(board->mmap_m, 4, 0x00838200, &mie_value);
+    CHECK(mie_read_ok);
+    CHECK(mie_read_size == 4 && mie_read_address == 0x00838200 && mie_value == 0xff34ff12);
+    if (mie_read_ok)
+        CHECK(hikaru_vendor_test_read_value((sh4_t *)board->sh_m, 4, 0xa0838200) == 0xff34ff12);
+    CHECK(!hikaru_vendor_test_write_value((sh4_t *)board->sh_m, 4, 0xa0838200, 0x12345678));
+    CHECK(mie_write_size == 4 && mie_write_address == 0x00838200 && mie_write_value == 0x12345678);
     CHECK(board->rombd_config.eprom_source_stride == 0x1000000);
     CHECK(board->eprom->ptr == program && board->maskrom->ptr == data);
     for (unsigned bank = 0; bank < 2; ++bank) {
