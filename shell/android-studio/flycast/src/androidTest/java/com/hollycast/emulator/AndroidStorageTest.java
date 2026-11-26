@@ -121,6 +121,35 @@ public class AndroidStorageTest {
     }
 
     @Test
+    public void directlySharedStateOpensWithoutTreeAccess() {
+        try (ActivityScenario<NativeGLActivity> scenario = ActivityScenario.launch(NativeGLActivity.class)) {
+            scenario.onActivity(activity -> {
+                try {
+                    java.io.File file = java.io.File.createTempFile("shared-slot-", ".state", activity.getFilesDir());
+                    try {
+                        byte[] expected = "shared state".getBytes("UTF-8");
+                        try (OutputStream out = new java.io.FileOutputStream(file)) {
+                            out.write(expected);
+                        }
+                        String uri = androidx.core.content.FileProvider.getUriForFile(activity,
+                                activity.getPackageName() + ".provider", file).toString();
+                        AndroidStorage storage = activity.getStorage();
+                        assertTrue(storage.exists(uri));
+                        assertArrayEquals(expected, readDocument(storage, activity, uri));
+                        try (InputStream input = storage.openInputStream(uri)) {
+                            assertEquals(expected[0], input.read());
+                        }
+                    } finally {
+                        file.delete();
+                    }
+                } catch (Exception e) {
+                    throw new AssertionError(e);
+                }
+            });
+        }
+    }
+
+    @Test
     public void canonicalChildrenAndKnownTransactionsUseNormalStorageApis() {
         ActivityScenario<NativeGLActivity> scenario = ActivityScenario.launch(NativeGLActivity.class);
         scenario.onActivity(activity -> {

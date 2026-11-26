@@ -52,6 +52,8 @@ public class AndroidStorage {
     public static final int IMPORT_HOME_ACTIVITY_REQUEST = 15012012;
 
     private Activity activity;
+    // Older providers do not always implement findDocumentPath for opaque document IDs.
+    private final android.util.LruCache<String, String> transactionParents = new android.util.LruCache<>(128);
 
     private List<String> storageDirectories;
     private int storageIntentPerms;
@@ -102,7 +104,7 @@ public class AndroidStorage {
 
     public synchronized int openFile(String uri, String mode) throws FileNotFoundException {
         try {
-            recoverKnownTransaction(uri, true);
+            recoverKnownTransaction(uri);
         } catch (IOException | RuntimeException e) {
             FileNotFoundException failure = new FileNotFoundException("Could not recover " + uri + ": " + e.getMessage());
             failure.initCause(e);
@@ -146,9 +148,9 @@ public class AndroidStorage {
         }
     }
 
-    public boolean removeFile(String uri) {
+    public synchronized boolean removeFile(String uri) {
         try {
-            recoverKnownTransaction(uri, false);
+            recoverKnownTransaction(uri);
             Uri resolved = resolveExisting(uri);
             return deleteDocument(resolved);
         } catch (FileNotFoundException missing) {
@@ -216,18 +218,23 @@ public class AndroidStorage {
                 || name.endsWith(".state.tmp") || name.endsWith(".cfg.save"));
     }
 
-    private void recoverKnownTransaction(String path, boolean tolerateNameQueryFailure) throws IOException {
+    private static boolean isTreeAddress(Uri uri) {
+        // DocumentsContract.isTreeUri was introduced in API 24. Tree grants start at /tree/<id> on API 21 too.
+        List<String> segments = uri.getPathSegments();
+        return segments.size() >= 2 && "tree".equals(segments.get(0));
+    }
+
+    private void recoverKnownTransaction(String path) throws IOException {
         Uri uri = Uri.parse(path);
         String name = pendingName(uri);
         if (name == null) {
+            // A directly shared content URI grants access to one document and has no journal siblings.
+            if (!isTreeAddress(uri))
+                return;
             try {
                 name = queryDocumentName(path);
             } catch (FileNotFoundException missing) {
                 return;
-            } catch (IOException queryError) {
-                if (tolerateNameQueryFailure)
-                    return;
-                throw queryError;
             }
         }
         if (isTransactionalName(name))
@@ -236,7 +243,7 @@ public class AndroidStorage {
 
     private String queryDocumentName(String path) throws IOException {
         Uri uri = resolveExisting(path);
-        if (!DocumentsContract.isDocumentUri(activity, uri)) {
+        if (isTreeAddress(uri) && !DocumentsContract.isDocumentUri(activity, uri)) {
             String id = DocumentsContract.getTreeDocumentId(uri);
             uri = DocumentsContract.buildDocumentUriUsingTree(uri, id);
         }
@@ -281,6 +288,8 @@ public class AndroidStorage {
                     throw new IOException("Provider returned ambiguous children named " + name);
                 match = DocumentsContract.buildDocumentUriUsingTree(parentUri, cursor.getString(0)).toString();
             }
+            if (match != null && isTransactionalName(name))
+                transactionParents.put(match, parent);
             return match;
         } catch (RuntimeException e) {
             throw new IOException("Could not query children of " + parent, e);
@@ -387,6 +396,9 @@ public class AndroidStorage {
         String pending = pendingParent(uri);
         if (pending != null)
             return pending;
+        String knownParent = transactionParents.get(uriString);
+        if (knownParent != null)
+            return knownParent;
         try {
             String parent = getParentUri(uriString);
             if (!parent.isEmpty())
@@ -406,9 +418,9 @@ public class AndroidStorage {
         return DocumentsContract.buildDocumentUriUsingTree(uri, id.substring(0, slash)).toString();
     }
 
-    public InputStream openInputStream(String uri) throws FileNotFoundException {
+    public synchronized InputStream openInputStream(String uri) throws FileNotFoundException {
         try {
-            recoverKnownTransaction(uri, true);
+            recoverKnownTransaction(uri);
             InputStream input = activity.getContentResolver().openInputStream(resolveExisting(uri));
             if (input == null)
                 throw new FileNotFoundException(uri);
@@ -489,6 +501,8 @@ public class AndroidStorage {
                 FileInfo info = new FileInfo();
                 info.setPath(childUri.toString());
                 info.setName(c.getString(1));
+                if (isTransactionalName(info.getName()))
+                    transactionParents.put(childUri.toString(), treeUri.toString());
                 info.setDirectory(DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2)));
                 results.add(info);
             }
@@ -546,11 +560,11 @@ public class AndroidStorage {
         }
     }
 
-    public FileInfo getFileInfo(String uriString) throws FileNotFoundException
+    public synchronized FileInfo getFileInfo(String uriString) throws FileNotFoundException
     {
         Uri uri;
         try {
-            recoverKnownTransaction(uriString, false);
+            recoverKnownTransaction(uriString);
             uri = resolveExisting(uriString);
         } catch (FileNotFoundException missing) {
             throw missing;
@@ -565,7 +579,7 @@ public class AndroidStorage {
         } catch (IOException queryError) {
             throw new RuntimeException("Could not query " + uriString, queryError);
         }
-        DocumentFile docFile = DocumentsContract.isDocumentUri(activity, uri)
+        DocumentFile docFile = !isTreeAddress(uri) || DocumentsContract.isDocumentUri(activity, uri)
                 ? DocumentFile.fromSingleUri(activity, uri)
                 : DocumentFile.fromTreeUri(activity, uri);
         if (docFile == null)
@@ -585,14 +599,14 @@ public class AndroidStorage {
     {
         Uri uri;
         try {
-            recoverKnownTransaction(uriString, false);
+            recoverKnownTransaction(uriString);
             uri = resolveExisting(uriString);
         } catch (FileNotFoundException missing) {
             return false;
         } catch (IOException queryError) {
             throw new RuntimeException("Could not query " + uriString, queryError);
         }
-        if (!DocumentsContract.isDocumentUri(activity, uri)) {
+        if (isTreeAddress(uri) && !DocumentsContract.isDocumentUri(activity, uri)) {
             String documentId = DocumentsContract.getTreeDocumentId(uri);
             uri = DocumentsContract.buildDocumentUriUsingTree(uri, documentId);
         }
