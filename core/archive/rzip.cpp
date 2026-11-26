@@ -20,6 +20,7 @@
 #include <zlib.h>
 
 #include <cstring>
+#include <limits>
 
 const u8 RZipHeader[8] = { '#', 'R', 'Z', 'I', 'P', 'v', 1, '#' };
 
@@ -27,7 +28,6 @@ bool RZipFile::Open(hostfs::File *file, bool write)
 {
 	verify(this->file == nullptr);
 	verify(file != nullptr);
-	this->write = write;
 	writeFailed = false;
 	completionSucceeded = true;
 	startOffset = file->tell();
@@ -54,16 +54,20 @@ bool RZipFile::Open(hostfs::File *file, bool write)
 	}
 	else
 	{
+		constexpr s64 headerPrefixSize = sizeof(RZipHeader) + sizeof(maxChunkSize);
+		if (startOffset < 0 || startOffset > std::numeric_limits<s64>::max() - headerPrefixSize)
+			return completionSucceeded = false;
+		size = 0;
 		maxChunkSize = 1_MB;
 		if (file->write(RZipHeader, sizeof(RZipHeader), 1) != 1
 			|| file->write(&maxChunkSize, sizeof(maxChunkSize), 1) != 1
 			|| file->write(&size, sizeof(size), 1) != 1)
 		{
 			file->seek(startOffset, SEEK_SET);
-			this->write = false;
-			return false;
+			return completionSucceeded = false;
 		}
 	}
+	this->write = write;
 	this->file = file;
 	return true;
 }

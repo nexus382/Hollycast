@@ -16,7 +16,7 @@
 
 namespace {
 
-enum class Failure { None, Header, Preview, RzipHeader, Payload, LengthPatch, Seek, Close, Replace };
+enum class Failure { None, Header, Preview, RzipHeader, Payload, LengthPatch, Tell, Seek, Close, Replace };
 
 struct FakeStorageState
 {
@@ -61,7 +61,7 @@ public:
 		position += amount;
 		return count;
 	}
-	s64 tell() override { return position; }
+	s64 tell() override { return !reading && state->failure == Failure::Tell ? -1 : static_cast<s64>(position); }
 	int seek(s64 offset, int whence) override
 	{
 		if (!reading && state->failure == Failure::Seek)
@@ -191,8 +191,8 @@ const std::vector<u8> preview{0x89, 'P', 'N', 'G', 0x0d, 0x0a};
 
 TEST(SavestateWriteTest, ExistingSlotSurvivesFailedCommit)
 {
-	const Failure failures[] = {Failure::Header, Failure::Preview, Failure::Payload,
-		Failure::LengthPatch, Failure::Seek, Failure::Close, Failure::Replace};
+	const Failure failures[] = {Failure::Header, Failure::Preview, Failure::RzipHeader, Failure::Payload,
+		Failure::LengthPatch, Failure::Tell, Failure::Seek, Failure::Close, Failure::Replace};
 	for (Failure failure : failures)
 	{
 		FakeStorage storage;
@@ -331,6 +331,7 @@ TEST(SavestateWriteTest, NativeSiblingTransactionReplacesAndCleansUp)
 	std::ifstream firstSlot(destination, std::ios::binary);
 	const std::string firstContents((std::istreambuf_iterator<char>(firstSlot)), std::istreambuf_iterator<char>());
 	EXPECT_EQ(firstContents, "first slot");
+	firstSlot.close();
 	EXPECT_EQ(std::distance(std::filesystem::directory_iterator(root), std::filesystem::directory_iterator{}), 1);
 	std::filesystem::remove_all(root);
 }
