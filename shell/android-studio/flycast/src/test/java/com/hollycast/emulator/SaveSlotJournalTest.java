@@ -69,6 +69,51 @@ public class SaveSlotJournalTest {
     }
 
     @Test
+    public void committedSlotStaysReadableWhenOrphanBackupDeletionIsDenied() throws Exception {
+        FakeProvider provider = providerWithOldSlot();
+        SaveSlotJournal journal = new SaveSlotJournal(provider);
+        provider.denyBackupDeletion = true;
+        assertTrue(journal.replace(provider.tempId, SLOT));
+        assertArrayEquals(NEW, provider.contentsOfSlot());
+
+        String backup = findBackup(provider);
+        assertNotNull("committed backup should remain when cleanup is denied", backup);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            assertArrayEquals("orphan cleanup blocked a repeated open", NEW, readSlot(journal, provider));
+            assertTrue("failed cleanup must leave the backup intact", provider.docs.containsKey(backup));
+        }
+
+        provider.denyBackupDeletion = false;
+        assertArrayEquals(NEW, readSlot(journal, provider));
+        assertNull("later recovery should retry orphan cleanup", provider.docs.get(backup));
+    }
+
+    @Test
+    public void failedRollbackKeepsTheOldBackupAndRecoveryRecord() throws Exception {
+        FakeProvider provider = prepareOverwriteRollback();
+        String backup = findBackup(provider);
+        assertNotNull(backup);
+        byte[] partial = provider.contentsOfSlot();
+        provider.readOnlyDestination = true;
+
+        try {
+            new SaveSlotJournal(provider).recover(SLOT);
+            throw new AssertionError("read-only destination should prevent rollback");
+        } catch (IOException expected) {
+            // The record and backup must remain available for a later retry.
+        }
+        assertArrayEquals(partial, provider.contentsOfSlot());
+        assertTrue(provider.docs.containsKey(backup));
+        assertTrue(hasTransactionMarker(provider));
+
+        provider.readOnlyDestination = false;
+        SaveSlotJournal restarted = new SaveSlotJournal(provider);
+        restarted.recover(SLOT);
+        assertArrayEquals(OLD, provider.contentsOfSlot());
+        assertNoJournalArtifacts(provider);
+    }
+
+    @Test
     public void providerQueryErrorIsNotTreatedAsAnAbsentSlot() throws Exception {
         FakeProvider provider = providerWithOldSlot();
         byte[] prior = provider.contentsOfSlot();
@@ -233,6 +278,33 @@ public class SaveSlotJournalTest {
         }
     }
 
+    private static String findBackup(FakeProvider provider) {
+        for (Map.Entry<String, Doc> entry : provider.docs.entrySet())
+            if (entry.getValue().name.contains(".hollycast-backup-"))
+                return entry.getKey();
+        return null;
+    }
+
+    private static byte[] readSlot(SaveSlotJournal journal, FakeProvider provider) throws Exception {
+        journal.recover(SLOT);
+        String document = provider.findChild(ROOT, "slot.state");
+        try (InputStream input = provider.openInput(document);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[32];
+            int count;
+            while ((count = input.read(buffer)) != -1)
+                output.write(buffer, 0, count);
+            return output.toByteArray();
+        }
+    }
+
+    private static boolean hasTransactionMarker(FakeProvider provider) {
+        for (Doc doc : provider.docs.values())
+            if (doc.name.contains(".hollycast-transaction-"))
+                return true;
+        return false;
+    }
+
     private static final class Doc {
         final String parent;
         final String name;
@@ -254,6 +326,7 @@ public class SaveSlotJournalTest {
         int eventCount;
         boolean readOnlyDestination;
         boolean queryFailure;
+        boolean denyBackupDeletion;
         boolean crashOnSlotWrite;
         String tempId = "temp-stage-id";
         String unrelatedId;
@@ -386,6 +459,9 @@ public class SaveSlotJournalTest {
         }
 
         @Override public boolean delete(String document) {
+            Doc target = docs.get(document);
+            if (denyBackupDeletion && target != null && target.name.contains(".hollycast-backup-"))
+                return false;
             docs.remove(document);
             data.remove(document);
             event("delete:" + document);

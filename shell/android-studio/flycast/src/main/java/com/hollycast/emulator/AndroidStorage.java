@@ -101,14 +101,12 @@ public class AndroidStorage {
     }
 
     public synchronized int openFile(String uri, String mode) throws FileNotFoundException {
-        if (isSavestateUri(uri)) {
-            try {
-                journal().recover(uri);
-            } catch (IOException | RuntimeException e) {
-                FileNotFoundException failure = new FileNotFoundException("Could not recover " + uri + ": " + e.getMessage());
-                failure.initCause(e);
-                throw failure;
-            }
+        try {
+            recoverKnownTransaction(uri, true);
+        } catch (IOException | RuntimeException e) {
+            FileNotFoundException failure = new FileNotFoundException("Could not recover " + uri + ": " + e.getMessage());
+            failure.initCause(e);
+            throw failure;
         }
         Uri resolved;
         try {
@@ -150,6 +148,7 @@ public class AndroidStorage {
 
     public boolean removeFile(String uri) {
         try {
+            recoverKnownTransaction(uri, false);
             Uri resolved = resolveExisting(uri);
             return deleteDocument(resolved);
         } catch (FileNotFoundException missing) {
@@ -186,7 +185,7 @@ public class AndroidStorage {
             Uri uri = Uri.parse(uriString);
             String parent = pendingParent(uri);
             if (parent != null)
-                return findChild(parent, pendingName(uri)) != null;
+                return findChildPath(parent, pendingName(uri)) != null;
             try (Cursor cursor = activity.getContentResolver().query(uri,
                     new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID }, null, null, null)) {
                 if (cursor == null)
@@ -212,23 +211,53 @@ public class AndroidStorage {
                 .appendQueryParameter("hollycast_name", name).build().toString();
     }
 
-    private boolean isSavestateUri(String path) {
+    private static boolean isTransactionalName(String name) {
+        return name != null && (name.endsWith(".state") || name.endsWith(".state.net")
+                || name.endsWith(".state.tmp") || name.endsWith(".cfg.save"));
+    }
+
+    private void recoverKnownTransaction(String path, boolean tolerateNameQueryFailure) throws IOException {
         Uri uri = Uri.parse(path);
         String name = pendingName(uri);
         if (name == null) {
             try {
-                name = getFileInfo(path).getName();
-            } catch (Exception ignored) {
-                try {
-                    String id = DocumentsContract.getDocumentId(uri);
-                    int slash = id.lastIndexOf('/');
-                    name = slash < 0 ? id : id.substring(slash + 1);
-                } catch (IllegalArgumentException e) {
-                    return false;
-                }
+                name = queryDocumentName(path);
+            } catch (FileNotFoundException missing) {
+                return;
+            } catch (IOException queryError) {
+                if (tolerateNameQueryFailure)
+                    return;
+                throw queryError;
             }
         }
-        return name.endsWith(".state") || name.endsWith(".state.net") || name.endsWith(".state.tmp");
+        if (isTransactionalName(name))
+            journal().recover(path);
+    }
+
+    private String queryDocumentName(String path) throws IOException {
+        Uri uri = resolveExisting(path);
+        if (!DocumentsContract.isDocumentUri(activity, uri)) {
+            String id = DocumentsContract.getTreeDocumentId(uri);
+            uri = DocumentsContract.buildDocumentUriUsingTree(uri, id);
+        }
+        Cursor cursor = null;
+        try {
+            cursor = activity.getContentResolver().query(uri,
+                    new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
+            if (cursor == null)
+                throw new IOException("Provider returned no document query result for " + uri);
+            if (!cursor.moveToFirst())
+                throw new FileNotFoundException(path);
+            String name = cursor.getString(0);
+            if (name == null)
+                throw new IOException("Provider returned a document without a display name: " + uri);
+            return name;
+        } catch (RuntimeException e) {
+            throw new IOException("Could not query document name for " + uri, e);
+        } finally {
+            if (cursor != null)
+                cursor.close();
+        }
     }
 
     private String findChild(String parent, String name) throws IOException {
@@ -292,12 +321,27 @@ public class AndroidStorage {
         Uri uri = Uri.parse(path);
         String parent = pendingParent(uri);
         if (parent != null) {
-            String child = findChild(parent, pendingName(uri));
+            String child = findChildPath(parent, pendingName(uri));
             if (child == null)
                 throw new FileNotFoundException(path);
             return Uri.parse(child);
         }
         return uri;
+    }
+
+    private String findChildPath(String parent, String relative) throws IOException {
+        String current = parent;
+        String[] components = relative.split("/");
+        for (String component : components) {
+            if (component.isEmpty() || ".".equals(component))
+                continue;
+            if ("..".equals(component))
+                throw new IOException("Parent components are not supported in document paths: " + relative);
+            current = findChild(current, component);
+            if (current == null)
+                return null;
+        }
+        return current;
     }
 
     private SaveSlotJournal journal() {
@@ -330,19 +374,12 @@ public class AndroidStorage {
         });
     }
 
-    private String documentName(String uriString) {
+    private String documentName(String uriString) throws IOException {
         Uri uri = Uri.parse(uriString);
         String pending = pendingName(uri);
         if (pending != null)
             return pending;
-        try {
-            return getFileInfo(uriString).getName();
-        } catch (FileNotFoundException missing) {
-            // New slots are represented by the same name-derived document URI used by getSubPath.
-            String id = DocumentsContract.getDocumentId(Uri.parse(uriString));
-            int slash = id.lastIndexOf('/');
-            return slash < 0 ? id : id.substring(slash + 1);
-        }
+        return queryDocumentName(uriString);
     }
 
     private String parentUriFor(String uriString) {
@@ -371,6 +408,7 @@ public class AndroidStorage {
 
     public InputStream openInputStream(String uri) throws FileNotFoundException {
         try {
+            recoverKnownTransaction(uri, true);
             InputStream input = activity.getContentResolver().openInputStream(resolveExisting(uri));
             if (input == null)
                 throw new FileNotFoundException(uri);
@@ -385,13 +423,21 @@ public class AndroidStorage {
         Uri uri;
         try {
             uri = resolveExisting(parent);
+            recoverKnownTransaction(pendingChildUri(uri.toString(), name), false);
         } catch (IOException e) {
             FileNotFoundException failure = new FileNotFoundException(parent);
             failure.initCause(e);
             throw failure;
         }
         String actualParent = uri.toString();
-        String child = findChild(actualParent, name);
+        String child;
+        try {
+            child = findChild(actualParent, name);
+        } catch (IOException e) {
+            FileNotFoundException failure = new FileNotFoundException(name);
+            failure.initCause(e);
+            throw failure;
+        }
         if (child == null) {
             uri = createChild(actualParent, name);
             if (uri == null)
@@ -493,9 +539,8 @@ public class AndroidStorage {
     {
         try {
             Uri parent = resolveExisting(reference);
-            // Probe now so provider errors are not confused with a missing child.
-            findChild(parent.toString(), relative);
-            return pendingChildUri(parent.toString(), relative);
+            String child = findChildPath(parent.toString(), relative);
+            return child == null ? pendingChildUri(parent.toString(), relative) : child;
         } catch (IOException e) {
             throw new RuntimeException("Could not resolve document child " + relative, e);
         }
@@ -505,22 +550,29 @@ public class AndroidStorage {
     {
         Uri uri;
         try {
+            recoverKnownTransaction(uriString, false);
             uri = resolveExisting(uriString);
-        } catch (IOException e) {
-            FileNotFoundException failure = new FileNotFoundException(uriString);
-            failure.initCause(e);
-            throw failure;
+        } catch (FileNotFoundException missing) {
+            throw missing;
+        } catch (IOException queryError) {
+            throw new RuntimeException("Could not query " + uriString, queryError);
         }
-        DocumentFile docFile = null;
-        if (DocumentsContract.isDocumentUri(activity, uri))
-            docFile = DocumentFile.fromSingleUri(activity, uri);
-        else
-            docFile = DocumentFile.fromTreeUri(activity, uri);
-        if (docFile == null || !docFile.exists())
+        String name;
+        try {
+            name = queryDocumentName(uri.toString());
+        } catch (FileNotFoundException missing) {
+            throw missing;
+        } catch (IOException queryError) {
+            throw new RuntimeException("Could not query " + uriString, queryError);
+        }
+        DocumentFile docFile = DocumentsContract.isDocumentUri(activity, uri)
+                ? DocumentFile.fromSingleUri(activity, uri)
+                : DocumentFile.fromTreeUri(activity, uri);
+        if (docFile == null)
             throw new FileNotFoundException(uriString);
         FileInfo info = new FileInfo();
         info.setPath(uriString);
-        info.setName(docFile.getName());
+        info.setName(name);
         info.setDirectory(docFile.isDirectory());
         info.setSize(docFile.length());
         info.setWritable(docFile.canWrite());
@@ -529,15 +581,16 @@ public class AndroidStorage {
         return info;
     }
 
-    public boolean exists(String uriString)
+    public synchronized boolean exists(String uriString)
     {
         Uri uri;
         try {
+            recoverKnownTransaction(uriString, false);
             uri = resolveExisting(uriString);
         } catch (FileNotFoundException missing) {
             return false;
-        } catch (IOException e) {
-            return false;
+        } catch (IOException queryError) {
+            throw new RuntimeException("Could not query " + uriString, queryError);
         }
         if (!DocumentsContract.isDocumentUri(activity, uri)) {
             String documentId = DocumentsContract.getTreeDocumentId(uri);
@@ -547,10 +600,11 @@ public class AndroidStorage {
         try {
             cursor = activity.getContentResolver().query(uri, new String[]{ DocumentsContract.Document.COLUMN_DISPLAY_NAME },
                     null, null, null);
-            boolean ret = cursor != null && cursor.moveToNext();
-            return ret;
-        } catch (Exception e) {
-            return false;
+            if (cursor == null)
+                throw new IllegalStateException("Provider returned no document query result for " + uri);
+            return cursor.moveToFirst();
+        } catch (RuntimeException queryError) {
+            throw new RuntimeException("Could not query " + uriString, queryError);
         } finally {
             if (cursor != null)
                 cursor.close();

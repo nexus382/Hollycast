@@ -57,7 +57,7 @@ public class AndroidStorageTest {
 
                         // getSubPath (from root)
                         String kidUri = storage.getSubPath(rootUri, file.getName());
-                        assertEquals(file.getName(), storage.getFileInfo(kidUri).getName());
+                        assertEquals(file.getPath(), kidUri);
 
                         // exists (folder)
                         assertTrue(storage.exists(file.getPath()));
@@ -79,7 +79,7 @@ public class AndroidStorageTest {
                                 assertNotEquals(-1, fd);
                                 // getSubPath (from folder)
                                 String uri = storage.getSubPath(file.getPath(), sfile.getName());
-                                assertEquals(sfile.getName(), storage.getFileInfo(uri).getName());
+                                assertEquals(sfile.getPath(), uri);
                                 // getParentUri (from file)
                                 uri = storage.getParentUri(sfile.getPath());
                                 assertEquals(file.getPath(), uri);
@@ -108,7 +108,7 @@ public class AndroidStorageTest {
                         //assertEquals(rootUri, parentUri);
                         // getSubPath (from root)
                         String kidUri = storage.getSubPath(rootUri, file.getName());
-                        assertEquals(file.getName(), storage.getFileInfo(kidUri).getName());
+                        assertEquals(file.getPath(), kidUri);
                         // exists (file)
                         assertTrue(storage.exists(file.getPath()));
                         fileDone = true;
@@ -118,6 +118,26 @@ public class AndroidStorageTest {
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    @Test
+    public void canonicalChildrenAndKnownTransactionsUseNormalStorageApis() {
+        ActivityScenario<NativeGLActivity> scenario = ActivityScenario.launch(NativeGLActivity.class);
+        scenario.onActivity(activity -> {
+            AndroidStorage storage = activity.getStorage();
+            storage.setStorageDirectories(Arrays.asList(TREE_URI));
+            try {
+                assertTransactionRecovery(storage, activity,
+                        "hcast-selected-" + UUID.randomUUID() + ".state", "exists");
+                assertTransactionRecovery(storage, activity,
+                        "hcast-selected-" + UUID.randomUUID() + ".state.net", "open");
+                assertTransactionRecovery(storage, activity,
+                        "hcast-mapping-" + UUID.randomUUID() + ".cfg.save", "metadata");
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        scenario.close();
     }
 
     @Test
@@ -178,6 +198,58 @@ public class AndroidStorageTest {
             while ((count = input.read(buffer)) != -1)
                 output.write(buffer, 0, count);
             return output.toByteArray();
+        }
+    }
+
+    private static byte[] readRawDocument(NativeGLActivity activity, String uri) throws Exception {
+        try (InputStream input = activity.getContentResolver().openInputStream(Uri.parse(uri));
+             java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+            assertNotNull(input);
+            byte[] buffer = new byte[1024];
+            int count;
+            while ((count = input.read(buffer)) != -1)
+                output.write(buffer, 0, count);
+            return output.toByteArray();
+        }
+    }
+
+    private static void assertTransactionRecovery(AndroidStorage storage, NativeGLActivity activity,
+                                                 String name, String access) throws Exception {
+        byte[] previous = ("complete previous " + name).getBytes("UTF-8");
+        byte[] partial = "interrupted replacement".getBytes("UTF-8");
+        String token = UUID.randomUUID().toString();
+        String backupName = SaveSlotJournal.backupName(name, token);
+        String markerName = SaveSlotJournal.markerName(name, 'r', token);
+        String marker = "HCSJ1\tR\t1\t" + backupName + "\n";
+        writeChildDocument(storage, TREE_URI, name, partial);
+        writeChildDocument(storage, TREE_URI, backupName, previous);
+        writeChildDocument(storage, TREE_URI, markerName, marker.getBytes("UTF-8"));
+
+        String destination = storage.getSubPath(TREE_URI, name);
+        switch (access) {
+            case "exists":
+                assertTrue(storage.exists(destination));
+                assertArrayEquals(previous, readRawDocument(activity, storage.getSubPath(TREE_URI, name)));
+                break;
+            case "open":
+                assertArrayEquals(previous, readDocument(storage, activity, destination));
+                break;
+            case "metadata":
+                assertEquals(name, storage.getFileInfo(destination).getName());
+                assertArrayEquals(previous, readRawDocument(activity, storage.getSubPath(TREE_URI, name)));
+                break;
+            default:
+                throw new AssertionError("Unknown storage API " + access);
+        }
+        assertFalse(storage.exists(storage.getSubPath(TREE_URI, backupName)));
+        storage.removeFile(destination);
+    }
+
+    private static void writeChildDocument(AndroidStorage storage, String parent, String name, byte[] data) throws Exception {
+        try (OutputStream output = storage.openOutputStream(parent, name)) {
+            assertNotNull(output);
+            output.write(data);
+            output.flush();
         }
     }
 
