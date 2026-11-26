@@ -1,6 +1,8 @@
 #if USE_ALSA
 #include "audiostream.h"
+#include "alsa_capture.h"
 #include <alsa/asoundlib.h>
+#include <cerrno>
 #include "cfg/cfg.h"
 #include "cfg/option.h"
 
@@ -235,20 +237,17 @@ public:
 
 	u32 record(void* frame, u32 samples) override
 	{
-		int err = snd_pcm_readi(handle_record, frame, samples);
-		if (err < (int)samples)
-		{
-			if (err < 0)
-			{
-				DEBUG_LOG(AUDIO, "ALSA: Recording error: %s", snd_strerror(err));
-				err = 0;
-				err = snd_pcm_prepare(handle_record);
-			}
-			u8 *buffer = (u8 *)frame + err;
-			memset(buffer, 0, (samples - err) * 2);
-		}
-
-		return err;
+		snd_pcm_sframes_t framesRead = snd_pcm_readi(handle_record, frame, samples);
+		return audio::alsa::finishMonoCapture(frame, samples, framesRead,
+				static_cast<snd_pcm_sframes_t>(-EAGAIN), [&](snd_pcm_sframes_t readError) {
+					DEBUG_LOG(AUDIO, "ALSA: Recording error: %s",
+							snd_strerror(static_cast<int>(readError)));
+					const int recoveryResult = snd_pcm_recover(handle_record,
+							static_cast<int>(readError), 1);
+					if (recoveryResult < 0)
+						DEBUG_LOG(AUDIO, "ALSA: Recording recovery failed: %s",
+								snd_strerror(recoveryResult));
+				});
 	}
 
 	u32 push(const void* frame, u32 samples, bool wait) override
