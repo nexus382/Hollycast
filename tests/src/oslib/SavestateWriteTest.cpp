@@ -410,6 +410,29 @@ TEST(SavestateWriteTest, NativeSaveAndReplacementReloadPayload)
 	std::filesystem::remove_all(root);
 }
 
+#if defined(TARGET_UWP)
+TEST(SavestateWriteTest, UwpSaveLeavesUnrelatedRecoveryNamedFileAlone)
+{
+	const auto root = std::filesystem::temp_directory_path()
+		/ ("hollycast-uwp-recovery-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+	ASSERT_TRUE(std::filesystem::create_directory(root));
+	const auto unrelated = root / "unrelated-notes.txt.tmp-1.hollycast-recovery";
+	{
+		std::ofstream file(unrelated, std::ios::binary);
+		ASSERT_TRUE(file.good());
+		file << "user-owned neighboring file";
+	}
+	const auto destination = root / "slot.state";
+	ASSERT_TRUE(save(hostfs::storage(), destination.string(), oldPayload));
+	ASSERT_TRUE(std::filesystem::exists(unrelated));
+	std::ifstream input(unrelated, std::ios::binary);
+	const std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+	EXPECT_EQ(contents, "user-owned neighboring file");
+	input.close();
+	std::filesystem::remove_all(root);
+}
+#endif
+
 #ifndef _WIN32
 TEST(SavestateWriteTest, NativeOverwritePreservesPrivateModeAndAccessAcl)
 {
