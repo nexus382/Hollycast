@@ -23,6 +23,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/serialize_test.cpp
         src/LibretroHelpersTest.cpp
         src/MapleGgpoTest.cpp
+        src/audio/AlsaCaptureTest.cpp
         src/GgpoAdaptiveDelayTest.cpp
         src/GgpoResumeBarrierTest.cpp
         src/SessionStateTest.cpp
