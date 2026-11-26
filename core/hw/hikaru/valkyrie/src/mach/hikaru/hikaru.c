@@ -719,8 +719,9 @@ setup_master_mmap (hikaru_t *hikaru)
 	ret |= vk_mmap_add_dev (mmap, 0x00400000, 0x00400001, 0x00000001,
 	                        VK_REGION_RW | VK_REGION_SIZE_16 | VK_REGION_SIZE_32 | VK_REGION_LOG_RW,
 	                        hikaru->gpu, "UNK/M");
+	/* Longword accesses span two 16-bit MIE lanes; Star Wars uses them at boot. */
 	ret |= vk_mmap_add_dev (mmap, 0x00800000, 0x0083FFFF, 0x0003FFFF,
-	                        VK_REGION_RW | VK_REGION_SIZE_8 | VK_REGION_SIZE_16 | VK_REGION_LOG_RW,
+	                        VK_REGION_RW | VK_REGION_SIZE_8 | VK_REGION_SIZE_16 | VK_REGION_SIZE_32 | VK_REGION_LOG_RW,
 	                        hikaru->mie, "MIE/M");
 	ret |= vk_mmap_add_ram (mmap, 0x00C00000, 0x00C0FFFF, 0x0000FFFF,
 	                        0, hikaru->bram, "BRAM/M");
