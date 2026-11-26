@@ -31,6 +31,9 @@ public:
 	bool Open(const std::string& path, bool write);
 	bool Open(hostfs::File *file, bool write);
 	void Close();
+	// Completes the writer, checking the size patch, flush and underlying close.
+	// The stream is released exactly once whether completion succeeds or fails.
+	bool Finish();
 	size_t Size() const { return size; }
 	size_t Read(void *data, size_t length);
 	size_t Write(const void *data, size_t length);
@@ -44,5 +47,7 @@ private:
 	u32 chunkSize = 0;
 	u32 chunkIndex = 0;
 	bool write = false;
-	long startOffset = 0;
+	s64 startOffset = 0;
+	bool completionSucceeded = true;
+	bool writeFailed = false;
 };

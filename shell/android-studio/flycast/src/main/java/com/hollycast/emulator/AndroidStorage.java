@@ -52,6 +52,8 @@ public class AndroidStorage {
     public static final int IMPORT_HOME_ACTIVITY_REQUEST = 15012012;
 
     private Activity activity;
+    // Older providers do not always implement findDocumentPath for opaque document IDs.
+    private final android.util.LruCache<String, String> transactionParents = new android.util.LruCache<>(128);
 
     private List<String> storageDirectories;
     private int storageIntentPerms;
@@ -100,36 +102,381 @@ public class AndroidStorage {
         }
     }
 
-    public int openFile(String uri, String mode) throws FileNotFoundException {
-        ParcelFileDescriptor pfd = activity.getContentResolver().openFileDescriptor(Uri.parse(uri), mode);
+    public synchronized int openFile(String uri, String mode) throws FileNotFoundException {
+        try {
+            recoverKnownTransaction(uri);
+        } catch (IOException | RuntimeException e) {
+            FileNotFoundException failure = new FileNotFoundException("Could not recover " + uri + ": " + e.getMessage());
+            failure.initCause(e);
+            throw failure;
+        }
+        Uri resolved;
+        try {
+            resolved = resolveExisting(uri);
+        } catch (IOException | RuntimeException e) {
+            FileNotFoundException failure = new FileNotFoundException(uri);
+            failure.initCause(e);
+            throw failure;
+        }
+        ParcelFileDescriptor pfd = activity.getContentResolver().openFileDescriptor(resolved, mode);
+        if (pfd == null)
+            throw new FileNotFoundException(uri);
         return pfd.detachFd();
     }
 
-    public InputStream openInputStream(String uri) throws FileNotFoundException {
-        return activity.getContentResolver().openInputStream(Uri.parse(uri));
+    public synchronized String createTemporaryFile(String destination) {
+        try {
+            journal().recover(destination);
+            String parent = parentUriFor(destination);
+            if (parent.isEmpty())
+                return "";
+            String name = documentName(destination);
+            Uri temporary = createChild(parent, SaveSlotJournal.temporaryName(name));
+            return temporary == null ? "" : temporary.toString();
+        } catch (Exception e) {
+            Log.w("Flycast", "Could not create save-state staging document", e);
+            return "";
+        }
     }
-    public OutputStream openOutputStream(String parent, String name) throws FileNotFoundException {
-        Uri uri = Uri.parse(parent);
-        String subpath = getSubPath(parent, name);
-        if (!exists(subpath)) {
-            String documentId;
-            if (DocumentsContract.isDocumentUri(activity, uri))
-                documentId = DocumentsContract.getDocumentId(uri);
-            else
-                documentId = DocumentsContract.getTreeDocumentId(uri);
-            uri = DocumentsContract.buildDocumentUriUsingTree(uri, documentId);
-            uri = DocumentsContract.createDocument(activity.getContentResolver(), uri,
-                    "application/octet-stream", name);
+
+    public synchronized boolean replaceFile(String temporary, String destination) {
+        try {
+            return journal().replace(temporary, destination);
+        } catch (Exception e) {
+            Log.w("Flycast", "Save-state replacement failed", e);
+            return false;
         }
-        else {
-            uri = Uri.parse(subpath);
+    }
+
+    public synchronized boolean removeFile(String uri) {
+        try {
+            recoverKnownTransaction(uri);
+            Uri resolved = resolveExisting(uri);
+            return deleteDocument(resolved);
+        } catch (FileNotFoundException missing) {
+            return true;
+        } catch (Exception e) {
+            return false;
         }
-        return activity.getContentResolver().openOutputStream(uri);
+    }
+
+    private Uri createChild(String parent, String name) throws FileNotFoundException {
+        Uri parentUri = Uri.parse(parent);
+        String documentId = DocumentsContract.isDocumentUri(activity, parentUri)
+                ? DocumentsContract.getDocumentId(parentUri)
+                : DocumentsContract.getTreeDocumentId(parentUri);
+        Uri treeParent = DocumentsContract.buildDocumentUriUsingTree(parentUri, documentId);
+        return DocumentsContract.createDocument(activity.getContentResolver(), treeParent,
+                "application/octet-stream", name);
+    }
+
+    private boolean deleteDocument(Uri uri) throws IOException {
+        if (uri == null || !checkedExists(uri.toString()))
+            return true;
+        Uri existing = resolveExisting(uri.toString());
+        try {
+            boolean deleted = DocumentsContract.deleteDocument(activity.getContentResolver(), existing);
+            return deleted || !checkedExists(existing.toString());
+        } catch (RuntimeException e) {
+            throw new IOException("Could not delete " + uri, e);
+        }
+    }
+
+    private boolean checkedExists(String uriString) throws IOException {
+        try {
+            Uri uri = Uri.parse(uriString);
+            String parent = pendingParent(uri);
+            if (parent != null)
+                return findChildPath(parent, pendingName(uri)) != null;
+            try (Cursor cursor = activity.getContentResolver().query(uri,
+                    new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID }, null, null, null)) {
+                if (cursor == null)
+                    throw new IOException("Provider returned no query result for " + uriString);
+                return cursor.moveToFirst();
+            }
+        } catch (RuntimeException e) {
+            throw new IOException("Could not resolve " + uriString, e);
+        }
+    }
+
+    private static String pendingParent(Uri uri) {
+        return uri.getQueryParameter("hollycast_parent");
+    }
+
+    private static String pendingName(Uri uri) {
+        return uri.getQueryParameter("hollycast_name");
+    }
+
+    private String pendingChildUri(String parent, String name) {
+        return Uri.parse(parent).buildUpon()
+                .appendQueryParameter("hollycast_parent", parent)
+                .appendQueryParameter("hollycast_name", name).build().toString();
+    }
+
+    private static boolean isTransactionalName(String name) {
+        return name != null && (name.endsWith(".state") || name.endsWith(".state.net")
+                || name.endsWith(".state.tmp") || name.endsWith(".cfg.save"));
+    }
+
+    private static boolean isTreeAddress(Uri uri) {
+        // DocumentsContract.isTreeUri was introduced in API 24. Tree grants start at /tree/<id> on API 21 too.
+        List<String> segments = uri.getPathSegments();
+        return segments.size() >= 2 && "tree".equals(segments.get(0));
+    }
+
+    private void recoverKnownTransaction(String path) throws IOException {
+        Uri uri = Uri.parse(path);
+        String name = pendingName(uri);
+        if (name == null) {
+            // A directly shared content URI grants access to one document and has no journal siblings.
+            if (!isTreeAddress(uri))
+                return;
+            try {
+                name = queryDocumentName(path);
+            } catch (FileNotFoundException missing) {
+                return;
+            }
+        }
+        if (isTransactionalName(name))
+            journal().recover(path);
+    }
+
+    private String queryDocumentName(String path) throws IOException {
+        Uri uri = resolveExisting(path);
+        if (isTreeAddress(uri) && !DocumentsContract.isDocumentUri(activity, uri)) {
+            String id = DocumentsContract.getTreeDocumentId(uri);
+            uri = DocumentsContract.buildDocumentUriUsingTree(uri, id);
+        }
+        Cursor cursor = null;
+        try {
+            cursor = activity.getContentResolver().query(uri,
+                    new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
+            if (cursor == null)
+                throw new IOException("Provider returned no document query result for " + uri);
+            if (!cursor.moveToFirst())
+                throw new FileNotFoundException(path);
+            String name = cursor.getString(0);
+            if (name == null)
+                throw new IOException("Provider returned a document without a display name: " + uri);
+            return name;
+        } catch (RuntimeException e) {
+            throw new IOException("Could not query document name for " + uri, e);
+        } finally {
+            if (cursor != null)
+                cursor.close();
+        }
+    }
+
+    private String findChild(String parent, String name) throws IOException {
+        Uri parentUri = Uri.parse(parent);
+        String parentId = DocumentsContract.isDocumentUri(activity, parentUri)
+                ? DocumentsContract.getDocumentId(parentUri)
+                : DocumentsContract.getTreeDocumentId(parentUri);
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(parentUri, parentId);
+        Cursor cursor = null;
+        try {
+            cursor = activity.getContentResolver().query(children,
+                    new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
+            if (cursor == null)
+                throw new IOException("Provider returned no child query result for " + parent);
+            String match = null;
+            while (cursor.moveToNext()) {
+                if (!name.equals(cursor.getString(1)))
+                    continue;
+                if (match != null)
+                    throw new IOException("Provider returned ambiguous children named " + name);
+                match = DocumentsContract.buildDocumentUriUsingTree(parentUri, cursor.getString(0)).toString();
+            }
+            if (match != null && isTransactionalName(name))
+                transactionParents.put(match, parent);
+            return match;
+        } catch (RuntimeException e) {
+            throw new IOException("Could not query children of " + parent, e);
+        } finally {
+            if (cursor != null)
+                cursor.close();
+        }
+    }
+
+    private List<SaveSlotJournal.Child> listChildUris(String parent) throws IOException {
+        Uri parentUri = Uri.parse(parent);
+        String parentId = DocumentsContract.isDocumentUri(activity, parentUri)
+                ? DocumentsContract.getDocumentId(parentUri)
+                : DocumentsContract.getTreeDocumentId(parentUri);
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(parentUri, parentId);
+        Cursor cursor = null;
+        try {
+            cursor = activity.getContentResolver().query(children,
+                    new String[] { DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME }, null, null, null);
+            if (cursor == null)
+                throw new IOException("Provider returned no child query result for " + parent);
+            List<SaveSlotJournal.Child> results = new ArrayList<>();
+            while (cursor.moveToNext())
+                results.add(new SaveSlotJournal.Child(
+                        DocumentsContract.buildDocumentUriUsingTree(parentUri, cursor.getString(0)).toString(),
+                        cursor.getString(1)));
+            return results;
+        } catch (RuntimeException e) {
+            throw new IOException("Could not query children of " + parent, e);
+        } finally {
+            if (cursor != null)
+                cursor.close();
+        }
+    }
+
+    private Uri resolveExisting(String path) throws IOException {
+        Uri uri = Uri.parse(path);
+        String parent = pendingParent(uri);
+        if (parent != null) {
+            String child = findChildPath(parent, pendingName(uri));
+            if (child == null)
+                throw new FileNotFoundException(path);
+            return Uri.parse(child);
+        }
+        return uri;
+    }
+
+    private String findChildPath(String parent, String relative) throws IOException {
+        String current = parent;
+        String[] components = relative.split("/");
+        for (String component : components) {
+            if (component.isEmpty() || ".".equals(component))
+                continue;
+            if ("..".equals(component))
+                throw new IOException("Parent components are not supported in document paths: " + relative);
+            current = findChild(current, component);
+            if (current == null)
+                return null;
+        }
+        return current;
+    }
+
+    private SaveSlotJournal journal() {
+        return new SaveSlotJournal(new SaveSlotJournal.Provider() {
+            @Override public String parentOf(String document) throws IOException { return parentUriFor(document); }
+            @Override public String nameOf(String document) throws IOException { return documentName(document); }
+            @Override public String findChild(String parent, String name) throws IOException {
+                return AndroidStorage.this.findChild(parent, name);
+            }
+            @Override public List<SaveSlotJournal.Child> listChildren(String parent) throws IOException {
+                return listChildUris(parent);
+            }
+            @Override public String createChild(String parent, String name) throws IOException {
+                Uri child = AndroidStorage.this.createChild(parent, name);
+                return child == null ? null : child.toString();
+            }
+            @Override public InputStream openInput(String document) throws IOException {
+                InputStream input = activity.getContentResolver().openInputStream(Uri.parse(document));
+                if (input == null) throw new IOException("Provider returned no input stream for " + document);
+                return input;
+            }
+            @Override public OutputStream openOutput(String document) throws IOException {
+                OutputStream output = activity.getContentResolver().openOutputStream(Uri.parse(document), "wt");
+                if (output == null) throw new IOException("Provider returned no output stream for " + document);
+                return output;
+            }
+            @Override public boolean delete(String document) throws IOException {
+                return deleteDocument(Uri.parse(document));
+            }
+        });
+    }
+
+    private String documentName(String uriString) throws IOException {
+        Uri uri = Uri.parse(uriString);
+        String pending = pendingName(uri);
+        if (pending != null)
+            return pending;
+        return queryDocumentName(uriString);
+    }
+
+    private String parentUriFor(String uriString) {
+        Uri uri = Uri.parse(uriString);
+        String pending = pendingParent(uri);
+        if (pending != null)
+            return pending;
+        String knownParent = transactionParents.get(uriString);
+        if (knownParent != null)
+            return knownParent;
+        try {
+            String parent = getParentUri(uriString);
+            if (!parent.isEmpty())
+                return parent;
+        } catch (Exception ignored) {
+            // New documents have no provider path yet; derive the selected parent from their tree ID.
+        }
+        String id;
+        try {
+            id = DocumentsContract.getDocumentId(uri);
+        } catch (IllegalArgumentException notDocumentUri) {
+            id = DocumentsContract.getTreeDocumentId(uri);
+        }
+        int slash = id.lastIndexOf('/');
+        if (slash < 0)
+            return "";
+        return DocumentsContract.buildDocumentUriUsingTree(uri, id.substring(0, slash)).toString();
+    }
+
+    public synchronized InputStream openInputStream(String uri) throws FileNotFoundException {
+        try {
+            recoverKnownTransaction(uri);
+            InputStream input = activity.getContentResolver().openInputStream(resolveExisting(uri));
+            if (input == null)
+                throw new FileNotFoundException(uri);
+            return input;
+        } catch (IOException | RuntimeException e) {
+            FileNotFoundException failure = new FileNotFoundException(uri);
+            failure.initCause(e);
+            throw failure;
+        }
+    }
+    public synchronized OutputStream openOutputStream(String parent, String name) throws FileNotFoundException {
+        Uri uri;
+        try {
+            uri = resolveExisting(parent);
+            recoverKnownTransaction(pendingChildUri(uri.toString(), name));
+        } catch (IOException e) {
+            FileNotFoundException failure = new FileNotFoundException(parent);
+            failure.initCause(e);
+            throw failure;
+        }
+        String actualParent = uri.toString();
+        String child;
+        try {
+            child = findChild(actualParent, name);
+        } catch (IOException e) {
+            FileNotFoundException failure = new FileNotFoundException(name);
+            failure.initCause(e);
+            throw failure;
+        }
+        if (child == null) {
+            uri = createChild(actualParent, name);
+            if (uri == null)
+                throw new FileNotFoundException(name);
+        } else {
+            uri = Uri.parse(child);
+        }
+        try {
+            OutputStream output = activity.getContentResolver().openOutputStream(uri);
+            if (output == null)
+                throw new FileNotFoundException(uri.toString());
+            return output;
+        } catch (RuntimeException e) {
+            FileNotFoundException failure = new FileNotFoundException(uri.toString());
+            failure.initCause(e);
+            throw failure;
+        }
     }
 
     public FileInfo[] listContent(String uri)
     {
-        Uri treeUri = Uri.parse(uri);
+        Uri treeUri;
+        try {
+            treeUri = resolveExisting(uri);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not resolve document directory " + uri, e);
+        }
         String documentId;
         if (DocumentsContract.isDocumentUri(activity, treeUri))
             documentId = DocumentsContract.getDocumentId(treeUri);
@@ -154,6 +501,8 @@ public class AndroidStorage {
                 FileInfo info = new FileInfo();
                 info.setPath(childUri.toString());
                 info.setName(c.getString(1));
+                if (isTransactionalName(info.getName()))
+                    transactionParents.put(childUri.toString(), treeUri.toString());
                 info.setDirectory(DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2)));
                 results.add(info);
             }
@@ -176,6 +525,9 @@ public class AndroidStorage {
     public String getParentUri(String uriString) throws FileNotFoundException {
         if (uriString.isEmpty())
             return "";
+        String pendingParent = pendingParent(Uri.parse(uriString));
+        if (pendingParent != null)
+            return pendingParent;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 Uri uri = Uri.parse(uriString);
@@ -199,28 +551,42 @@ public class AndroidStorage {
 
     public String getSubPath(String reference, String relative)
     {
-        Uri refUri = Uri.parse(reference);
-        String docId;
-        if (DocumentsContract.isDocumentUri(activity, refUri))
-            docId = DocumentsContract.getDocumentId(refUri);
-        else
-            docId = DocumentsContract.getTreeDocumentId(refUri);
-        return DocumentsContract.buildDocumentUriUsingTree(refUri, docId + "/" + relative).toString();
+        try {
+            Uri parent = resolveExisting(reference);
+            String child = findChildPath(parent.toString(), relative);
+            return child == null ? pendingChildUri(parent.toString(), relative) : child;
+        } catch (IOException e) {
+            throw new RuntimeException("Could not resolve document child " + relative, e);
+        }
     }
 
-    public FileInfo getFileInfo(String uriString) throws FileNotFoundException
+    public synchronized FileInfo getFileInfo(String uriString) throws FileNotFoundException
     {
-        Uri uri = Uri.parse(uriString);
-        DocumentFile docFile = null;
-        if (DocumentsContract.isDocumentUri(activity, uri))
-            docFile = DocumentFile.fromSingleUri(activity, uri);
-        else
-            docFile = DocumentFile.fromTreeUri(activity, uri);
-        if (docFile == null || !docFile.exists())
+        Uri uri;
+        try {
+            recoverKnownTransaction(uriString);
+            uri = resolveExisting(uriString);
+        } catch (FileNotFoundException missing) {
+            throw missing;
+        } catch (IOException queryError) {
+            throw new RuntimeException("Could not query " + uriString, queryError);
+        }
+        String name;
+        try {
+            name = queryDocumentName(uri.toString());
+        } catch (FileNotFoundException missing) {
+            throw missing;
+        } catch (IOException queryError) {
+            throw new RuntimeException("Could not query " + uriString, queryError);
+        }
+        DocumentFile docFile = !isTreeAddress(uri) || DocumentsContract.isDocumentUri(activity, uri)
+                ? DocumentFile.fromSingleUri(activity, uri)
+                : DocumentFile.fromTreeUri(activity, uri);
+        if (docFile == null)
             throw new FileNotFoundException(uriString);
         FileInfo info = new FileInfo();
         info.setPath(uriString);
-        info.setName(docFile.getName());
+        info.setName(name);
         info.setDirectory(docFile.isDirectory());
         info.setSize(docFile.length());
         info.setWritable(docFile.canWrite());
@@ -229,11 +595,18 @@ public class AndroidStorage {
         return info;
     }
 
-    public boolean exists(String uriString)
+    public synchronized boolean exists(String uriString)
     {
-        Uri uri = Uri.parse(uriString);
-        if (!DocumentsContract.isDocumentUri(activity, uri))
-        {
+        Uri uri;
+        try {
+            recoverKnownTransaction(uriString);
+            uri = resolveExisting(uriString);
+        } catch (FileNotFoundException missing) {
+            return false;
+        } catch (IOException queryError) {
+            throw new RuntimeException("Could not query " + uriString, queryError);
+        }
+        if (isTreeAddress(uri) && !DocumentsContract.isDocumentUri(activity, uri)) {
             String documentId = DocumentsContract.getTreeDocumentId(uri);
             uri = DocumentsContract.buildDocumentUriUsingTree(uri, documentId);
         }
@@ -241,10 +614,11 @@ public class AndroidStorage {
         try {
             cursor = activity.getContentResolver().query(uri, new String[]{ DocumentsContract.Document.COLUMN_DISPLAY_NAME },
                     null, null, null);
-            boolean ret = cursor != null && cursor.moveToNext();
-            return ret;
-        } catch (Exception e) {
-            return false;
+            if (cursor == null)
+                throw new IllegalStateException("Provider returned no document query result for " + uri);
+            return cursor.moveToFirst();
+        } catch (RuntimeException queryError) {
+            throw new RuntimeException("Could not query " + uriString, queryError);
         } finally {
             if (cursor != null)
                 cursor.close();

@@ -1079,21 +1079,24 @@ endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE Hollycast::res)
 
+set(libretro_vfs_sources
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/memmap/memalign.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/file/file_path.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/file/file_path_io.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/vfs/vfs_implementation.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/encodings/encoding_utf.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/compat/compat_strl.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/compat/fopen_utf8.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/compat/compat_strcasestr.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/file/retro_dirent.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/streams/file_stream.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/time/rtime.c
+	${PROJECT_SOURCE_DIR}/core/deps/libretro-common/string/stdstring.c
+)
+
 if(LIBRETRO)
 	target_include_directories(${PROJECT_NAME} PRIVATE core/deps/libretro-common/include)
-	target_sources(${PROJECT_NAME} PRIVATE
-		core/deps/libretro-common/memmap/memalign.c
-		core/deps/libretro-common/file/file_path.c
-		core/deps/libretro-common/file/file_path_io.c
-		core/deps/libretro-common/vfs/vfs_implementation.c
-		core/deps/libretro-common/encodings/encoding_utf.c
-		core/deps/libretro-common/compat/compat_strl.c
-		core/deps/libretro-common/compat/fopen_utf8.c
-		core/deps/libretro-common/compat/compat_strcasestr.c
-		core/deps/libretro-common/file/retro_dirent.c
-		core/deps/libretro-common/streams/file_stream.c
-		core/deps/libretro-common/time/rtime.c
-		core/deps/libretro-common/string/stdstring.c)
+	target_sources(${PROJECT_NAME} PRIVATE ${libretro_vfs_sources})
 	if(USE_OPENGL)
 		target_sources(${PROJECT_NAME} PRIVATE
 			core/deps/libretro-common/glsm/glsm.c
