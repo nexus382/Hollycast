@@ -547,8 +547,14 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 	{
 		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
 	}
-	else if (receive.exceeded || res == CURLE_FILESIZE_EXCEEDED) { content.clear(); httpCode = bodyTooLarge; }
-	else content.clear();
+	else
+	{
+		content.clear();
+		if (receive.exceeded || res == CURLE_FILESIZE_EXCEEDED)
+			httpCode = bodyTooLarge;
+		else if (cancelled != nullptr && cancelled->load())
+			httpCode = 499;
+	}
 	curl_slist_free_all(headers);
 	curl_easy_cleanup(curl);
 
