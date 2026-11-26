@@ -102,7 +102,9 @@ protected:
 
 	static bool isFileWriteable(const std::string& path);
 	static FileInfo makeFileInfo(std::string name, std::string path);
-	bool recoverInterruptedReplacement(const std::string& destination);
+	static bool rawPathExists(const std::string& path);
+	File *openFileUnlocked(const std::string& path, const std::string& mode);
+	bool recoverInterruptedReplacementUnlocked(const std::string& destination);
 	bool writeVfsTransactionMarker(const std::string& destination);
 	bool validVfsTransactionMarker(const std::string& destination);
 
