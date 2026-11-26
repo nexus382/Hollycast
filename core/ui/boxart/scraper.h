@@ -138,6 +138,8 @@ public:
 
 	virtual void scrape(GameBoxart& item) = 0;
 	virtual bool ready() const { return true; }
+	virtual void beginBulk() {}
+	virtual void endBulk() {}
 
 	virtual void scrape(std::vector<GameBoxart>& items) {
 		for (GameBoxart& item : items)

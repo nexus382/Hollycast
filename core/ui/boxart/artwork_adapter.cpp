@@ -30,6 +30,18 @@ bool ArtworkAdapter::fallbackReady() const
  return !fallback || fallback->ready();
 }
 
+void ArtworkAdapter::beginBulk()
+{
+ primary->beginBulk();
+ if (fallback) fallback->beginBulk();
+}
+
+void ArtworkAdapter::endBulk()
+{
+ primary->endBulk();
+ if (fallback) fallback->endBulk();
+}
+
 u32 ArtworkAdapter::supportedMedia(int provider)
 {
  return provider == 1 ? artwork::allMedia : provider == 2 ? LaunchBox::supportedMedia : TheGamesDb::supportedMedia;

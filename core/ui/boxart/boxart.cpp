@@ -1534,6 +1534,7 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 						if (!fallback->initialize(directory)) throw std::runtime_error("Cannot open fallback artwork cache.");
 						initialized = true;
 					}
+					if (provider == 2) fallback->beginBulk();
 					while (!fallback->ready() && screenGeneration == generation
 							&& (provider != 0 || !theGamesDbAuthorizationRejected()))
 					{
@@ -1568,6 +1569,23 @@ void Boxart::runScreenScraperQueue(std::shared_ptr<screenscraper::Session> sessi
 					continue;
 				}
 				finish(item);
+			}
+			if (provider == 2 && launchbox && launchboxInitialized)
+			{
+				bool drained = false;
+				{
+					std::lock_guard<std::mutex> lock(mutex);
+					drained = toFetch.empty() && !mediaBatchPending && !physicalWorking && !activeScreenJobs;
+					for (const auto& entry : games)
+						if (entry.second.busy && !entry.second.arcade
+								&& ArtworkAdapter::nextProvider(entry.second, entry.second.requestedMedia) >= 1)
+							drained = false;
+				}
+				if (drained)
+				{
+					try { launchbox->endBulk(); }
+					catch (const std::exception& error) { INFO_LOG(COMMON, "Artwork fallback cache flush: %s", error.what()); }
+				}
 			}
 		}
 		saveDatabase();
@@ -1792,6 +1810,7 @@ void Boxart::fetchBoxart()
 				if (provider == 0 || useScreenScraper) arcadeScraper->scrape(boxart);
 				if (!useScreenScraper && !tgdbPaused)
 				{
+					scraper->beginBulk();
 					scraper->scrape(boxart);
 				}
 				{
@@ -1819,6 +1838,12 @@ void Boxart::fetchBoxart()
 			std::lock_guard<std::mutex> guard(mutex);
 			for (GameBoxart& b : boxart)
 				completeArtworkWork(b, false, provider);
+		}
+		if (scraper)
+		{
+			std::lock_guard<std::mutex> guard(mutex);
+			if (toFetch.empty() && !mediaBatchPending && !physicalWorking)
+				scraper->endBulk();
 		}
 		saveDatabase();
 	});
