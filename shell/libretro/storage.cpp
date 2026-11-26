@@ -17,6 +17,7 @@
 #include "storage.h"
 
 #include <file/file_path.h>
+#include <atomic>
 
 struct retro_vfs_interface* hostfs::LibretroStorage::vfs_interface = nullptr;
 
@@ -58,6 +59,15 @@ void hostfs::LibretroStorage::initialise(retro_environment_t environ_cb)
 bool hostfs::LibretroStorage::isKnownPath(const std::string& path)
 {
 	return filestream_exists(path.c_str());
+}
+
+bool hostfs::LibretroStorage::isKnownPathForWrite(const std::string& path)
+{
+	if (isKnownPath(path))
+		return true;
+	std::string parent(path);
+	parent.resize(path_parent_dir(parent.data(), parent.size()));
+	return !parent.empty() && isKnownPath(parent);
 }
 
 std::vector<hostfs::FileInfo> hostfs::LibretroStorage::listContent(const std::string& path)
@@ -176,6 +186,33 @@ hostfs::FileInfo hostfs::LibretroStorage::getFileInfo(const std::string& path)
 bool hostfs::LibretroStorage::exists(const std::string& path)
 {
 	return filestream_exists(path.c_str());
+}
+
+hostfs::File *hostfs::LibretroStorage::createTemporaryFile(const std::string& destination, std::string& temporaryPath)
+{
+	static std::atomic<u64> sequence{0};
+	for (int attempt = 0; attempt < 128; attempt++)
+	{
+		temporaryPath = destination + ".tmp-" + std::to_string(++sequence);
+		if (exists(temporaryPath))
+			continue;
+		if (File *file = openFile(temporaryPath, "wb"))
+			return file;
+	}
+	temporaryPath.clear();
+	return nullptr;
+}
+
+bool hostfs::LibretroStorage::replaceFile(const std::string& temporaryPath, const std::string& destination)
+{
+	return vfs_interface != nullptr && vfs_interface->rename != nullptr
+		&& vfs_interface->rename(temporaryPath.c_str(), destination.c_str()) == 0;
+}
+
+bool hostfs::LibretroStorage::removeFile(const std::string& path)
+{
+	return vfs_interface != nullptr && vfs_interface->remove != nullptr
+		&& (vfs_interface->remove(path.c_str()) == 0 || !exists(path));
 }
 
 bool hostfs::LibretroStorage::addStorage(bool isDirectory, bool writeAccess, const std::string& description,

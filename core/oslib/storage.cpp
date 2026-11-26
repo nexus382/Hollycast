@@ -21,6 +21,7 @@
 #include "stdclass.h"
 #include "nowide/stackstring.hpp"
 #include "i18n.h"
+#include <atomic>
 
 // For macOS
 std::string os_PrecomposedString(std::string string);
@@ -162,6 +163,32 @@ public:
 			return nullptr;
 
 		return new StdFile(file);
+	}
+
+	File *createTemporaryFile(const std::string& destination, std::string& temporaryPath) override
+	{
+		static std::atomic<u64> sequence{0};
+		for (int attempt = 0; attempt < 128; attempt++)
+		{
+			temporaryPath = destination + ".tmp-" + std::to_string(++sequence);
+			FILE *file = nowide::fopen(temporaryPath.c_str(), "wbx");
+			if (file != nullptr)
+				return new StdFile(file);
+			if (errno != EEXIST)
+				break;
+		}
+		temporaryPath.clear();
+		return nullptr;
+	}
+
+	bool replaceFile(const std::string& temporaryPath, const std::string& destination) override
+	{
+		return flycast::rename(temporaryPath.c_str(), destination.c_str()) == 0;
+	}
+
+	bool removeFile(const std::string& path) override
+	{
+		return flycast::unlink(path.c_str()) == 0 || errno == ENOENT;
 	}
 
 	std::string getParentPath(const std::string& path) override
@@ -398,6 +425,58 @@ bool AllStorage::exists(const std::string& path)
 		return customStorage().exists(path);
 	else
 		return stdStorage.exists(path);
+}
+
+File *AllStorage::createTemporaryFile(const std::string& destination, std::string& temporaryPath)
+{
+	if (customStorage().isKnownPathForWrite(destination))
+		return customStorage().createTemporaryFile(destination, temporaryPath);
+	return stdStorage.createTemporaryFile(destination, temporaryPath);
+}
+
+bool AllStorage::replaceFile(const std::string& temporaryPath, const std::string& destination)
+{
+	if (customStorage().isKnownPathForWrite(destination))
+		return customStorage().replaceFile(temporaryPath, destination);
+	return stdStorage.replaceFile(temporaryPath, destination);
+}
+
+bool AllStorage::removeFile(const std::string& path)
+{
+	if (customStorage().isKnownPathForWrite(path))
+		return customStorage().removeFile(path);
+	return stdStorage.removeFile(path);
+}
+
+AtomicFile::AtomicFile(Storage& storage, std::string destination)
+	: storage(storage), destination(std::move(destination))
+{
+	stream = storage.createTemporaryFile(this->destination, temporary);
+}
+
+AtomicFile::~AtomicFile()
+{
+	delete stream;
+	if (!published && !temporary.empty())
+		storage.removeFile(temporary);
+}
+
+File *AtomicFile::takeFile()
+{
+	File *file = stream;
+	stream = nullptr;
+	return file;
+}
+
+bool AtomicFile::publish()
+{
+	if (published || stream != nullptr || temporary.empty())
+		return false;
+	if (!storage.replaceFile(temporary, destination))
+		return false;
+	published = true;
+	temporary.clear();
+	return true;
 }
 
 std::string AllStorage::getDefaultDirectory()

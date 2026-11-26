@@ -27,6 +27,9 @@ bool RZipFile::Open(hostfs::File *file, bool write)
 {
 	verify(this->file == nullptr);
 	verify(file != nullptr);
+	this->write = write;
+	writeFailed = false;
+	completionSucceeded = true;
 	startOffset = file->tell();
 	if (!write)
 	{
@@ -57,10 +60,10 @@ bool RZipFile::Open(hostfs::File *file, bool write)
 			|| file->write(&size, sizeof(size), 1) != 1)
 		{
 			file->seek(startOffset, SEEK_SET);
+			this->write = false;
 			return false;
 		}
 	}
-	this->write = write;
 	this->file = file;
 	return true;
 }
@@ -71,7 +74,7 @@ bool RZipFile::Open(const std::string& path, bool write)
 	if (f == nullptr)
 		return false;
 	if (!Open(f, write)) {
-		Close();
+		delete f;
 		return false;
 	}
 	return true;
@@ -79,21 +82,43 @@ bool RZipFile::Open(const std::string& path, bool write)
 
 void RZipFile::Close()
 {
-	if (file != nullptr)
+	if (write)
+		Finish();
+	else if (file != nullptr)
 	{
-		if (write)
-		{
-			file->seek(startOffset + sizeof(RZipHeader) + sizeof(maxChunkSize), SEEK_SET);
-			file->write(&size, sizeof(size), 1);
-		}
 		delete file;
 		file = nullptr;
-		if (chunk != nullptr)
-		{
-			delete [] chunk;
-			chunk = nullptr;
-		}
 	}
+	delete [] chunk;
+	chunk = nullptr;
+}
+
+bool RZipFile::Finish()
+{
+	if (file == nullptr)
+		return completionSucceeded;
+	if (!write)
+	{
+		delete file;
+		file = nullptr;
+		return completionSucceeded = true;
+	}
+
+	hostfs::File *closing = file;
+	file = nullptr;
+	bool success = !writeFailed;
+	const s64 lengthOffset = startOffset + sizeof(RZipHeader) + sizeof(maxChunkSize);
+	if (closing->seek(lengthOffset, SEEK_SET) != 0
+		|| closing->write(&size, sizeof(size), 1) != 1)
+		success = false;
+	if (!closing->flush())
+		success = false;
+	if (!closing->close())
+		success = false;
+	delete closing;
+	write = false;
+	completionSucceeded = success;
+	return success;
 }
 
 size_t RZipFile::Read(void *data, size_t length)
@@ -144,7 +169,8 @@ size_t RZipFile::Write(const void *data, size_t length)
 	verify(file != nullptr);
 	verify(write);
 
-	size += length;
+	if (length == 0)
+		return 0;
 	const u8 *p = (const u8 *)data;
 	// compression output buffer must be 0.1% larger + 12 bytes
 	uLongf maxZippedSize = maxChunkSize + maxChunkSize / 1000 + 12;
@@ -158,19 +184,23 @@ size_t RZipFile::Write(const void *data, size_t length)
 		if (rc != Z_OK)
 		{
 			WARN_LOG(SAVESTATE, "Compression error: %d", rc);
+			writeFailed = true;
 			break;
 		}
 		u32 sz = (u32)zippedSize;
 		if (file->write(&sz, sizeof(sz), 1) != 1
 			|| file->write(zipped, zippedSize, 1) != 1)
 		{
-			rv = 0;
+			writeFailed = true;
 			break;
 		}
 		p += uncompressedSize;
 		rv += uncompressedSize;
+		size += uncompressedSize;
 	}
 	delete [] zipped;
 	
+	if (rv != length)
+		writeFailed = true;
 	return rv;
 }
