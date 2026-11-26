@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
 
-import subprocess
 import sys
 
-
-def run_stage(stage, command):
-   try:
-      result = subprocess.run(command)
-   except OSError:
-      print(f'{stage} failed to start', file=sys.stderr)
-      return 1
-
-   if result.returncode != 0:
-      print(f'{stage} failed (exit {result.returncode})', file=sys.stderr)
-      return result.returncode if result.returncode > 0 else 1
-   return 0
+from crowdin_cli import run_stage
 
 
 def main():
