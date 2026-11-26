@@ -431,11 +431,11 @@ public class AndroidStorage {
             throw failure;
         }
     }
-    public OutputStream openOutputStream(String parent, String name) throws FileNotFoundException {
+    public synchronized OutputStream openOutputStream(String parent, String name) throws FileNotFoundException {
         Uri uri;
         try {
             uri = resolveExisting(parent);
-            recoverKnownTransaction(pendingChildUri(uri.toString(), name), false);
+            recoverKnownTransaction(pendingChildUri(uri.toString(), name));
         } catch (IOException e) {
             FileNotFoundException failure = new FileNotFoundException(parent);
             failure.initCause(e);
