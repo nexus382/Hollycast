@@ -1,14 +1,221 @@
 #include "gtest/gtest.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <vector>
 
 #include "cfg/option.h"
 #include "input/mapping.h"
+#include "oslib/storage.h"
 #include "stdclass.h"
+
+namespace mapping_internal
+{
+bool createLegacyBackup(hostfs::Storage& storage, const std::string& sourcePath);
+}
+
+namespace
+{
+
+enum class BackupFailure { None, ShortWrite, Flush, Close, ExistingBackupRead };
+
+struct BackupProviderState
+{
+    std::map<std::string, std::string> files;
+    BackupFailure failure = BackupFailure::None;
+    int temporaryNumber = 0;
+    int createCalls = 0;
+    int replaceCalls = 0;
+    std::string destination;
+    std::string parentReference;
+    std::string siblingName;
+};
+
+class BackupProviderFile : public hostfs::File
+{
+public:
+    BackupProviderFile(std::shared_ptr<BackupProviderState> state, std::string path, bool writable)
+        : state(std::move(state)), path(std::move(path)), writable(writable) {}
+    ~BackupProviderFile() override { close(); }
+
+    size_t read(void *buffer, size_t size, size_t count) override
+    {
+        if (state->failure == BackupFailure::ExistingBackupRead && path == backupPath)
+        {
+            failed = true;
+            return 0;
+        }
+        const std::string& contents = state->files.at(path);
+        const size_t requested = size * count;
+        const size_t available = position < contents.size() ? contents.size() - position : 0;
+        const size_t amount = std::min(requested, available);
+        if (amount != 0)
+            std::memcpy(buffer, contents.data() + position, amount);
+        position += amount;
+        return size == 0 ? 0 : amount / size;
+    }
+
+    size_t write(const void *buffer, size_t size, size_t count) override
+    {
+        size_t amount = size * count;
+        if (state->failure == BackupFailure::ShortWrite && amount != 0)
+            --amount;
+        std::string& contents = state->files[path];
+        if (position + amount > contents.size())
+            contents.resize(position + amount);
+        if (amount != 0)
+            std::memcpy(contents.data() + position, buffer, amount);
+        position += amount;
+        return size == 0 ? 0 : amount / size;
+    }
+
+    s64 tell() override { return position; }
+    int seek(s64 offset, int whence) override
+    {
+        const s64 target = whence == SEEK_SET ? offset : whence == SEEK_CUR
+            ? static_cast<s64>(position) + offset : static_cast<s64>(state->files[path].size()) + offset;
+        if (target < 0)
+            return -1;
+        position = static_cast<size_t>(target);
+        return 0;
+    }
+    char *gets(char *, int) override { return nullptr; }
+    s64 size() override { return state->files[path].size(); }
+    int eof() override { return !failed && position >= state->files[path].size(); }
+    int error() override { return failed; }
+    bool flush() override { return state->failure != BackupFailure::Flush; }
+    bool close() override
+    {
+        if (closed)
+            return true;
+        closed = true;
+        return !writable || state->failure != BackupFailure::Close;
+    }
+
+    static const std::string backupPath;
+
+private:
+    std::shared_ptr<BackupProviderState> state;
+    std::string path;
+    size_t position = 0;
+    bool writable;
+    bool failed = false;
+    bool closed = false;
+};
+
+const std::string BackupProviderFile::backupPath = "provider://folder/opaque-backup-id";
+
+class BackupProvider : public hostfs::Storage
+{
+public:
+    BackupProvider() : state(std::make_shared<BackupProviderState>()) {}
+    bool isKnownPath(const std::string&) override { return true; }
+    std::vector<hostfs::FileInfo> listContent(const std::string&) override { return {}; }
+    hostfs::File *openFile(const std::string& path, const std::string& mode) override
+    {
+        if (mode[0] == 'r' && state->files.count(path) == 0)
+            return nullptr;
+        return new BackupProviderFile(state, path, mode[0] != 'r');
+    }
+    std::string getParentPath(const std::string&) override { return "provider://folder/opaque-parent-id"; }
+    std::string getSubPath(const std::string& parent, const std::string& child) override
+    {
+        state->parentReference = parent;
+        state->siblingName = child;
+        return BackupProviderFile::backupPath;
+    }
+    hostfs::FileInfo getFileInfo(const std::string& path) override
+    {
+        if (path == sourcePath)
+            return {"legacy.ini", path, false, state->files[path].size()};
+        auto found = state->files.find(path);
+        if (found == state->files.end())
+            throw hostfs::StorageException("missing file");
+        return {"backup", path, false, found->second.size()};
+    }
+    bool exists(const std::string& path) override { return state->files.count(path) != 0; }
+    hostfs::File *createTemporaryFile(const std::string& destination, std::string& temporary) override
+    {
+        ++state->createCalls;
+        state->destination = destination;
+        temporary = "provider://opaque-temporary-id/" + std::to_string(++state->temporaryNumber);
+        state->files[temporary].clear();
+        return new BackupProviderFile(state, temporary, true);
+    }
+    bool replaceFile(const std::string& temporary, const std::string& destination) override
+    {
+        ++state->replaceCalls;
+        auto found = state->files.find(temporary);
+        if (found == state->files.end())
+            return false;
+        state->files[destination] = std::move(found->second);
+        state->files.erase(found);
+        return true;
+    }
+    bool removeFile(const std::string& path) override
+    {
+        state->files.erase(path);
+        return true;
+    }
+
+    static const std::string sourcePath;
+    std::shared_ptr<BackupProviderState> state;
+};
+
+const std::string BackupProvider::sourcePath = "provider://document/opaque-source-id";
+
+} // namespace
+
+TEST(InputMappingBackupProviderTest, StreamsAndRetriesOpaqueSiblingPublicationFailures)
+{
+    const std::string source(5001, 'x');
+    for (BackupFailure failure : {BackupFailure::ShortWrite, BackupFailure::Flush, BackupFailure::Close})
+    {
+        BackupProvider storage;
+        storage.state->files[BackupProvider::sourcePath] = source;
+        storage.state->failure = failure;
+
+        EXPECT_FALSE(mapping_internal::createLegacyBackup(storage, BackupProvider::sourcePath));
+        EXPECT_EQ(storage.state->files.at(BackupProvider::sourcePath), source);
+        EXPECT_TRUE(storage.state->files.count(BackupProviderFile::backupPath) == 0);
+        EXPECT_EQ(storage.state->destination, BackupProviderFile::backupPath);
+        EXPECT_EQ(storage.state->parentReference, "provider://folder/opaque-parent-id");
+        EXPECT_EQ(storage.state->siblingName, "legacy.ini.save");
+        EXPECT_EQ(storage.state->replaceCalls, 0);
+
+        storage.state->failure = BackupFailure::None;
+        EXPECT_TRUE(mapping_internal::createLegacyBackup(storage, BackupProvider::sourcePath));
+        EXPECT_EQ(storage.state->files.at(BackupProvider::sourcePath), source);
+        EXPECT_EQ(storage.state->files.at(BackupProviderFile::backupPath), source);
+        EXPECT_EQ(storage.state->destination, BackupProviderFile::backupPath);
+        EXPECT_EQ(storage.state->replaceCalls, 1);
+    }
+}
+
+TEST(InputMappingBackupProviderTest, PreservesUnreadableExistingBackupAndRetriesProbe)
+{
+    BackupProvider storage;
+    const std::string source = "legacy source";
+    const std::string historical = "previous backup bytes";
+    storage.state->files[BackupProvider::sourcePath] = source;
+    storage.state->files[BackupProviderFile::backupPath] = historical;
+    storage.state->failure = BackupFailure::ExistingBackupRead;
+
+    EXPECT_FALSE(mapping_internal::createLegacyBackup(storage, BackupProvider::sourcePath));
+    EXPECT_EQ(storage.state->files.at(BackupProviderFile::backupPath), historical);
+    EXPECT_EQ(storage.state->createCalls, 0);
+    EXPECT_EQ(storage.state->replaceCalls, 0);
+
+    storage.state->failure = BackupFailure::None;
+    EXPECT_TRUE(mapping_internal::createLegacyBackup(storage, BackupProvider::sourcePath));
+    EXPECT_EQ(storage.state->files.at(BackupProviderFile::backupPath), historical);
+    EXPECT_EQ(storage.state->createCalls, 0);
+}
 
 class InputMappingConfigFileTest : public ::testing::Test
 {
