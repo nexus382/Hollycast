@@ -1,93 +1,79 @@
 #!/usr/bin/env python3
 
-import re
 import os
 import shutil
 import subprocess
 import sys
 import urllib.request
 import zipfile
+
 import core_option_translation as t
 
-# --------------------          MAIN          -------------------- #
 
-if __name__ == '__main__':
-   # Check Crowdin API Token and core name
-   try:
-      API_KEY = sys.argv[1]
-      CORE_NAME = t.clean_file_name(sys.argv[2])
-   except IndexError as e:
+def main():
+   if len(sys.argv) < 3:
       print('Please provide Crowdin API Token and core name!')
-      raise e
+      return 2
 
-   DIR_PATH = t.os.path.dirname(t.os.path.realpath(__file__))
-   YAML_PATH = t.os.path.join(DIR_PATH, 'crowdin.yaml')
-
-   # Apply Crowdin API Key
-   with open(YAML_PATH, 'r') as crowdin_config_file:
-      crowdin_config = crowdin_config_file.read()
-   crowdin_config = re.sub(r'"api_token": "_secret_"',
-                           f'"api_token": "{API_KEY}"',
-                           crowdin_config, 1)
-   crowdin_config = re.sub(r'/_core_name_',
-                           f'/{CORE_NAME}'
-                           , crowdin_config)
-   with open(YAML_PATH, 'w') as crowdin_config_file:
-      crowdin_config_file.write(crowdin_config)
+   api_key = sys.argv[1]
+   core_name = t.clean_file_name(sys.argv[2])
+   dir_path = t.os.path.dirname(t.os.path.realpath(__file__))
+   yaml_path = t.os.path.join(dir_path, 'crowdin.yaml')
 
    try:
-      # Download Crowdin CLI
+      with open(yaml_path, 'rb') as crowdin_config_file:
+         original_config = crowdin_config_file.read()
+   except OSError:
+      print('Crowdin translation download failed', file=sys.stderr)
+      return 1
+
+   status = 0
+   try:
+      crowdin_config = original_config.decode('utf-8')
+      crowdin_config = crowdin_config.replace(
+         '"api_token": "_secret_"', f'"api_token": "{api_key}"', 1)
+      crowdin_config = crowdin_config.replace('/_core_name_', f'/{core_name}')
+      with open(yaml_path, 'w', encoding='utf-8', newline='') as crowdin_config_file:
+         crowdin_config_file.write(crowdin_config)
+
       jar_name = 'crowdin-cli.jar'
-      jar_path = t.os.path.join(DIR_PATH, jar_name)
+      jar_path = t.os.path.join(dir_path, jar_name)
       crowdin_cli_file = 'crowdin-cli.zip'
       crowdin_cli_url = 'https://downloads.crowdin.com/cli/v3/' + crowdin_cli_file
-      crowdin_cli_path = t.os.path.join(DIR_PATH, crowdin_cli_file)
+      crowdin_cli_path = t.os.path.join(dir_path, crowdin_cli_file)
 
-      if not os.path.isfile(t.os.path.join(DIR_PATH, jar_name)):
+      if not os.path.isfile(jar_path):
          print('download crowdin-cli.jar')
          urllib.request.urlretrieve(crowdin_cli_url, crowdin_cli_path)
          with zipfile.ZipFile(crowdin_cli_path, 'r') as zip_ref:
-            jar_dir = t.os.path.join(DIR_PATH, zip_ref.namelist()[0])
+            jar_dir = t.os.path.join(dir_path, zip_ref.namelist()[0])
             for file in zip_ref.namelist():
                if file.endswith(jar_name):
                   jar_file = file
                   break
-            zip_ref.extract(jar_file, path=DIR_PATH)
-            os.rename(t.os.path.join(DIR_PATH, jar_file), jar_path)
+            zip_ref.extract(jar_file, path=dir_path)
+            os.rename(t.os.path.join(dir_path, jar_file), jar_path)
             os.remove(crowdin_cli_path)
             shutil.rmtree(jar_dir)
 
       print('download translation *.json')
-      subprocess.run(['java', '-jar', jar_path, 'download', '--config', YAML_PATH])
+      result = subprocess.run(['java', '-jar', jar_path, 'download', '--config', yaml_path])
+      if result.returncode != 0:
+         print(f'Crowdin translation download failed (exit {result.returncode})', file=sys.stderr)
+         status = result.returncode if result.returncode > 0 else 1
+   except Exception:
+      print('Crowdin translation download failed', file=sys.stderr)
+      status = 1
+   finally:
+      try:
+         with open(yaml_path, 'wb') as crowdin_config_file:
+            crowdin_config_file.write(original_config)
+      except OSError:
+         print('Crowdin translation download could not restore configuration', file=sys.stderr)
+         status = 1
 
-      # Reset Crowdin API Key
-      with open(YAML_PATH, 'r') as crowdin_config_file:
-         crowdin_config = crowdin_config_file.read()
-      crowdin_config = re.sub(r'"api_token": ".*?"',
-                              '"api_token": "_secret_"',
-                              crowdin_config, 1)
+   return status
 
-      # TODO this is NOT safe!
-      crowdin_config = re.sub(re.escape(f'/{CORE_NAME}'),
-                              '/_core_name_',
-                              crowdin_config)
 
-      with open(YAML_PATH, 'w') as crowdin_config_file:
-         crowdin_config_file.write(crowdin_config)
-
-   except Exception as e:
-      # Try really hard to reset Crowdin API Key
-      with open(YAML_PATH, 'r') as crowdin_config_file:
-         crowdin_config = crowdin_config_file.read()
-      crowdin_config = re.sub(r'"api_token": ".*?"',
-                              '"api_token": "_secret_"',
-                              crowdin_config, 1)
-
-      # TODO this is NOT safe!
-      crowdin_config = re.sub(re.escape(f'/{CORE_NAME}'),
-                              '/_core_name_',
-                              crowdin_config)
-
-      with open(YAML_PATH, 'w') as crowdin_config_file:
-         crowdin_config_file.write(crowdin_config)
-      raise e
+if __name__ == '__main__':
+   sys.exit(main())
