@@ -77,7 +77,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/util/WorkerThreadTest.cpp)
 
 if(LIBRETRO)
-    target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp src/LibretroStorageTest.cpp)
 endif()
 
 if(USE_HIKARU)
