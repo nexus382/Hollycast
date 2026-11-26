@@ -182,6 +182,7 @@ case " $* " in
 		;;
 	*' fetch --depth 1 origin master '*)
 		printf '%s\n' "$*" >> "$GIT_COMMAND_RECORDER"
+		exit "${GIT_FIXTURE_FETCH_STATUS:-0}"
 		;;
 	*' reset --hard FETCH_HEAD '*)
 		printf '%s\n' "$*" >> "$GIT_COMMAND_RECORDER"
@@ -220,6 +221,15 @@ cmp -s "$fixture_root/archive-commands.expected.actual" "$GIT_COMMAND_RECORDER" 
 [ ! -e "$archive/.git" ] || fail 'archive recorder unexpectedly created Git metadata'
 echo 'PASS: source archive classification reaches only the consented bootstrap sequence'
 
+: > "$GIT_COMMAND_RECORDER"
+fetch_status=0
+PATH="$recorder_bin:$real_path" GIT_FIXTURE_FETCH_STATUS=23 ARCHIVE_ROOT="$archive" \
+	bash -c 'cd "$ARCHIVE_ROOT" && source "$1" && init_submodules' _ "$helper" || fetch_status=$?
+assert_equal 23 "$fetch_status" 'archive bootstrap must propagate the fetch failure'
+head -n 3 "$fixture_root/archive-commands.expected.actual" > "$fixture_root/failed-fetch.expected"
+cmp -s "$fixture_root/failed-fetch.expected" "$GIT_COMMAND_RECORDER" || fail 'command ran after a failed fetch'
+echo 'PASS: failed fetch stops before reset'
+
 # An extracted folder inside another repository must not bootstrap or mutate its parent.
 enclosing="$fixture_root/unrelated enclosing repository"
 nested="$enclosing/extracted project"
@@ -253,5 +263,20 @@ assert_equal "$invalid_gitfile_before" "$(cat "$invalid/.git")" 'invalid gitfile
 [ ! -e "$invalid/HEAD" ] || fail 'invalid gitfile directory was initialized as a repository'
 grep -q 'Git metadata.*invalid' "$fixture_root/invalid-error.log" || fail 'invalid gitfile error was unclear'
 echo 'PASS: corrupt gitfile is rejected before bootstrap mutation'
+
+damaged="$fixture_root/damaged branch"
+git init "$damaged" >/dev/null
+ref="$(git -C "$damaged" symbolic-ref HEAD)"
+for bad_value in invalid-ref-format 1111111111111111111111111111111111111111; do
+	printf '%s\n' "$bad_value" > "$damaged/.git/$ref"
+	: > "$mutation_log"
+	if run_helper_monitored "$damaged" 2> "$fixture_root/damaged-error.log"; then
+		fail 'damaged branch was accepted'
+	fi
+	[ ! -s "$mutation_log" ] || fail 'archive setup attempted on a damaged branch'
+	assert_equal "$bad_value" "$(cat "$damaged/.git/$ref")" 'damaged branch reference was rewritten'
+	grep -q 'HEAD.*damaged' "$fixture_root/damaged-error.log" || fail 'damaged HEAD was not identified'
+done
+echo 'PASS: damaged branch references are rejected before bootstrap'
 
 echo 'All Xcode submodule bootstrap fixtures passed.'

@@ -1,13 +1,7 @@
 # Shared by the Xcode generator and the offline submodule bootstrap tests.
 init_submodules() {
-	local project_root git_dir_present git_inside git_top canonical_git_top
-
-	project_root="$(pwd -P)"
-	if [ -e "$project_root/.git" ] || [ -L "$project_root/.git" ]; then
-		git_dir_present=yes
-	else
-		git_dir_present=no
-	fi
+	local project_root git_inside git_top canonical_git_top head_ref
+	project_root="$(pwd -P)" || return
 
 	if git_inside="$(git -C "$project_root" rev-parse --is-inside-work-tree 2>/dev/null)"; then
 		if [ "$git_inside" != true ]; then
@@ -25,25 +19,27 @@ init_submodules() {
 			return 1
 		fi
 
-		if git -C "$project_root" rev-parse --verify HEAD >/dev/null 2>&1; then
+		if git -C "$project_root" rev-parse --verify 'HEAD^{commit}' >/dev/null 2>&1; then
 			git -C "$project_root" submodule update --init --recursive
-		else
-			git -C "$project_root" fetch --depth 1 origin master
-			git -C "$project_root" reset --hard FETCH_HEAD
-			git -C "$project_root" submodule update --init --recursive
+			return
 		fi
-		return
-	fi
 
-	if [ "$git_dir_present" = yes ]; then
+		# An unborn branch has a symbolic HEAD and no object ID yet.
+		head_ref="$(git -C "$project_root" symbolic-ref --quiet HEAD 2>/dev/null)" || head_ref=
+		if [[ "$head_ref" != refs/heads/* ]] || git -C "$project_root" rev-parse --verify HEAD >/dev/null 2>&1; then
+			echo "Cannot initialize submodules because HEAD at $project_root is damaged." >&2
+			return 1
+		fi
+	elif [ -e "$project_root/.git" ] || [ -L "$project_root/.git" ]; then
 		echo "Cannot initialize submodules: Git metadata at $project_root is invalid." >&2
 		return 1
+	else
+		# Source archives retain the setup approved in the generator.
+		git -C "$project_root" init || return
+		git -C "$project_root" remote add origin https://github.com/nexus382/Hollycast.git || return
 	fi
 
-	# Source archives have no Git metadata. Keep their historical, consented setup.
-	git -C "$project_root" init
-	git -C "$project_root" remote add origin https://github.com/nexus382/Hollycast.git
-	git -C "$project_root" fetch --depth 1 origin master
-	git -C "$project_root" reset --hard FETCH_HEAD
+	git -C "$project_root" fetch --depth 1 origin master || return
+	git -C "$project_root" reset --hard FETCH_HEAD || return
 	git -C "$project_root" submodule update --init --recursive
 }
