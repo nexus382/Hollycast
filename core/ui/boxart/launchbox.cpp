@@ -212,7 +212,7 @@ void writeAtomicText(const std::string& path, const std::string& text)
 
 void truncateUpdateLog(const std::string& path)
 {
-	std::ofstream file(path, std::ios::binary | std::ios::trunc);
+	std::ofstream file(std::filesystem::u8path(path), std::ios::binary | std::ios::trunc);
 	if (!file) throw std::runtime_error("Cannot truncate LaunchBox match update log: " + path);
 	file.flush();
 	if (!file) throw std::runtime_error("Cannot flush LaunchBox match update log: " + path);
@@ -224,7 +224,7 @@ void removeIncompleteUpdateTail(const std::string& path)
 {
 	std::error_code typeError;
 	if (!std::filesystem::is_regular_file(std::filesystem::u8path(path), typeError) || typeError) return;
-	std::ifstream file(path, std::ios::binary);
+	std::ifstream file(std::filesystem::u8path(path), std::ios::binary);
 	if (!file) return;
 	file.seekg(0, std::ios::end);
 	const std::streamoff size = file.tellg();
@@ -233,13 +233,31 @@ void removeIncompleteUpdateTail(const std::string& path)
 	char last = 0;
 	file.get(last);
 	if (last == '\n') return;
-	file.clear();
-	file.seekg(0, std::ios::beg);
-	const std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-	const size_t lastLine = contents.rfind('\n');
+	constexpr std::streamoff chunkSize = 4096;
+	std::array<char, chunkSize> buffer{};
+	std::streamoff end = size;
+	std::streamoff validSize = 0;
+	while (end > 0)
+	{
+		const std::streamoff start = std::max<std::streamoff>(0, end - chunkSize);
+		const std::streamsize length = static_cast<std::streamsize>(end - start);
+		file.clear();
+		file.seekg(start, std::ios::beg);
+		file.read(buffer.data(), length);
+		if (file.gcount() != length)
+			throw std::runtime_error("Cannot read LaunchBox match update log: " + path);
+		for (std::streamoff i = length; i > 0; --i)
+			if (buffer[static_cast<size_t>(i - 1)] == '\n')
+			{
+				validSize = start + i;
+				end = 0;
+				break;
+			}
+		if (end != 0) end = start;
+	}
 	std::error_code error;
 	std::filesystem::resize_file(std::filesystem::u8path(path),
-		lastLine == std::string::npos ? 0 : lastLine + 1, error);
+		validSize, error);
 	if (error) throw std::runtime_error("Cannot repair LaunchBox match update log: " + path);
 }
 } // namespace
@@ -464,7 +482,7 @@ std::shared_ptr<LaunchBox::MatchCacheState> LaunchBox::sharedCacheState(const st
 	static std::unordered_map<std::string, std::weak_ptr<MatchCacheState>> registry;
 	std::error_code error;
 	const auto absolute = std::filesystem::absolute(std::filesystem::u8path(saveDirectory), error);
-	const std::string key = (error ? std::filesystem::u8path(saveDirectory) : absolute).lexically_normal().string();
+	const std::string key = (error ? std::filesystem::u8path(saveDirectory) : absolute).lexically_normal().u8string();
 	std::lock_guard<std::mutex> lock(registryMutex);
 	auto& weak = registry[key];
 	std::shared_ptr<MatchCacheState> state = weak.lock();
@@ -508,16 +526,13 @@ bool LaunchBox::initialize(const std::string& saveDirectory)
 				WARN_LOG(COMMON, "Ignoring invalid LaunchBox match cache: %s", e.what());
 			}
 			removeIncompleteUpdateTail(directory + "launchbox-matches.json.updates");
-			std::ifstream updatesFile(directory + "launchbox-matches.json.updates", std::ios::binary);
+			std::ifstream updatesFile(std::filesystem::u8path(directory + "launchbox-matches.json.updates"), std::ios::binary);
 			if (updatesFile)
 			{
-				const std::string updates((std::istreambuf_iterator<char>(updatesFile)), std::istreambuf_iterator<char>());
-				for (size_t start = 0; start < updates.size();)
+				std::string line;
+				while (std::getline(updatesFile, line))
 				{
-					const size_t end = updates.find('\n', start);
-					if (end == std::string::npos) break;
-					const json record = json::parse(updates.substr(start, end - start), nullptr, false);
-					start = end + 1;
+					const json record = json::parse(line, nullptr, false);
 					if (!record.is_object() || !record.contains("sequence") || !record.contains("key")
 							|| !record.contains("match") || !record["key"].is_string() || !record["match"].is_object())
 						continue;
@@ -586,7 +601,7 @@ void LaunchBox::saveMatches(const std::string& key, const json& match)
 		removeIncompleteUpdateTail(path);
 		const uint64_t sequence = ++matchCache->sequence;
 		const std::string serialized = json{{"sequence", sequence}, {"key", key}, {"match", updated}}.dump() + "\n";
-		std::ofstream file(path, std::ios::binary | std::ios::app);
+		std::ofstream file(std::filesystem::u8path(path), std::ios::binary | std::ios::app);
 		if (!file) throw std::runtime_error("Cannot open LaunchBox match update log: " + path);
 		file.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
 		file.flush();
@@ -627,10 +642,12 @@ void LaunchBox::endBulk()
 {
 	if (!bulkActive || !matchCache) return;
 	std::lock_guard<std::mutex> lock(matchCache->mutex);
-	const bool lastOwner = matchCache->bulkOwners <= 1;
-	if (lastOwner
-			&& (matchCache->sequence > matchCache->snapshotSequence
-				|| std::filesystem::exists(directory + "launchbox-matches.json.updates")))
+	// Release this provider's participation before I/O so a failed snapshot cannot
+	// strand other providers behind a bulk owner that no longer exists.
+	bulkActive = false;
+	if (matchCache->bulkOwners) --matchCache->bulkOwners;
+	const bool lastOwner = matchCache->bulkOwners == 0;
+	if (lastOwner && matchCache->sequence > matchCache->snapshotSequence)
 	{
 		const auto started = std::chrono::steady_clock::now();
 		const std::string serialized = json{{"version", 2}, {"sequence", matchCache->sequence},
@@ -645,14 +662,13 @@ void LaunchBox::endBulk()
 		matchCache->pendingKeys.clear();
 		metrics.elapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started);
 	}
-	bulkActive = false;
-	if (matchCache->bulkOwners) --matchCache->bulkOwners;
 }
 
 LaunchBox::~LaunchBox()
 {
 	try { endBulk(); }
 	catch (const std::exception& error) { WARN_LOG(COMMON, "Cannot compact LaunchBox match cache: %s", error.what()); }
+	catch (...) { WARN_LOG(COMMON, "Cannot compact LaunchBox match cache"); }
 }
 
 bool LaunchBox::ready() const

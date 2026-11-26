@@ -7,6 +7,8 @@
 #include "screenscraper.h"
 #include "stdclass.h"
 
+#include <exception>
+
 ArtworkAdapter::ArtworkAdapter(int provider, std::unique_ptr<Scraper> primary,
   std::unique_ptr<Scraper> fallback)
  : provider(provider), primary(std::move(primary)), fallback(std::move(fallback))
@@ -38,8 +40,11 @@ void ArtworkAdapter::beginBulk()
 
 void ArtworkAdapter::endBulk()
 {
- primary->endBulk();
- if (fallback) fallback->endBulk();
+	std::exception_ptr failure;
+	try { primary->endBulk(); } catch (...) { failure = std::current_exception(); }
+	if (fallback)
+		try { fallback->endBulk(); } catch (...) { if (!failure) failure = std::current_exception(); }
+	if (failure) std::rethrow_exception(failure);
 }
 
 u32 ArtworkAdapter::supportedMedia(int provider)

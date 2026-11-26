@@ -402,6 +402,34 @@ TEST_F(LaunchBoxMediaTest, BulkMatchWriteWorkload)
  }
 }
 
+TEST_F(LaunchBoxMediaTest, EmptyBulkAndCachedRescanDoNotRewriteSnapshot)
+{
+	item.requestedMedia = artwork::allMedia;
+	auto initial = source();
+	ASSERT_TRUE(initial.initialize(root.string()));
+	initial.beginBulk();
+	ASSERT_NO_THROW(initial.scrape(item));
+	initial.endBulk();
+
+	const auto snapshotPath = root / "launchbox-matches.json";
+	const auto updatePath = root / "launchbox-matches.json.updates";
+	ASSERT_TRUE(std::filesystem::exists(snapshotPath));
+	ASSERT_TRUE(std::filesystem::exists(updatePath));
+	ASSERT_EQ(0u, std::filesystem::file_size(updatePath));
+	const auto snapshotMtime = std::filesystem::last_write_time(snapshotPath);
+
+	auto rescan = source();
+	ASSERT_TRUE(rescan.initialize(root.string()));
+	rescan.beginBulk();
+	ASSERT_NO_THROW(rescan.scrape(item));
+	rescan.endBulk();
+
+	EXPECT_EQ(snapshotMtime, std::filesystem::last_write_time(snapshotPath));
+	EXPECT_EQ(0u, rescan.matchCacheMetrics().recordsSerialized);
+	EXPECT_EQ(0u, rescan.matchCacheMetrics().physicalWrites);
+	EXPECT_EQ(0u, std::filesystem::file_size(updatePath));
+}
+
 TEST_F(LaunchBoxMediaTest, BulkMatchesSurviveRestartWithoutPerItemSnapshots)
 {
  const auto restartRoot = root / "interrupted-run";
@@ -521,6 +549,71 @@ TEST_F(LaunchBoxMediaTest, OverlappingBulkOwnersMergeLatestMediaSlots)
 	ASSERT_TRUE(snapshot);
 	const auto saved = json::parse(snapshot);
 	EXPECT_EQ(10u, saved.at("matches").at(LaunchBoxCatalog::identity(coverItem)).at("media").size());
+}
+
+TEST_F(LaunchBoxMediaTest, FailedFinalDestructorCompactionReleasesOwnerForRecovery)
+{
+	const auto recoveryRoot = root / "blocked-snapshot";
+	std::filesystem::create_directories(recoveryRoot);
+	std::filesystem::copy_file(root / "launchbox-catalog.json", recoveryRoot / "launchbox-catalog.json");
+	auto survivor = source();
+	ASSERT_TRUE(survivor.initialize(recoveryRoot.string()));
+	survivor.beginBulk();
+	GameBoxart item = sonic();
+	item.uniqueId = "HDR-0098";
+	{
+		auto failingOwner = source();
+		ASSERT_TRUE(failingOwner.initialize(recoveryRoot.string()));
+		failingOwner.beginBulk();
+		ASSERT_NO_THROW(failingOwner.scrape(item));
+		survivor.endBulk();
+		std::filesystem::create_directory(recoveryRoot / "launchbox-matches.json.tmp");
+	}
+
+	const auto snapshotPath = recoveryRoot / "launchbox-matches.json";
+	const auto updatePath = recoveryRoot / "launchbox-matches.json.updates";
+	EXPECT_FALSE(std::filesystem::exists(snapshotPath));
+	ASSERT_TRUE(std::filesystem::exists(updatePath));
+	EXPECT_GT(std::filesystem::file_size(updatePath), 0u);
+	std::filesystem::remove(recoveryRoot / "launchbox-matches.json.tmp");
+
+	// The still-open provider takes part in another drain and compacts the
+	// preserved journal after the failed owner's destructor released its count.
+	survivor.beginBulk();
+	EXPECT_NO_THROW(survivor.endBulk());
+	std::ifstream snapshot(snapshotPath);
+	ASSERT_TRUE(snapshot);
+	const json saved = json::parse(snapshot);
+	EXPECT_TRUE(saved.at("matches").contains(LaunchBoxCatalog::identity(item)));
+	EXPECT_EQ(0u, std::filesystem::file_size(updatePath));
+}
+
+TEST_F(LaunchBoxMediaTest, MatchJournalReplaysInUtf8Directory)
+{
+	const auto utf8Root = root / std::filesystem::u8path("café-ゲーム");
+	const auto restartRoot = root / std::filesystem::u8path("復旧-cache");
+	std::filesystem::create_directories(utf8Root);
+	std::filesystem::create_directories(restartRoot);
+	std::filesystem::copy_file(root / "launchbox-catalog.json", utf8Root / "launchbox-catalog.json");
+	std::filesystem::copy_file(root / "launchbox-catalog.json", restartRoot / "launchbox-catalog.json");
+	GameBoxart item = sonic();
+	item.uniqueId = "UTF8-0001";
+	auto scraper = source();
+	ASSERT_TRUE(scraper.initialize(utf8Root.u8string()));
+	scraper.beginBulk();
+	ASSERT_NO_THROW(scraper.scrape(item));
+	const auto updatePath = utf8Root / "launchbox-matches.json.updates";
+	ASSERT_TRUE(std::filesystem::exists(updatePath));
+	std::filesystem::copy_file(updatePath, restartRoot / "launchbox-matches.json.updates");
+
+	GameBoxart recovered = item;
+	recovered.launchboxCheckedMedia = 0;
+	recovered.launchboxMedia.clear();
+	auto restart = source();
+	ASSERT_TRUE(restart.initialize(restartRoot.u8string()));
+	ASSERT_NO_THROW(restart.scrape(recovered));
+	EXPECT_EQ(item.launchboxId, recovered.launchboxId);
+	EXPECT_TRUE(std::filesystem::exists(restartRoot / "launchbox-matches.json"));
 }
 
 TEST(LaunchBoxCatalogTest, SharedSlotsHaveDiscAndBoxImagesAndKeepMixUnavailable)

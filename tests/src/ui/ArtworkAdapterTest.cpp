@@ -14,9 +14,12 @@
 namespace {
 class StubScraper : public Scraper {
 public:
- explicit StubScraper(std::function<void(GameBoxart&)> work) : work(std::move(work)) {}
+ explicit StubScraper(std::function<void(GameBoxart&)> work, std::function<void()> end = {})
+  : work(std::move(work)), end(std::move(end)) {}
  void scrape(GameBoxart& item) override { work(item); }
+ void endBulk() override { if (end) end(); }
  std::function<void(GameBoxart&)> work;
+ std::function<void()> end;
 };
 class ArtworkAdapterTest : public ::testing::Test {
 protected:
@@ -184,6 +187,16 @@ TEST_F(ArtworkAdapterTest, DiscAndBoxRequestsNeverUseAnUnrelatedFallbackImage)
  adapter.scrape(item);
  EXPECT_EQ(0, fallbackCalls); EXPECT_FALSE(ArtworkAdapter::needsMedia(item, 2, item.requestedMedia));
  EXPECT_TRUE(item.launchboxMedia.empty()); EXPECT_TRUE(item.tgdbMedia.empty());
+}
+
+TEST_F(ArtworkAdapterTest, EndsFallbackBulkEvenWhenPrimaryCompactionFails)
+{
+	int fallbackEnds = 0;
+	ArtworkAdapter adapter(2,
+		std::make_unique<StubScraper>([](GameBoxart&) {}, [] { throw std::runtime_error("snapshot failure"); }),
+		std::make_unique<StubScraper>([](GameBoxart&) {}, [&] { ++fallbackEnds; }));
+	EXPECT_THROW(adapter.endBulk(), std::runtime_error);
+	EXPECT_EQ(1, fallbackEnds);
 }
 
 TEST_F(ArtworkAdapterTest, FailedFallbackPreservesPrimaryAndTheOriginalRequest)

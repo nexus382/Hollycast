@@ -1839,11 +1839,16 @@ void Boxart::fetchBoxart()
 			for (GameBoxart& b : boxart)
 				completeArtworkWork(b, false, provider);
 		}
-		if (scraper)
+		bool drainScraper = false;
 		{
 			std::lock_guard<std::mutex> guard(mutex);
-			if (toFetch.empty() && !mediaBatchPending && !physicalWorking)
-				scraper->endBulk();
+			drainScraper = scraper && toFetch.empty() && !mediaBatchPending && !physicalWorking;
+		}
+		if (drainScraper)
+		{
+			try { scraper->endBulk(); }
+			catch (const std::exception& error) { INFO_LOG(COMMON, "Artwork cache flush: %s", error.what()); }
+			catch (...) { INFO_LOG(COMMON, "Artwork cache flush failed"); }
 		}
 		saveDatabase();
 	});
