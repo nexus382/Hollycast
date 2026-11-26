@@ -58,6 +58,81 @@ u8 *naomi_default_eeprom;
 
 bool atomiswaveForceFeedback;
 
+void naomi_cart::readExactArchiveFile(ArchiveFile& file, void *buffer, u32 expectedLength, const char *component)
+{
+	u32 read = file.Read(buffer, expectedLength);
+	if (read != expectedLength)
+		throw NaomiCartException(strprintf(T("Invalid ROM: incomplete read of %s (%u of %u bytes)"),
+				component, read, expectedLength));
+}
+
+void naomi_cart::loadGameBlob(ArchiveFile& file, u32 type, Cartridge& cartridge, u32 offset, u32 length,
+		const char *component, MD5Sum& md5, bool hash, std::vector<u8>& defaultEeprom)
+{
+	std::vector<u8> data(length);
+	readExactArchiveFile(file, data.data(), length, component);
+
+	switch (type)
+	{
+	case Normal:
+		{
+			u32 mappedLength = length;
+			u8 *destination = (u8 *)cartridge.GetPtr(offset, mappedLength);
+			if (destination == nullptr)
+				throw NaomiCartException(strprintf(T("Invalid ROM: truncated %s"), component));
+			memcpy(destination, data.data(), length);
+			if (hash)
+				md5.add(destination, length);
+		}
+		break;
+
+	case InterleavedWord:
+		{
+			u32 mappedLength = length * 2;
+			u8 *destination = (u8 *)cartridge.GetPtr(offset, mappedLength);
+			if (destination == nullptr)
+				throw NaomiCartException(strprintf(T("Invalid ROM: truncated %s"), component));
+			u16 *to = (u16 *)destination;
+			u16 *from = (u16 *)data.data();
+			for (u32 i = length / 2; i > 0; --i, ++to)
+				*to++ = *from++;
+			if (hash)
+				md5.add(destination, length);
+		}
+		break;
+
+	case Key:
+		{
+			u8 *keyData = (u8 *)malloc(length);
+			if (keyData == nullptr)
+				throw NaomiCartException(Ts("Memory allocation failed"));
+			memcpy(keyData, data.data(), length);
+			cartridge.SetKeyData(keyData);
+			if (hash)
+				md5.add(data.data(), length);
+		}
+		break;
+
+	case Eeprom:
+		if (length == 0x84)
+		{
+			if (hash)
+				md5.add(data.data(), data.size());
+			setGameSerialId(data.data());
+		}
+		else
+		{
+			defaultEeprom = std::move(data);
+			if (hash)
+				md5.add(defaultEeprom.data(), defaultEeprom.size());
+		}
+		break;
+
+	default:
+		throw NaomiCartException(Ts("Unsupported game ROM blob type"));
+	}
+}
+
 static bool loadBios(const char *biosName, Archive *child_archive, Archive *parent_archive, int region)
 {
 	int biosid = 0;
@@ -114,10 +189,12 @@ static bool loadBios(const char *biosName, Archive *child_archive, Archive *pare
 			if (!found_region)
 			{
 				verify(bios->blobs[romid].offset + bios->blobs[romid].length <= BIOS_SIZE);
-				u32 read = file->Read(biosData + bios->blobs[romid].offset, bios->blobs[romid].length);
+				std::vector<u8> data(bios->blobs[romid].length);
+				naomi_cart::readExactArchiveFile(*file, data.data(), bios->blobs[romid].length, bios->blobs[romid].filename);
+				memcpy(biosData + bios->blobs[romid].offset, data.data(), data.size());
 				if (config::GGPOEnable)
-					md5.add(biosData + bios->blobs[romid].offset, bios->blobs[romid].length);
-				DEBUG_LOG(NAOMI, "Mapped %s: %x bytes at %07x", bios->blobs[romid].filename, read, bios->blobs[romid].offset);
+					md5.add(data.data(), data.size());
+				DEBUG_LOG(NAOMI, "Mapped %s: %x bytes at %07x", bios->blobs[romid].filename, bios->blobs[romid].length, bios->blobs[romid].offset);
 				found_region = true;
 				if (region == -1)
 					config::Region.override(bios->blobs[romid].region);
@@ -125,17 +202,18 @@ static bool loadBios(const char *biosName, Archive *child_archive, Archive *pare
 			break;
 		case EepromBE16:
 			{
-				// FIXME memory leak
-				naomi_default_eeprom = (u8 *)malloc(bios->blobs[romid].length);
-				if (naomi_default_eeprom == nullptr)
-					throw NaomiCartException(Ts("Memory allocation failed"));
-
-				u32 read = file->Read(naomi_default_eeprom, bios->blobs[romid].length);
+				std::vector<u8> data(bios->blobs[romid].length);
+				naomi_cart::readExactArchiveFile(*file, data.data(), bios->blobs[romid].length, bios->blobs[romid].filename);
 				for (unsigned i = 0; i < bios->blobs[romid].length; i += 2)
-					std::swap(naomi_default_eeprom[i], naomi_default_eeprom[i + 1]);
+					std::swap(data[i], data[i + 1]);
+				u8 *eeprom = (u8 *)malloc(data.size());
+				if (eeprom == nullptr)
+					throw NaomiCartException(Ts("Memory allocation failed"));
+				memcpy(eeprom, data.data(), data.size());
+				naomi_default_eeprom = eeprom;
 				if (config::GGPOEnable)
-					md5.add(naomi_default_eeprom, bios->blobs[romid].length);
-				DEBUG_LOG(NAOMI, "Loaded %s: %x bytes default eeprom", bios->blobs[romid].filename, read);
+					md5.add(data.data(), data.size());
+				DEBUG_LOG(NAOMI, "Loaded %s: %x bytes default eeprom", bios->blobs[romid].filename, bios->blobs[romid].length);
 			}
 			break;
 		default:
@@ -296,6 +374,7 @@ static void loadMameRom(const std::string& path, const std::string& fileName, Lo
 		CurrentCartridge->game = game;
 
 		MD5Sum md5;
+		std::vector<u8> loadedEeprom;
 
 		int romCount = 0;
 		while (game->blobs[romCount].filename != nullptr)
@@ -350,75 +429,28 @@ static void loadMameRom(const std::string& path, const std::string& fileName, Lo
 				switch (game->blobs[romid].blob_type)
 				{
 					case Normal:
-						{
-							u8 *dst = (u8 *)CurrentCartridge->GetPtr(game->blobs[romid].offset, len);
-							if (dst == nullptr)
-								throw NaomiCartException(strprintf(T("Invalid ROM: truncated %s"), game->blobs[romid].filename));
-							u32 read = file->Read(dst, game->blobs[romid].length);
-							if (config::GGPOEnable)
-								md5.add(dst, game->blobs[romid].length);
-							DEBUG_LOG(NAOMI, "Mapped %s: %x bytes at %07x", game->blobs[romid].filename, read, game->blobs[romid].offset);
-						}
+						naomi_cart::loadGameBlob(*file, Normal, *CurrentCartridge, game->blobs[romid].offset,
+								game->blobs[romid].length, game->blobs[romid].filename, md5, config::GGPOEnable, loadedEeprom);
+						DEBUG_LOG(NAOMI, "Mapped %s: %x bytes at %07x", game->blobs[romid].filename, game->blobs[romid].length, game->blobs[romid].offset);
 						break;
 
 					case InterleavedWord:
-						{
-							u8 *buf = (u8 *)malloc(game->blobs[romid].length);
-							if (buf == nullptr)
-								throw NaomiCartException(Ts("Memory allocation failed"));
-
-							u32 read = file->Read(buf, game->blobs[romid].length);
-							u16 *to = (u16 *)CurrentCartridge->GetPtr(game->blobs[romid].offset, len);
-							if (to == nullptr)
-								throw NaomiCartException(strprintf(T("Invalid ROM: truncated %s"), game->blobs[romid].filename));
-							u16 *from = (u16 *)buf;
-							for (int i = game->blobs[romid].length / 2; --i >= 0; to++)
-								*to++ = *from++;
-							free(buf);
-							if (config::GGPOEnable)
-								md5.add((u8*)CurrentCartridge->GetPtr(game->blobs[romid].offset, len), game->blobs[romid].length);
-							DEBUG_LOG(NAOMI, "Mapped %s: %x bytes (interleaved word) at %07x", game->blobs[romid].filename, read, game->blobs[romid].offset);
-						}
+						naomi_cart::loadGameBlob(*file, InterleavedWord, *CurrentCartridge, game->blobs[romid].offset,
+								game->blobs[romid].length, game->blobs[romid].filename, md5, config::GGPOEnable, loadedEeprom);
+						DEBUG_LOG(NAOMI, "Mapped %s: %x bytes (interleaved word) at %07x", game->blobs[romid].filename, game->blobs[romid].length, game->blobs[romid].offset);
 						break;
 
 					case Key:
-						{
-							u8 *buf = (u8 *)malloc(game->blobs[romid].length);
-							if (buf == nullptr)
-								throw NaomiCartException(Ts("Memory allocation failed"));
-
-							u32 read = file->Read(buf, game->blobs[romid].length);
-							CurrentCartridge->SetKeyData(buf);
-							if (config::GGPOEnable)
-								md5.add(buf, game->blobs[romid].length);
-							DEBUG_LOG(NAOMI, "Loaded %s: %x bytes cart key", game->blobs[romid].filename, read);
-						}
+						naomi_cart::loadGameBlob(*file, Key, *CurrentCartridge, game->blobs[romid].offset,
+								game->blobs[romid].length, game->blobs[romid].filename, md5, config::GGPOEnable, loadedEeprom);
+						DEBUG_LOG(NAOMI, "Loaded %s: %x bytes cart key", game->blobs[romid].filename, game->blobs[romid].length);
 						break;
 
 					case Eeprom:
-						{
-							if (game->blobs[romid].length == 0x84)
-							{
-								// on-cart X76F100 security eeprom
-								u8 data[0x84];
-								u32 read = file->Read(data, sizeof(data));
-								if (config::GGPOEnable)
-									md5.add(data, sizeof(data));
-								setGameSerialId(data);
-								DEBUG_LOG(NAOMI, "Loaded %s: %x bytes rom serial eeprom", game->blobs[romid].filename, read);
-							}
-							else
-							{
-								naomi_default_eeprom = (u8 *)malloc(game->blobs[romid].length);
-								if (naomi_default_eeprom == nullptr)
-									throw NaomiCartException(Ts("Memory allocation failed"));
-
-								u32 read = file->Read(naomi_default_eeprom, game->blobs[romid].length);
-								if (config::GGPOEnable)
-									md5.add(naomi_default_eeprom, game->blobs[romid].length);
-								DEBUG_LOG(NAOMI, "Loaded %s: %x bytes default eeprom", game->blobs[romid].filename, read);
-							}
-						}
+						naomi_cart::loadGameBlob(*file, Eeprom, *CurrentCartridge, game->blobs[romid].offset,
+								game->blobs[romid].length, game->blobs[romid].filename, md5, config::GGPOEnable, loadedEeprom);
+						DEBUG_LOG(NAOMI, "Loaded %s: %x bytes %s", game->blobs[romid].filename, game->blobs[romid].length,
+								game->blobs[romid].length == 0x84 ? "rom serial eeprom" : "default eeprom");
 						break;
 
 					default:
@@ -426,6 +458,14 @@ static void loadMameRom(const std::string& path, const std::string& fileName, Lo
 						break;
 				}
 			}
+		}
+		if (!loadedEeprom.empty())
+		{
+			u8 *eeprom = (u8 *)malloc(loadedEeprom.size());
+			if (eeprom == nullptr)
+				throw NaomiCartException(Ts("Memory allocation failed"));
+			memcpy(eeprom, loadedEeprom.data(), loadedEeprom.size());
+			naomi_default_eeprom = eeprom;
 		}
 		if (naomi_default_eeprom == NULL && game->eeprom_dump != NULL)
 			naomi_default_eeprom = game->eeprom_dump;
@@ -450,6 +490,7 @@ static void loadMameRom(const std::string& path, const std::string& fileName, Lo
 	} catch (...) {
 		delete CurrentCartridge;
 		CurrentCartridge = NULL;
+		NaomiGameInputs = nullptr;
 		throw;
 	}
 }

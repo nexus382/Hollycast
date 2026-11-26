@@ -6,6 +6,9 @@
 #include <string>
 #include <vector>
 
+class ArchiveFile;
+class MD5Sum;
+
 struct RomBootID
 {
 	char boardName[16];
@@ -177,3 +180,10 @@ struct InputDescriptors
 
 extern InputDescriptors *NaomiGameInputs;
 extern bool atomiswaveForceFeedback;
+
+namespace naomi_cart
+{
+void readExactArchiveFile(ArchiveFile& file, void *buffer, u32 expectedLength, const char *component);
+void loadGameBlob(ArchiveFile& file, u32 type, Cartridge& cartridge, u32 offset, u32 length,
+		const char *component, MD5Sum& md5, bool hash, std::vector<u8>& defaultEeprom);
+}
