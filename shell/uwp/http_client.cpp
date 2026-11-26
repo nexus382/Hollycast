@@ -89,14 +89,13 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 		}
 
 		IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^ op = httpClient->SendRequestAsync(request, HttpCompletionOption::ResponseHeadersRead);
-		// Cancellation can complete after this function returns. Keep the event
-		// alive until both WinRT completion callbacks have released their copies.
+		// A cancelled operation can invoke its completion callback after this call returns.
 		auto asyncEvent = std::make_shared<cResetEvent>();
-		const auto deadline = std::chrono::steady_clock::now()
-			+ std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 30000);
-		const auto wait = [&]() {
+		using Clock = std::chrono::steady_clock;
+		const auto headerDeadline = Clock::now() + std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 30000);
+		const auto wait = [&](Clock::time_point deadline) {
 			while (!asyncEvent->Wait(25)) {
-				if ((cancelled && cancelled->load()) || std::chrono::steady_clock::now() >= deadline) return false;
+				if ((cancelled && cancelled->load()) || Clock::now() >= deadline) return false;
 			}
 			return !cancelled || !cancelled->load();
 		};
@@ -104,7 +103,7 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 				[asyncEvent](IAsyncOperationWithProgress<HttpResponseMessage^, HttpProgress>^, Windows::Foundation::AsyncStatus) {
 					asyncEvent->Set();
 		        });
-		if (!wait())
+		if (!wait(headerDeadline))
 		{
 			op->Cancel();
 			return cancelled && cancelled->load() ? 499 : 408;
@@ -119,22 +118,21 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 				getHeaders(resp->Headers->First(), *respHeaders);
 				getHeaders(httpContent->Headers->First(), *respHeaders);
 			}
-			IReference<UINT64>^ declaredLength = httpContent->Headers->ContentLength;
-			if (maxBodyBytes != unlimitedBody && declaredLength != nullptr && declaredLength->Value > maxBodyBytes) {
-				resp->Close();
+			auto declaredLength = httpContent->Headers->ContentLength;
+			if (maxBodyBytes != unlimitedBody && declaredLength != nullptr && declaredLength->Value > maxBodyBytes)
 				return bodyTooLarge;
-			}
 
+			const auto bodyDeadline = timeoutMs > 0 ? Clock::now() + std::chrono::milliseconds(timeoutMs)
+					: Clock::time_point::max();
 			IAsyncOperationWithProgress<IInputStream^, uint64_t>^ streamOp = httpContent->ReadAsInputStreamAsync();
 			asyncEvent->Reset();
 			streamOp->Completed = ref new AsyncOperationWithProgressCompletedHandler<IInputStream^, uint64_t>(
 				[asyncEvent](IAsyncOperationWithProgress<IInputStream^, uint64_t>^, Windows::Foundation::AsyncStatus) {
 					asyncEvent->Set();
 				});
-			if (!wait())
+			if (!wait(bodyDeadline))
 			{
 				streamOp->Cancel();
-				resp->Close();
 				return cancelled && cancelled->load() ? 499 : 408;
 			}
 			IInputStream^ input = streamOp->GetResults();
@@ -146,10 +144,8 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 					[asyncEvent](IAsyncOperationWithProgress<IBuffer^, uint32_t>^, Windows::Foundation::AsyncStatus) {
 						asyncEvent->Set();
 					});
-				if (!wait()) {
+				if (!wait(bodyDeadline)) {
 					readOp->Cancel();
-					input->Close();
-					resp->Close();
 					content.clear();
 					return cancelled && cancelled->load() ? 499 : 408;
 				}
@@ -157,17 +153,11 @@ int get(const std::string& url, std::vector<u8>& content, const Headers *reqHead
 				if (buffer->Length == 0) break;
 				Array<u8>^ array = ref new Array<u8>(buffer->Length);
 				DataReader::FromBuffer(buffer)->ReadBytes(array);
-				if (!appendBody(content, array->Data, buffer->Length, maxBodyBytes)) {
-					input->Close();
-					resp->Close();
+				if (!appendBody(content, array->Data, buffer->Length, maxBodyBytes))
 					return bodyTooLarge;
-				}
 			}
-			input->Close();
 		}
-		const int status = (int)resp->StatusCode;
-		resp->Close();
-		return status;
+		return (int)resp->StatusCode;
 	}
 	catch (Exception^ e)
 	{
