@@ -70,7 +70,7 @@
 
 settings_t settings;
 constexpr char const *BIOS_TITLE = "Dreamcast BIOS";
-static bool skipAutoSaveOnNextUnload = false;
+static std::atomic<bool> skipAutoSaveOnNextUnload{false};
 
 #ifndef LIBRETRO
 // The performance overlay keeps a native reference to the SH4 thread so it can
@@ -101,7 +101,7 @@ void dc_skipAutoSaveOnNextUnload()
 
 bool dc_consumeAutoSaveSkipOnNextUnload()
 {
-	return std::exchange(skipAutoSaveOnNextUnload, false);
+	return skipAutoSaveOnNextUnload.exchange(false);
 }
 
 static void loadSpecialSettings()
@@ -892,11 +892,14 @@ void Emulator::unloadGame(bool allowAutoSave)
 {
 	rewind_state::invalidate();
 	rewind_state::releaseRequests();
-	const bool skipAutoSaveThisUnload = dc_consumeAutoSaveSkipOnNextUnload();
-	partialRestoreFailed = false;
 	try {
 		stop();
+		// A failing restore can set Error before stop() reaches its thread join.
+		if (state == Error && partialRestoreFailed && config::ThreadedRendering)
+			checkStatus(true);
 	} catch (...) { }
+	const bool skipAutoSaveThisUnload = dc_consumeAutoSaveSkipOnNextUnload();
+	partialRestoreFailed = false;
 	if (state == Loaded || state == Error)
 	{
 		assembly_debugger::reset();

@@ -223,6 +223,11 @@ TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
 	EXPECT_EQ(1, loadEvents);
 	EXPECT_TRUE(dc_loadstateForPath(validPath.string()));
 	EXPECT_EQ(2, loadEvents);
+	emu.unloadGame();
+	EXPECT_GT(std::filesystem::file_size(autoSavePath), savedMarker.size());
+	emu.loadGame(gamePath.string().c_str());
+	EXPECT_EQ(StateLoadResult::Loaded, dc_loadstateResult(autoSaveSlot));
+	EXPECT_EQ(3, loadEvents);
 	emu.unloadGame(false);
 	EventManager::unlisten(Event::LoadState, countLoadStateEvent, &loadEvents);
 
