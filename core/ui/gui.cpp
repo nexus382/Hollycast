@@ -999,7 +999,9 @@ void gui_request_initial_auto_load()
 	}
 	if (launchMode == library::LaunchMode::Resume)
 	{
-		if (action == library::AutoLoadAction::RejectResume || !dc_loadstateForPath(resumePath))
+		const StateLoadResult result = action == library::AutoLoadAction::RejectResume
+				? StateLoadResult::Rejected : dc_loadstateForPathResult(resumePath);
+		if (result != StateLoadResult::Loaded)
 		{
 			// Reject before a network handshake, and never autosave over a failed Resume.
 			gui_stop_game("", false);
@@ -1019,7 +1021,11 @@ void gui_request_initial_auto_load()
 
 	if (action == library::AutoLoadAction::Load)
 	{
-		dc_loadstate(autoSaveSlot);
+		if (dc_loadstateResult(autoSaveSlot) == StateLoadResult::PartialApplyFailure)
+		{
+			gui_stop_game("", false);
+			return;
+		}
 		gui_setState(GuiState::Closed);
 		return;
 	}
@@ -1188,10 +1194,13 @@ static void render_auto_load_dialog()
 
 		if (ImGui::Button(yesButton, ImVec2(buttonWidth, 0)))
 		{
-			dc_loadstate(autoSaveSlot);
+			const StateLoadResult result = dc_loadstateResult(autoSaveSlot);
 			ImGui::CloseCurrentPopup();
 			showAutoLoadDialog = false;
-			gui_setState(GuiState::Closed);
+			if (result == StateLoadResult::PartialApplyFailure)
+				gui_stop_game("", false);
+			else
+				gui_setState(GuiState::Closed);
 		}
 		ImGui::SameLine();
 		if (ImGui::Button(noButton, ImVec2(buttonWidth, 0)))
@@ -1374,7 +1383,8 @@ static void gui_display_commands()
 				if (IconButton(ICON_FA_CLOCK_ROTATE_LEFT, T("Load State"), ScaledVec2(buttonWidth, 50)).realize() && dc_savestateAllowed())
 				{
 					gui_resume_game();
-					dc_loadstate(config::SavestateSlot);
+					if (dc_loadstateResult(config::SavestateSlot) == StateLoadResult::PartialApplyFailure)
+						gui_stop_game("", false);
 				}
 			}
 
@@ -5285,8 +5295,11 @@ void gui_loadState(int slot)
 			}
 
 			emu.stop();
-			dc_loadstate(slot);
-			emu.start();
+			const StateLoadResult result = dc_loadstateResult(slot);
+			if (result == StateLoadResult::PartialApplyFailure)
+				gui_stop_game("", false);
+			else
+				emu.start();
 		} catch (const FlycastException& e) {
 			gui_stop_game(e.what());
 		}

@@ -46,9 +46,6 @@ protected:
 		settings.content.fileName = contentPath.filename().string();
 		settings.content.gameId = "TEST-GAME-ID";
 		config::SavestatePath = std::vector<std::string>{};
-		// The live resolver caches by filename; clear both slots this fixture uses.
-		(void)hostfs::getSavestatePath(0, true);
-		(void)hostfs::getSavestatePath(2, true);
 	}
 
 	void TearDown() override
@@ -61,9 +58,6 @@ protected:
 		settings.naomi.multiboard = oldMultiboard;
 		settings.raHardcoreMode = oldHardcore;
 		set_user_data_dir(oldDataPath);
-		// Do not leave the temporary fixture path in the runtime resolver cache.
-		(void)hostfs::getSavestatePath(0, true);
-		(void)hostfs::getSavestatePath(2, true);
 		std::filesystem::remove_all(directory);
 	}
 
@@ -102,6 +96,12 @@ void writeState(const std::filesystem::path& path, u64 creationDate)
 	ASSERT_TRUE(file.good());
 }
 
+std::string readFile(const std::filesystem::path& path)
+{
+	std::ifstream file(path, std::ios::binary);
+	return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+}
+
 TEST_F(LibrarySavestateTest, CustomSavestateFolderMatchesRuntimeFilenameAndSlot)
 {
 	const auto customDirectory = directory / "custom states";
@@ -114,6 +114,45 @@ TEST_F(LibrarySavestateTest, CustomSavestateFolderMatchesRuntimeFilenameAndSlot)
 	EXPECT_EQ(stateFile(customDirectory, "My Game_2.state").string(), expected);
 }
 
+TEST_F(LibrarySavestateTest, ChangingRootsRechecksSameSlot)
+{
+	const auto currentDirectory = directory / "saves";
+	const auto siblingDirectory = directory / "saves-old";
+	std::filesystem::create_directories(currentDirectory);
+	std::filesystem::create_directories(siblingDirectory);
+	const auto currentState = stateFile(currentDirectory, "My Game_2.state");
+	const auto siblingState = stateFile(siblingDirectory, "My Game_2.state");
+	std::ofstream(currentState, std::ios::binary) << "current-root";
+	std::ofstream(siblingState, std::ios::binary) << "sibling-root";
+	config::SavestatePath = std::vector<std::string>{siblingDirectory.string(), currentDirectory.string()};
+
+	const auto firstLookup = hostfs::getSavestatePath(2, false);
+	EXPECT_EQ(siblingState.string(), firstLookup);
+	EXPECT_EQ("sibling-root", readFile(firstLookup));
+
+	config::SavestatePath = std::vector<std::string>{currentDirectory.string(), siblingDirectory.string()};
+	const auto secondLookup = hostfs::getSavestatePath(2, false);
+	EXPECT_EQ(currentState.string(), secondLookup);
+	EXPECT_EQ("current-root", readFile(secondLookup));
+}
+
+TEST_F(LibrarySavestateTest, RemovingFirstCandidateUsesNextRootWithoutAWrite)
+{
+	const auto firstDirectory = directory / "first";
+	const auto secondDirectory = directory / "second";
+	std::filesystem::create_directories(firstDirectory);
+	std::filesystem::create_directories(secondDirectory);
+	const auto firstState = stateFile(firstDirectory);
+	const auto secondState = stateFile(secondDirectory);
+	std::ofstream(firstState, std::ios::binary) << "first-root";
+	std::ofstream(secondState, std::ios::binary) << "second-root";
+	config::SavestatePath = std::vector<std::string>{firstDirectory.string(), secondDirectory.string()};
+
+	EXPECT_EQ(firstState.string(), hostfs::getSavestatePath(0, false));
+	std::filesystem::remove(firstState);
+	EXPECT_EQ(secondState.string(), hostfs::getSavestatePath(0, false));
+}
+
 TEST_F(LibrarySavestateTest, GameDirectoryAndMissingStateMatchRuntimeResolver)
 {
 	std::ofstream(stateFile(gameDirectory)) << "state";
@@ -121,9 +160,34 @@ TEST_F(LibrarySavestateTest, GameDirectoryAndMissingStateMatchRuntimeResolver)
 			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.fileName, 0, hostfs::getSavestateFolders()));
 
 	std::filesystem::remove(stateFile(gameDirectory));
-	(void)hostfs::getSavestatePath(0, true); // Clear the live resolver's path cache for this fixture.
 	EXPECT_EQ(hostfs::getSavestatePath(0, false),
 			hostfs::getSavestatePathForGame(contentPath.string(), settings.content.fileName, 0, hostfs::getSavestateFolders()));
+}
+
+TEST_F(LibrarySavestateTest, DefaultFallbackAndWritablePathsKeepTheirExistingLocations)
+{
+	const auto gameState = stateFile(gameDirectory);
+	std::ofstream(gameState) << "game-state";
+	EXPECT_EQ(gameState.string(), hostfs::getSavestatePath(0, false));
+
+	std::filesystem::remove(gameState);
+	const auto missingState = stateFile(directory);
+	EXPECT_EQ(missingState.string(), hostfs::getSavestatePath(0, false));
+	EXPECT_EQ(missingState.string(), hostfs::getSavestatePath(0, true));
+
+	const auto firstDirectory = directory / "write-first";
+	const auto secondDirectory = directory / "write-second";
+	std::filesystem::create_directories(firstDirectory);
+	std::filesystem::create_directories(secondDirectory);
+	config::SavestatePath = std::vector<std::string>{firstDirectory.string(), secondDirectory.string()};
+	EXPECT_EQ(stateFile(firstDirectory, "My Game_2.state").string(), hostfs::getSavestatePath(2, true));
+
+	config::SavestatePath = std::vector<std::string>{};
+	EXPECT_EQ((directory / "My Game.state.net").string(), hostfs::getSavestatePath(-1, false));
+	EXPECT_EQ((directory / "My Game.state.tmp").string(), hostfs::getSavestatePath(-2, false));
+	const auto folders = hostfs::getSavestateFolders();
+	EXPECT_TRUE(hostfs::getSavestatePathForGame("", settings.content.fileName, 0, folders).empty());
+	EXPECT_TRUE(hostfs::getSavestatePathForGame(contentPath.string(), "", 0, folders).empty());
 }
 
 TEST_F(LibrarySavestateTest, GameIdAloneDoesNotAdvertiseAStateTheLoaderCannotOpen)
@@ -238,7 +302,7 @@ TEST_F(LibrarySavestateTest, NewestStateCanComeFromCustomDataOrGameFolder)
 	EXPECT_EQ(dataState, std::filesystem::path(dc_getLatestStateForGame(contentPath.string()).path));
 }
 
-TEST_F(LibrarySavestateTest, SameBasenameGamesKeepTheirOwnStateWithoutChangingRuntimeCache)
+TEST_F(LibrarySavestateTest, SameBasenameGamesKeepTheirOwnStateWithoutChangingActiveGame)
 {
 	const auto secondDirectory = directory / "second game";
 	std::filesystem::create_directory(secondDirectory);
@@ -256,9 +320,27 @@ TEST_F(LibrarySavestateTest, SameBasenameGamesKeepTheirOwnStateWithoutChangingRu
 	EXPECT_EQ("TEST-GAME-ID", settings.content.gameId);
 }
 
+TEST_F(LibrarySavestateTest, RuntimeResolverUsesCurrentContentRootForSameBasenameGames)
+{
+	const auto secondDirectory = directory / "second content";
+	std::filesystem::create_directories(secondDirectory);
+	const auto secondGame = secondDirectory / contentPath.filename();
+	std::ofstream(secondGame) << "fixture";
+	const auto firstState = stateFile(gameDirectory);
+	const auto secondState = stateFile(secondDirectory);
+	std::ofstream(firstState) << "first-game";
+	std::ofstream(secondState) << "second-game";
+
+	EXPECT_EQ(firstState.string(), hostfs::getSavestatePath(0, false));
+	settings.content.path = secondGame.string();
+	EXPECT_EQ(secondState.string(), hostfs::getSavestatePath(0, false));
+}
+
 TEST_F(LibrarySavestateTest, ExplicitMissingResumeStateReportsFailure)
 {
 	ASSERT_TRUE(dc_savestateAllowed());
+	EXPECT_EQ(StateLoadResult::Rejected, dc_loadstateForPathResult(""));
+	EXPECT_EQ(StateLoadResult::Rejected, dc_loadstateForPathResult(stateFile(directory, "missing.state").string()));
 	EXPECT_FALSE(dc_loadstateForPath(""));
 	EXPECT_FALSE(dc_loadstateForPath(stateFile(directory, "missing.state").string()));
 }

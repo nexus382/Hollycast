@@ -10,6 +10,7 @@
 #include <atomic>
 #include <algorithm>
 #include <condition_variable>
+#include <ctime>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -191,6 +192,24 @@ TEST_F(ScreenScraperTest, DownloadsOnlySelectedMediaAndPersistsCredentialFreePat
 	EXPECT_EQ(restored.requestedMedia, 0u) << "Manual bulk requests must not restart after loading the database";
 	std::filesystem::remove(std::filesystem::u8path(art.screenScraperMedia.at("miximage")));
 	EXPECT_TRUE(needsMedia(art, 3));
+}
+
+TEST_F(ScreenScraperTest, PassesJsonAndImageBudgetsToLimitAwareTransport)
+{
+	std::vector<size_t> limits;
+	Session session(credentials(), [&](const std::string& url, std::vector<u8>& bytes, std::string&, size_t limit) {
+		limits.push_back(limit);
+		if (url.find("ssuserInfos.php") != std::string::npos)
+			return reply(bytes, {{"ssuser", user()}});
+		bytes = png();
+		return 200;
+	});
+	session.login();
+	ASSERT_EQ(limits.size(), 1u);
+	EXPECT_EQ(limits.back(), 4u * 1024 * 1024);
+	EXPECT_EQ(session.requestImage(1234, "box-2D", "us").size(), png().size());
+	ASSERT_EQ(limits.size(), 2u);
+	EXPECT_EQ(limits.back(), 32u * 1024 * 1024);
 }
 
 TEST_F(ScreenScraperTest, AmbiguousMatchesPreserveExistingArtworkAndDoNotRepeat)
@@ -1094,6 +1113,21 @@ protected:
 		seedPrepared(1, index);
 		boxart.artworkWake.notify_all();
 	}
+	void addLaunchBoxJob(int index)
+	{
+		std::lock_guard<std::mutex> lock(boxart.mutex);
+		seedLaunchBoxJob(index);
+		boxart.artworkWake.notify_all();
+	}
+	void seedLaunchBoxJob(int index)
+	{
+		seedPrepared(1, index);
+		GameBoxart& queued = boxart.toFetch.back();
+		queued.searchName = "Queue Refill Game";
+		queued.uniqueId = "QUEUE-" + std::to_string(1000 + index);
+		boxart.games.at(queued.sourceKey()).searchName = queued.searchName;
+		boxart.games.at(queued.sourceKey()).uniqueId = queued.uniqueId;
+	}
 	bool stopAndJoinQueue()
 	{
 		stopQueue();
@@ -1370,6 +1404,40 @@ TEST_F(ScreenScraperQueueTest, AllPrimaryJobsFinishBeforeLaunchBoxAndAllLaunchBo
 	EXPECT_EQ(launchboxCalls, 4); EXPECT_EQ(tgdbCalls, 4);
 	EXPECT_EQ(queued(), 0u);
 	EXPECT_EQ(boxart.downloadProgress().games, 0u);
+}
+
+TEST_F(ScreenScraperQueueTest, LaunchBoxFallbackKeepsBulkWritesAcrossQueueRefills)
+{
+	seedLaunchBoxJob(0);
+	const json catalog = {{"version", 2}, {"downloaded_at", std::time(nullptr)},
+		{"games", json::array({{{"id", 9002}, {"name", "Queue Refill Game"},
+			{"platform", "Sega Dreamcast"}, {"aliases", json::array()},
+			{"images", json::array({{{"file", "queue.png"}, {"region", "World"}, {"type", "Box - Front"}}})},
+			{"metadata", json::object()}}})}};
+	std::ofstream(root / "launchbox-catalog.json") << catalog.dump();
+	std::atomic<int> imageDownloads{0}, lookups{0};
+	std::atomic<bool> noSnapshotDuringFirstWrite{false};
+	auto session = mockSession(1, [](const std::string&, std::vector<u8>&, std::string&) { return 404; }, lookups);
+	auto launchbox = std::make_unique<LaunchBox>([&](const std::string&, std::vector<u8>& bytes, std::string& type) {
+		if (++imageDownloads == 1)
+		{
+			noSnapshotDuringFirstWrite = !std::filesystem::exists(root / "launchbox-matches.json");
+			addLaunchBoxJob(1);
+		}
+		type = "image/png";
+		bytes = png();
+		return 200;
+	});
+	run(session, std::move(launchbox));
+	EXPECT_TRUE(noSnapshotDuringFirstWrite);
+	EXPECT_EQ(1, imageDownloads) << "The second item should reuse the cached provider image";
+	EXPECT_EQ(2, lookups);
+	std::ifstream snapshot(root / "launchbox-matches.json");
+	ASSERT_TRUE(snapshot);
+	const json saved = json::parse(snapshot);
+	EXPECT_EQ(2u, saved.at("matches").size());
+	EXPECT_TRUE(saved.at("matches").contains("disc:serial:QUEUE-1000:2"));
+	EXPECT_TRUE(saved.at("matches").contains("disc:serial:QUEUE-1001:2"));
 }
 
 TEST_F(ScreenScraperQueueTest, RejectedTgdbLeavesWorkPendingWhilePrimaryContinues)

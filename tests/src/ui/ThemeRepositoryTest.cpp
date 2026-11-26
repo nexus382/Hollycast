@@ -141,6 +141,28 @@ TEST_F(ThemeRepositoryTest, ReportsHttpFailuresAndInvalidCatalogues)
 	EXPECT_EQ(themes::repository::fetch(url, transport({json.begin(), json.end()})).size(), 1u);
 }
 
+TEST_F(ThemeRepositoryTest, PassesByteBudgetsToLimitAwareTransports)
+{
+	const std::string json = catalog().dump();
+	size_t limit = 0;
+	themes::repository::Transport catalogue = [&](const std::string&, std::vector<unsigned char>& out, size_t maxBytes) {
+		limit = maxBytes;
+		out.assign(json.begin(), json.end());
+		return 200;
+	};
+	EXPECT_EQ(themes::repository::fetch(url, catalogue).size(), 1u);
+	EXPECT_EQ(limit, 2u * 1024 * 1024);
+
+	const auto bytes = zip({{"theme.json", manifest}});
+	themes::repository::Transport package = [&](const std::string&, std::vector<unsigned char>& out, size_t maxBytes) {
+		limit = maxBytes;
+		out = bytes;
+		return 200;
+	};
+	EXPECT_EQ(themes::repository::install(entry(), package), "online-test");
+	EXPECT_EQ(limit, 64u * 1024 * 1024);
+}
+
 TEST_F(ThemeRepositoryTest, InstallsDownloadedPackageAndProtectsExistingFiles)
 {
 	const auto bytes = zip({{"theme.json", manifest}, {"art/readme.txt", "preserved"}});
@@ -258,6 +280,13 @@ TEST_F(ThemeRepositoryTest, ValidatesScreenshotBeforeSavingAndAllowsRetry)
 		auto& bytes = *static_cast<std::vector<unsigned char>*>(context);
 		bytes.insert(bytes.end(), static_cast<unsigned char*>(data), static_cast<unsigned char*>(data) + count);
 	}, &png, 1, 1, 4, pixel, 4));
-	themes::repository::preview("https://example.com/preview.png", image.u8string(), transport(png));
+	size_t limit = 0;
+	themes::repository::Transport bounded = [&](const std::string&, std::vector<unsigned char>& out, size_t maxBytes) {
+		limit = maxBytes;
+		out = png;
+		return 200;
+	};
+	themes::repository::preview("https://example.com/preview.png", image.u8string(), bounded);
+	EXPECT_EQ(limit, 8u * 1024 * 1024);
 	EXPECT_EQ(fs::file_size(image), png.size());
 }

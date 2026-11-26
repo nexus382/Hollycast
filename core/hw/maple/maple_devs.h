@@ -435,6 +435,11 @@ struct maple_sega_vmu: maple_base
 	void serialize(Serializer& ser) const override;
 	void deserialize(Deserializer& deser) override;
 	virtual bool fullSave();
+	virtual bool isMemoryOnlySession() const;
+	// Kept virtual so migration failure paths can be exercised deterministically.
+	virtual bool writeMigrationImage(FILE *destination, const u8 *image, size_t size);
+	virtual bool publishMigrationImage(const std::string& temporary, const std::string& destination);
+	virtual FILE *reopenMigrationDestination(const std::string& path);
 	void initializeVmu();
 	void OnSetup() override;
 	~maple_sega_vmu() override;

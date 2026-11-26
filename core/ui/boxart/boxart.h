@@ -107,6 +107,7 @@ public:
 private:
 	friend class BoxartWorkTest_AcceptsOnlyCurrentSourceRevision_Test;
 	friend class BoxartTest_ExpiredLegacyCooldownCanRetryAfterTgdbMiss_Test;
+	friend class BoxartTestAccess;
 	friend class ScreenScraperQueueTest;
 
 	enum class CustomIndexState
@@ -188,6 +189,10 @@ private:
 	u64 nextWorkRevision = 0;
 	bool databaseLoaded = false;
 	bool databaseDirty = false;
+	// Narrow recovery observations used by BoxartTest's offline scan workloads.
+	size_t recoveryDirectoryScans = 0;
+	size_t recoveryImageIndexBuilds = 0;
+	std::chrono::steady_clock::duration recoveryElapsed{};
 	std::mutex databaseWriteMutex;
 	std::chrono::steady_clock::time_point lastDatabaseSave; // Protected by databaseWriteMutex.
 	// Incremented while mutex is held so a completed save never clears a newer update.
