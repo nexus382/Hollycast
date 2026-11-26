@@ -1,6 +1,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "ui/boxart/boxart.h"
+#include "ui/boxart/artwork_adapter.h"
 #include "ui/boxart/launchbox.h"
 #include "ui/boxart/vmu_icon.h"
 #include "ui/game_scanner.h"
@@ -12,6 +13,7 @@
 
 #include <chrono>
 #include <cerrno>
+#include <ctime>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -1333,6 +1335,50 @@ TEST_F(BoxartTest, LaunchBoxDiscAndBoxSlotsRemainDistinctAndTgdbIsTheFirstFallba
  std::filesystem::remove(cached.launchboxMedia.at("screenshot"));
  EXPECT_EQ(std::filesystem::path(cached.tgdbMedia.at("screenshot")).lexically_normal(),
   std::filesystem::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Screenshot)).lexically_normal());
+}
+
+TEST_F(BoxartTest, LaunchBoxAdapterKeepsOneBulkIntervalAcrossQueueRefills)
+{
+	const auto cacheRoot = directory / "adapter-cache";
+	std::filesystem::create_directories(cacheRoot);
+	const json catalog = {
+		{"version", 2}, {"downloaded_at", std::time(nullptr)},
+		{"games", json::array({{{"id", 9001}, {"name", "Bulk Adapter Game"},
+			{"platform", "Sega Dreamcast"}, {"aliases", json::array()},
+			{"images", json::array({{{"file", "adapter.png"}, {"region", "World"}, {"type", "Box - Front"}}})},
+			{"metadata", json::object()}}})}
+	};
+	std::ofstream(cacheRoot / "launchbox-catalog.json") << catalog.dump();
+	class NoopScraper final : public Scraper
+	{
+	public:
+		void scrape(GameBoxart&) override {}
+	};
+	ArtworkAdapter adapter(2,
+		std::make_unique<LaunchBox>([](const std::string&, std::vector<u8>&, std::string&) { return 404; }),
+		std::make_unique<NoopScraper>());
+	ASSERT_TRUE(adapter.initialize(cacheRoot.string()));
+	auto makeItem = [](const std::string& id) {
+		GameBoxart item;
+		item.searchName = "Bulk Adapter Game";
+		item.uniqueId = id;
+		item.region = GameBoxart::USA;
+		return item;
+	};
+	std::vector<GameBoxart> firstRefill{makeItem("ADAPTER-0001"), makeItem("ADAPTER-0002")};
+	adapter.beginBulk();
+	adapter.scrape(firstRefill);
+	EXPECT_FALSE(std::filesystem::exists(cacheRoot / "launchbox-matches.json"));
+	std::vector<GameBoxart> secondRefill{makeItem("ADAPTER-0003")};
+	adapter.beginBulk();
+	adapter.scrape(secondRefill);
+	EXPECT_FALSE(std::filesystem::exists(cacheRoot / "launchbox-matches.json"));
+	adapter.endBulk();
+	std::ifstream snapshot(cacheRoot / "launchbox-matches.json");
+	ASSERT_TRUE(snapshot);
+	const json saved = json::parse(snapshot);
+	EXPECT_EQ(3u, saved.at("matches").size());
+	EXPECT_EQ(3, saved.value("sequence", 0));
 }
 
 TEST_F(BoxartTest, InventoryReusesFlatCoversAndDetectsDeletedLocalImages)

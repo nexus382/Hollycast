@@ -16,6 +16,8 @@ public:
  bool ready() const override;
  bool fallbackReady() const;
  using Scraper::scrape;
+ void beginBulk() override;
+ void endBulk() override;
  void scrape(GameBoxart& item) override;
  static u32 supportedMedia(int provider);
  // For the ordered ScreenScraper -> LaunchBox -> TGDB pipeline. -1 means complete.
