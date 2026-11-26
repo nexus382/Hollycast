@@ -6,9 +6,70 @@ import sys
 root = Path(__file__).resolve().parents[2]
 source = (root / "core/hw/maple/maple_devs.cpp").read_text(encoding="utf-8")
 header = (root / "core/hw/maple/maple_devs.h").read_text(encoding="utf-8")
-link = source[source.index("bool maple_sega_vmu::linkStatus()"):source.index("u32 maple_sega_vmu::dma(u32 cmd)")]
-save = source[source.index("bool maple_sega_vmu::fullSave()"):source.index("void maple_sega_vmu::initializeVmu()")]
-base_link = header[header.index("\tvirtual bool linkStatus()"):header.index("\tvirtual void requestReconnect()")]
+
+
+def extract_definition(text, marker, description):
+    start = text.find(marker)
+    if start == -1:
+        raise SystemExit(f"Could not generate Maple sync test: missing {description} marker {marker!r}")
+
+    opening = text.find("{", start + len(marker))
+    if opening == -1:
+        raise SystemExit(f"Could not generate Maple sync test: missing body for {description} marker {marker!r}")
+
+    depth = 0
+    state = "code"
+    escaped = False
+    index = opening
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+
+        if state == "line_comment":
+            if char == "\n":
+                state = "code"
+        elif state == "block_comment":
+            if char == "*" and next_char == "/":
+                state = "code"
+                index += 1
+        elif state in ("string", "character"):
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif (state == "string" and char == '"') or (state == "character" and char == "'"):
+                state = "code"
+        elif char == "/" and next_char == "/":
+            state = "line_comment"
+            index += 1
+        elif char == "/" and next_char == "*":
+            state = "block_comment"
+            index += 1
+        elif char == '"':
+            state = "string"
+        elif char == "'":
+            state = "character"
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1] + "\n"
+
+        index += 1
+
+    raise SystemExit(f"Could not generate Maple sync test: unterminated {description} definition")
+
+
+link = extract_definition(source, "bool maple_sega_vmu::linkStatus()", "maple_sega_vmu::linkStatus()")
+save = extract_definition(source, "bool maple_sega_vmu::fullSave()", "maple_sega_vmu::fullSave()")
+base_link_start = header.find("\tvirtual bool linkStatus()")
+if base_link_start == -1:
+    raise SystemExit("Could not generate Maple sync test: missing maple_base::linkStatus() declaration")
+base_link_end = header.find("\tvirtual void requestReconnect()", base_link_start)
+if base_link_end == -1:
+    raise SystemExit("Could not generate Maple sync test: missing maple_base::requestReconnect() declaration")
+base_link = header[base_link_start:base_link_end]
 
 prefix = r'''
 // Portions Copyright 2026 The Hollycast Authors
