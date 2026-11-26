@@ -194,9 +194,6 @@ std::string getSavestatePath(int index, bool writable)
 {
 	const std::string state_file = makeSavestateFileName(settings.content.fileName, index);
 
-	static std::string lastFile;
-	static std::string lastPath;
-
 	// Check user-defined savestate paths first
 	for (const auto& userPath : config::SavestatePath.get())
 	{
@@ -204,39 +201,18 @@ std::string getSavestatePath(int index, bool writable)
 			continue;
 		try {
 			std::string fullpath = hostfs::storage().getSubPath(userPath, state_file);
-			if (writable) {
-				lastFile.clear();
+			if (writable)
 				return fullpath;
-			}
-			if (lastFile != state_file) {
-				if (hostfs::storage().exists(fullpath))
-				{
-					lastFile = state_file;
-					lastPath = fullpath;
-					return lastPath;
-				}
-			}
-			else if (lastPath.find(userPath) != std::string::npos)
-			{
-				return lastPath; // Return cached path if it's in this user path
-			}
+			if (hostfs::storage().exists(fullpath))
+				return fullpath;
 		} catch (const hostfs::StorageException&) {
 		}
 	}
 
 	// Fall back to default paths
-	if (writable) {
-		lastFile.clear();
+	if (writable)
 		return get_writable_data_path(state_file);
-	}
-	else
-	{
-		if (lastFile != state_file) {
-			lastFile = state_file;
-			lastPath = get_readonly_data_path(state_file);
-		}
-		return lastPath;
-	}
+	return get_readonly_data_path(state_file);
 }
 
 SavestateFolders getSavestateFolders()
