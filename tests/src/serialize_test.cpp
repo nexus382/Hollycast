@@ -14,6 +14,7 @@
 #include "oslib/oslib.h"
 #include "oslib/storage.h"
 #include "serialize.h"
+#include "ui/gui.h"
 #include "stdclass.h"
 #include "util/tsqueue.h"
 
@@ -27,11 +28,27 @@
 
 namespace {
 
-void countLoadStateEvent(Event event, void *context)
+class RestoreEvents
 {
-	if (event == Event::LoadState)
-		++*static_cast<int *>(context);
-}
+	static constexpr Event observed[] = {Event::LoadState, Event::Pause, Event::Resume, Event::Terminate};
+	static void record(Event event, void *context)
+	{
+		static_cast<RestoreEvents *>(context)->events.push_back(event);
+	}
+
+public:
+	std::vector<Event> events;
+	RestoreEvents()
+	{
+		for (Event event : observed)
+			EventManager::listen(event, record, this);
+	}
+	~RestoreEvents()
+	{
+		for (Event event : observed)
+			EventManager::unlisten(event, record, this);
+	}
+};
 
 std::filesystem::path writeStateFixture(const std::vector<char>& data, const char *name)
 {
@@ -142,6 +159,9 @@ TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
 		std::string dataPath = get_writable_data_path("");
 		int broadcast = config::Broadcast;
 		bool autoSave = config::AutoSaveState;
+		bool threaded = config::ThreadedRendering;
+		std::string audioBackend = config::AudioBackend;
+		GuiState gui = gui_state;
 		~RestoreSettings()
 		{
 			settings.content.path = contentPath;
@@ -149,6 +169,9 @@ TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
 			settings.content.gameId = gameId;
 			config::Broadcast = broadcast;
 			config::AutoSaveState = autoSave;
+			config::ThreadedRendering = threaded;
+			config::AudioBackend = audioBackend;
+			gui_state = gui;
 			set_user_data_dir(dataPath);
 		}
 	} restoreSettings;
@@ -201,15 +224,32 @@ TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
 	const auto validPath = writeStateFixture(serializeDreamcastState(), "valid-restore");
 	const auto earlyRejectPath = writeStateFixture(std::vector<char>(sizeof(u32), 0), "early-reject");
 
-	int loadEvents = 0;
-	EventManager::listen(Event::LoadState, countLoadStateEvent, &loadEvents);
+	RestoreEvents observed;
 	EXPECT_EQ(StateLoadResult::Rejected, dc_loadstateForPathResult(earlyRejectPath.string()));
+	const int numberedSlot = (autoSaveSlot + 1) % NUM_SAVE_SLOTS;
+	const auto numberedPath = hostfs::getSavestatePath(numberedSlot, true);
+	std::filesystem::copy_file(earlyRejectPath, numberedPath);
+	// In single-threaded mode the guest only advances if the frontend asks for a frame.
+	config::ThreadedRendering = false;
+	config::AudioBackend = "null";
+	gui_state = GuiState::Closed;
+	emu.start();
+	EXPECT_TRUE(emu.running());
+	observed.events.clear();
+	gui_loadState(numberedSlot);
+	EXPECT_TRUE(emu.running());
+	EXPECT_EQ((std::vector<Event>{Event::Pause, Event::Resume}), observed.events);
+	emu.stop();
+	observed.events.clear();
 	EXPECT_EQ(StateLoadResult::PartialApplyFailure, dc_loadstateForPathResult(partialPath.string()));
 	EXPECT_FALSE(emu.running());
-	EXPECT_EQ(0, loadEvents);
+	EXPECT_TRUE(observed.events.empty());
 	emu.start();
 	EXPECT_FALSE(emu.running());
-	emu.unloadGame();
+	std::filesystem::copy_file(partialPath, numberedPath, std::filesystem::copy_options::overwrite_existing);
+	gui_loadState(numberedSlot);
+	EXPECT_EQ(GuiState::Main, gui_state);
+	EXPECT_EQ((std::vector<Event>{Event::Terminate}), observed.events);
 	{
 		std::ifstream marker(autoSavePath, std::ios::binary);
 		const std::string contents((std::istreambuf_iterator<char>(marker)), std::istreambuf_iterator<char>());
@@ -218,18 +258,18 @@ TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
 	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
 	emu.loadGame(gamePath.string().c_str());
 	config::AutoSaveState = true;
+	observed.events.clear();
 	EXPECT_EQ(StateLoadResult::Loaded, dc_loadstateForPathResult(validPath.string()));
 	EXPECT_FALSE(emu.running());
-	EXPECT_EQ(1, loadEvents);
 	EXPECT_TRUE(dc_loadstateForPath(validPath.string()));
-	EXPECT_EQ(2, loadEvents);
+	EXPECT_EQ((std::vector<Event>{Event::LoadState, Event::LoadState}), observed.events);
 	emu.unloadGame();
 	EXPECT_GT(std::filesystem::file_size(autoSavePath), savedMarker.size());
 	emu.loadGame(gamePath.string().c_str());
+	observed.events.clear();
 	EXPECT_EQ(StateLoadResult::Loaded, dc_loadstateResult(autoSaveSlot));
-	EXPECT_EQ(3, loadEvents);
+	EXPECT_EQ((std::vector<Event>{Event::LoadState}), observed.events);
 	emu.unloadGame(false);
-	EventManager::unlisten(Event::LoadState, countLoadStateEvent, &loadEvents);
 
 	std::filesystem::remove(partialPath);
 	std::filesystem::remove(validPath);
