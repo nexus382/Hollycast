@@ -19,6 +19,7 @@
 #pragma once
 #include "types.h"
 
+#include <limits>
 #include <vector>
 
 // Keep File's 64-bit offsets intact; long is only 32 bits on Windows.
@@ -97,6 +98,11 @@ public:
 
 	int seek(s64 offset, int whence) override
 	{
+#ifndef _WIN32
+		if constexpr (sizeof(off_t) < sizeof(offset))
+			if (offset < std::numeric_limits<off_t>::min() || offset > std::numeric_limits<off_t>::max())
+				return -1;
+#endif
 		return HOSTFS_FSEEK(file, offset, whence);
 	}
 
