@@ -117,8 +117,14 @@ std::string getVmuPath(const std::string& port, bool save)
 	{
 		// Older standalone releases named per-game cards after the ROM.
 		const auto legacy = get_game_save_prefix() + perGameVmuSuffix;
-		if (file_exists(legacy))
+		try {
+			if (storage().exists(legacy))
+				return legacy;
+		} catch (const StorageException&) {
+			// Preserve the candidate path when its existence cannot be checked.
+			// Setup can then distinguish an unreadable card from a missing one.
 			return legacy;
+		}
 	}
 	// VMU saves used to live in .reicast, outside its data directory.
 	const auto legacy = get_readonly_config_path(vmuName);
