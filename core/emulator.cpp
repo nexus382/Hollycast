@@ -99,6 +99,11 @@ void dc_skipAutoSaveOnNextUnload()
 	skipAutoSaveOnNextUnload = true;
 }
 
+bool dc_consumeAutoSaveSkipOnNextUnload()
+{
+	return std::exchange(skipAutoSaveOnNextUnload, false);
+}
+
 static void loadSpecialSettings()
 {
 	std::string& prod_id = settings.content.gameId;
@@ -812,7 +817,11 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 		{
 #ifndef LIBRETRO
 			if (config::GGPOEnable)
-				dc_loadstate(-1);
+			{
+				const StateLoadResult result = dc_loadstateResult(-1);
+				if (result == StateLoadResult::PartialApplyFailure)
+					throw FlycastException(i18n::Ts("Failed to restore network startup state"));
+			}
 #endif
 		}
 
@@ -883,8 +892,8 @@ void Emulator::unloadGame(bool allowAutoSave)
 {
 	rewind_state::invalidate();
 	rewind_state::releaseRequests();
-	bool skipAutoSaveThisUnload = skipAutoSaveOnNextUnload;
-	skipAutoSaveOnNextUnload = false;
+	const bool skipAutoSaveThisUnload = dc_consumeAutoSaveSkipOnNextUnload();
+	partialRestoreFailed = false;
 	try {
 		stop();
 	} catch (...) { }
@@ -1102,6 +1111,26 @@ void Emulator::stepRange(u32 from, u32 to)
 
 void Emulator::loadstate(Deserializer& deser)
 {
+	struct LoadFailureGuard
+	{
+		Emulator& emulator;
+		bool completed = false;
+		~LoadFailureGuard()
+		{
+			if (!completed)
+			{
+				dc_skipAutoSaveOnNextUnload();
+				emulator.partialRestoreFailed = true;
+				if (emulator.state == Emulator::Running)
+					emulator.state = Emulator::Error;
+			}
+		}
+	} failureGuard{*this};
+	auto finishRestore = [this]() {
+		if (partialRestoreFailed.exchange(false) && state == Error)
+			state = Loaded;
+	};
+
 	if (!deser.rewind())
 		rewind_state::invalidate();
 #ifdef USE_HIKARU
@@ -1109,6 +1138,8 @@ void Emulator::loadstate(Deserializer& deser)
 		// Apply on the render thread; it owns native graphics and emits LoadState
 		// only after every device has accepted the same restored frame.
 		dc_deserialize(deser);
+		finishRestore();
+		failureGuard.completed = true;
 		return;
 	}
 #endif
@@ -1131,6 +1162,8 @@ void Emulator::loadstate(Deserializer& deser)
 	mmu_set_state();
 	getSh4Executor()->ResetCache();
 	EventManager::event(Event::LoadState);
+	finishRestore();
+	failureGuard.completed = true;
 }
 
 void Emulator::setNetworkState(bool online)
@@ -1226,7 +1259,7 @@ void Emulator::start()
 {
 	if (state == Running)
 		return;
-	if (state != Loaded) {
+	if (state != Loaded || partialRestoreFailed) {
 		WARN_LOG(COMMON, "Unexpected emu state %d", state.load());
 		return;
 	}

@@ -11,9 +11,43 @@
 #include "emulator.h"
 #include "cfg/option.h"
 #include "hw/bba/bba.h"
+#include "serialize.h"
 #include "util/tsqueue.h"
 
+#include <atomic>
+#include <array>
+#include <filesystem>
+#include <fstream>
 #include <vector>
+
+namespace {
+
+void countLoadStateEvent(Event event, void *context)
+{
+	if (event == Event::LoadState)
+		++*static_cast<int *>(context);
+}
+
+std::filesystem::path writeStateFixture(const std::vector<char>& data, const char *name)
+{
+	static std::atomic<unsigned> sequence{0};
+	const auto path = std::filesystem::temp_directory_path()
+			/ (std::string("hollycast-") + name + "-" + std::to_string(sequence++) + ".state");
+	std::ofstream file(path, std::ios::binary);
+	file.write(data.data(), data.size());
+	return path;
+}
+
+std::vector<char> serializeDreamcastState()
+{
+	std::vector<char> data(30'000'000);
+	Serializer serializer(data.data(), data.size());
+	dc_serialize(serializer);
+	data.resize(serializer.size());
+	return data;
+}
+
+} // namespace
 
 class SerializeTest : public ::testing::Test {
 protected:
@@ -91,6 +125,82 @@ TEST_F(SerializeTest, DreamcastHeaderMatchesDevV63)
 	EXPECT_EQ(u32(Deserializer::V63), version);
 	EXPECT_EQ(settings.platform.ram_size, ramSize);
 	EXPECT_EQ(2 * sizeof(u32), ser.size());
+}
+
+TEST_F(SerializeTest, PartialRestoreSuppressesRestartAndAutosave)
+{
+	struct RestoreSettings
+	{
+		std::string contentPath = settings.content.path;
+		int broadcast = config::Broadcast;
+		~RestoreSettings()
+		{
+			settings.content.path = contentPath;
+			config::Broadcast = broadcast;
+		}
+	} restoreSettings;
+	struct RestoreMapleConfiguration
+	{
+		std::array<MapleDeviceType, 4> main{};
+		std::array<std::array<MapleDeviceType, 2>, 4> expansion{};
+		RestoreMapleConfiguration()
+		{
+			for (size_t bus = 0; bus < main.size(); bus++)
+			{
+				main[bus] = config::MapleMainDevices[bus];
+				config::MapleMainDevices[bus] = MDT_None;
+				for (size_t port = 0; port < expansion[bus].size(); port++)
+				{
+					expansion[bus][port] = config::MapleExpansionDevices[bus][port];
+					config::MapleExpansionDevices[bus][port] = MDT_None;
+				}
+			}
+		}
+		~RestoreMapleConfiguration()
+		{
+			for (size_t bus = 0; bus < main.size(); bus++)
+			{
+				config::MapleMainDevices[bus] = main[bus];
+				for (size_t port = 0; port < expansion[bus].size(); port++)
+					config::MapleExpansionDevices[bus][port] = expansion[bus][port];
+			}
+		}
+	} restoreMapleConfiguration;
+	settings.content.path = "partial-restore-test.cdi";
+	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
+
+	// Keep this synthetic state fixture independent of configured VMU devices.
+	mcfg_DestroyDevices(false);
+	mcfg_CreateDevices();
+	config::Broadcast = 99;
+	const auto partialPath = writeStateFixture(serializeDreamcastState(), "partial-restore");
+	config::Broadcast = 0;
+	const auto validPath = writeStateFixture(serializeDreamcastState(), "valid-restore");
+	const auto earlyRejectPath = writeStateFixture(std::vector<char>(sizeof(u32), 0), "early-reject");
+
+	int loadEvents = 0;
+	EventManager::listen(Event::LoadState, countLoadStateEvent, &loadEvents);
+	EXPECT_EQ(StateLoadResult::Rejected, dc_loadstateForPathResult(earlyRejectPath.string()));
+	EXPECT_EQ(StateLoadResult::PartialApplyFailure, dc_loadstateForPathResult(partialPath.string()));
+	EXPECT_FALSE(emu.running());
+	EXPECT_EQ(0, loadEvents);
+	EXPECT_TRUE(dc_consumeAutoSaveSkipOnNextUnload());
+	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
+	emu.start();
+	EXPECT_FALSE(emu.running());
+	dc_skipAutoSaveOnNextUnload();
+	emu.unloadGame();
+	EXPECT_FALSE(dc_consumeAutoSaveSkipOnNextUnload());
+	EXPECT_EQ(StateLoadResult::Loaded, dc_loadstateForPathResult(validPath.string()));
+	EXPECT_FALSE(emu.running());
+	EXPECT_EQ(1, loadEvents);
+	EXPECT_TRUE(dc_loadstateForPath(validPath.string()));
+	EXPECT_EQ(2, loadEvents);
+	EventManager::unlisten(Event::LoadState, countLoadStateEvent, &loadEvents);
+
+	std::filesystem::remove(partialPath);
+	std::filesystem::remove(validPath);
+	std::filesystem::remove(earlyRejectPath);
 }
 
 TEST_F(SerializeTest, TaggedV64DreamcastHeaderStillLoads)
