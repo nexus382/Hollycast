@@ -22,8 +22,11 @@
 #include "stdclass.h"
 #include "cfg/option.h"
 #include "oslib/storage.h"
+#include "oslib/directory.h"
 #include <cerrno>
+#include <chrono>
 #include <cmath>
+#include <memory>
 
 static struct
 {
@@ -831,6 +834,52 @@ void InputMapping::ClearMappings()
 	loaded_mappings.clear();
 }
 
+static bool readStorageFile(const std::string& path, std::string& contents)
+{
+	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "rb"));
+	if (file == nullptr)
+		return false;
+
+	contents.clear();
+	u8 buffer[4096];
+	while (true)
+	{
+		const size_t count = file->read(buffer, 1, sizeof(buffer));
+		if (count != 0)
+			contents.append(reinterpret_cast<const char*>(buffer), count);
+		if (file->error())
+			return false;
+		if (count < sizeof(buffer))
+		{
+			if (file->eof())
+				return true;
+			if (count == 0)
+				return false;
+		}
+	}
+}
+
+static bool writeStorageFile(const std::string& path, const std::string& contents)
+{
+	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "wb"));
+	return file != nullptr && file->write(contents.data(), 1, contents.size()) == contents.size() && !file->error();
+}
+
+static bool isLegacyBackup(const std::string& path)
+{
+	if (!hostfs::storage().exists(path) || hostfs::storage().getFileInfo(path).isDirectory)
+		return false;
+	std::string contents;
+	if (!readStorageFile(path, contents) || contents.empty())
+		return false;
+	std::unique_ptr<hostfs::File> file(hostfs::storage().openFile(path, "rb"));
+	if (file == nullptr)
+		return false;
+	InputMapping mapping;
+	mapping.load(file.get());
+	return (mapping.version == 1 || mapping.version == 2) && mapping.is_dirty();
+}
+
 std::shared_ptr<InputMapping> InputMapping::LoadMapping(const std::string& name)
 {
 	auto it = loaded_mappings.find(name);
@@ -873,26 +922,72 @@ std::shared_ptr<InputMapping> InputMapping::LoadMapping(const std::string& name)
 
 	if (mapping->is_dirty())
 	{
-		// Make a backup of the current mapping file
-		hostfs::File *out = hostfs::storage().openFile((path + ".save").c_str(), "w");
-		if (out == nullptr)
-			WARN_LOG(INPUT, "Can't backup controller mapping file %s", path.c_str());
-		else
+		const std::string backupPath = path + ".save";
+		try
 		{
-			fp = hostfs::storage().openFile(path.c_str(), "r");
-			if (fp != nullptr)
+			std::string sourceBytes;
+			bool copyOk = readStorageFile(path, sourceBytes);
+			if (!copyOk)
+				WARN_LOG(INPUT, "Can't read controller mapping file %s for backup", path.c_str());
+			else
 			{
-				u8 buf[4096];
-				while (true)
+				const bool nativePath = !hostfs::customStorage().isKnownPath(backupPath);
+				const std::string statePath = backupPath + ".state";
+				bool interruptedProviderCopy = false;
+				if (!nativePath)
 				{
-					size_t n = fp->read(buf, 1, sizeof(buf));
-					if (n <= 0)
-						break;
-					fp->write(buf, 1, n);
+					std::string stateBytes;
+					if (hostfs::storage().exists(statePath))
+						interruptedProviderCopy = !readStorageFile(statePath, stateBytes) || stateBytes != "complete";
 				}
-				delete fp;
+				const bool validLegacyBackup = !interruptedProviderCopy && isLegacyBackup(backupPath);
+				const bool backupExists = hostfs::storage().exists(backupPath);
+				const bool backupIsDirectory = backupExists && hostfs::storage().getFileInfo(backupPath).isDirectory;
+				std::string verifiedBytes;
+
+				if (backupIsDirectory)
+					WARN_LOG(INPUT, "Can't create backup of controller mapping file %s: backup path is a directory", path.c_str());
+				else if (!validLegacyBackup)
+				{
+					if (nativePath)
+					{
+						const std::string temporary = backupPath + ".tmp."
+							+ std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+						copyOk = writeStorageFile(temporary, sourceBytes)
+							&& readStorageFile(temporary, verifiedBytes) && verifiedBytes == sourceBytes;
+						if (copyOk && backupExists && flycast::unlink(backupPath.c_str()) != 0)
+							copyOk = false;
+						if (copyOk && flycast::rename(temporary.c_str(), backupPath.c_str()) != 0)
+							copyOk = false;
+						if (copyOk && (!readStorageFile(backupPath, verifiedBytes) || verifiedBytes != sourceBytes))
+						{
+							flycast::unlink(backupPath.c_str());
+							copyOk = false;
+						}
+						if (!copyOk)
+							flycast::unlink(temporary.c_str());
+					}
+					else
+					{
+						// Storage providers do not expose rename/remove. Record an
+						// unfinished write so a later load retries it instead of
+						// trusting bytes left by a failed final copy.
+						if (!writeStorageFile(statePath, "pending"))
+							copyOk = false;
+						else if (writeStorageFile(backupPath, sourceBytes)
+								&& readStorageFile(backupPath, verifiedBytes) && verifiedBytes == sourceBytes)
+							copyOk = writeStorageFile(statePath, "complete");
+						else
+							copyOk = false;
+					}
+				}
+				if (!copyOk)
+					WARN_LOG(INPUT, "Failed to create or verify backup of controller mapping file %s", path.c_str());
 			}
-			delete out;
+		}
+		catch (const hostfs::StorageException& e)
+		{
+			WARN_LOG(INPUT, "Can't backup controller mapping file %s: %s", path.c_str(), e.what());
 		}
 	}
 
