@@ -469,14 +469,10 @@ static void luaRegister(lua_State *L)
 						gui_open_settings();
 				}))
 				.addFunction("loadState", std::function<void(int)>([](int index) {
-					bool restart = false;
-					if (gui_state == GuiState::Closed) {
-						gui_open_settings();
-						restart = true;
-					}
-					dc_loadstate(index);
-					if (restart)
-						gui_open_settings();
+					// Lua callbacks can run synchronously inside a guest VBlank.
+					// Load through the UI thread so partial-restore shutdown never
+					// tries to stop or join the emulation thread from itself.
+					gui_runOnUiThread([index] { gui_loadState(index); });
 				}))
 				.addFunction("exit", dc_exit)
 				.addFunction("displayNotification", os_notify)

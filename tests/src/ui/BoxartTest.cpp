@@ -1,6 +1,7 @@
 // Portions Copyright 2026 The Hollycast Authors
 #include "gtest/gtest.h"
 #include "ui/boxart/boxart.h"
+#include "ui/boxart/artwork_adapter.h"
 #include "ui/boxart/launchbox.h"
 #include "ui/boxart/vmu_icon.h"
 #include "ui/game_scanner.h"
@@ -12,10 +13,12 @@
 
 #include <chrono>
 #include <cerrno>
+#include <ctime>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iostream>
 #include <thread>
 
 #ifndef _WIN32
@@ -77,6 +80,14 @@ TEST(BoxartWorkTest, AcceptsOnlyCurrentSourceRevision)
 	EXPECT_FALSE(boxart.isCurrentWork(request)) << "Removing a source must reject its previously matching request";
 	EXPECT_TRUE(boxart.isCurrentWork(arcadeRequest)) << "Removing one source must leave another source current";
 }
+
+class BoxartTestAccess
+{
+public:
+	static size_t recoveryDirectoryScans(const Boxart& boxart) { return boxart.recoveryDirectoryScans; }
+	static size_t recoveryImageIndexBuilds(const Boxart& boxart) { return boxart.recoveryImageIndexBuilds; }
+	static std::chrono::steady_clock::duration recoveryElapsed(const Boxart& boxart) { return boxart.recoveryElapsed; }
+};
 
 namespace {
 
@@ -1326,6 +1337,50 @@ TEST_F(BoxartTest, LaunchBoxDiscAndBoxSlotsRemainDistinctAndTgdbIsTheFirstFallba
   std::filesystem::path(boxart->getCustomMediaPath(media, config::LibraryCoverMediaMode::Screenshot)).lexically_normal());
 }
 
+TEST_F(BoxartTest, LaunchBoxAdapterKeepsOneBulkIntervalAcrossQueueRefills)
+{
+	const auto cacheRoot = directory / "adapter-cache";
+	std::filesystem::create_directories(cacheRoot);
+	const json catalog = {
+		{"version", 2}, {"downloaded_at", std::time(nullptr)},
+		{"games", json::array({{{"id", 9001}, {"name", "Bulk Adapter Game"},
+			{"platform", "Sega Dreamcast"}, {"aliases", json::array()},
+			{"images", json::array({{{"file", "adapter.png"}, {"region", "World"}, {"type", "Box - Front"}}})},
+			{"metadata", json::object()}}})}
+	};
+	std::ofstream(cacheRoot / "launchbox-catalog.json") << catalog.dump();
+	class NoopScraper final : public Scraper
+	{
+	public:
+		void scrape(GameBoxart&) override {}
+	};
+	ArtworkAdapter adapter(2,
+		std::make_unique<LaunchBox>([](const std::string&, std::vector<u8>&, std::string&) { return 404; }),
+		std::make_unique<NoopScraper>());
+	ASSERT_TRUE(adapter.initialize(cacheRoot.string()));
+	auto makeItem = [](const std::string& id) {
+		GameBoxart item;
+		item.searchName = "Bulk Adapter Game";
+		item.uniqueId = id;
+		item.region = GameBoxart::USA;
+		return item;
+	};
+	std::vector<GameBoxart> firstRefill{makeItem("ADAPTER-0001"), makeItem("ADAPTER-0002")};
+	adapter.beginBulk();
+	adapter.scrape(firstRefill);
+	EXPECT_FALSE(std::filesystem::exists(cacheRoot / "launchbox-matches.json"));
+	std::vector<GameBoxart> secondRefill{makeItem("ADAPTER-0003")};
+	adapter.beginBulk();
+	adapter.scrape(secondRefill);
+	EXPECT_FALSE(std::filesystem::exists(cacheRoot / "launchbox-matches.json"));
+	adapter.endBulk();
+	std::ifstream snapshot(cacheRoot / "launchbox-matches.json");
+	ASSERT_TRUE(snapshot);
+	const json saved = json::parse(snapshot);
+	EXPECT_EQ(3u, saved.at("matches").size());
+	EXPECT_EQ(3, saved.value("sequence", 0));
+}
+
 TEST_F(BoxartTest, InventoryReusesFlatCoversAndDetectsDeletedLocalImages)
 {
 	const auto local = directory / "custom";
@@ -1388,6 +1443,107 @@ TEST_F(BoxartTest, MovedFlycastDatabaseRecoversOnlyItsAdjacentDownloadedCover)
 	legacy["boxart_path"] = "/missing/783415.png";
 	legacy["boxart_url"] = "";
 	EXPECT_EQ(GameBoxart(legacy, base).boxartPath, "/missing/783415.png");
+}
+
+TEST_F(BoxartTest, PopulatedRecoveryWorkload)
+{
+	constexpr size_t groupCount = 12;
+	constexpr size_t imagesPerGroup = 20;
+	const auto root = directory / "boxart";
+	writeDatabase(json::array());
+	for (size_t group = 0; group < groupCount; ++group)
+	{
+		const auto nested = root / ("collection-" + std::to_string(group)) / "art" / "covers";
+		std::filesystem::create_directories(nested);
+		for (size_t image = 0; image < imagesPerGroup; ++image)
+			std::ofstream(nested / ("cover-" + std::to_string(image) + ".png"));
+	}
+
+	const auto started = std::chrono::steady_clock::now();
+	boxart->getCachedBoxart(media);
+	const auto lookupElapsed = std::chrono::steady_clock::now() - started;
+	const auto imageCount = groupCount * imagesPerGroup;
+	const auto directoryCount = groupCount * 3;
+	std::cout << "[recovery-workload] images=" << imageCount
+			<< " nested_directories=" << directoryCount
+			<< " total_fixture_entries=" << (imageCount + directoryCount + 1)
+			<< " recovery_directory_scans=" << BoxartTestAccess::recoveryDirectoryScans(*boxart)
+			<< " image_index_builds=" << BoxartTestAccess::recoveryImageIndexBuilds(*boxart)
+			<< " recovery_elapsed_us="
+			<< std::chrono::duration_cast<std::chrono::microseconds>(BoxartTestAccess::recoveryElapsed(*boxart)).count()
+			<< " first_cached_lookup_us="
+			<< std::chrono::duration_cast<std::chrono::microseconds>(lookupElapsed).count() << std::endl;
+}
+
+TEST_F(BoxartTest, RecoverySkipsImageIndexForSingleDatabase)
+{
+	const auto root = directory / "boxart";
+	std::filesystem::create_directories(root / "many" / "nested" / "images");
+	for (size_t image = 0; image < 64; ++image)
+		std::ofstream(root / "many" / "nested" / "images" / ("cover-" + std::to_string(image) + ".png"));
+	writeDatabase(json::array());
+
+	boxart->getCachedBoxart(media);
+	EXPECT_EQ(BoxartTestAccess::recoveryDirectoryScans(*boxart), 1u);
+	EXPECT_EQ(BoxartTestAccess::recoveryImageIndexBuilds(*boxart), 0u);
+
+	boxart->term();
+	boxart = std::make_unique<Boxart>();
+	std::filesystem::remove(root / "flycast-gamedb.json");
+	boxart->getCachedBoxart(media);
+	EXPECT_EQ(BoxartTestAccess::recoveryDirectoryScans(*boxart), 1u);
+	EXPECT_EQ(BoxartTestAccess::recoveryImageIndexBuilds(*boxart), 0u);
+}
+
+TEST_F(BoxartTest, RecoveryMergesDuplicateDatabasesAndRepairsMissingCover)
+{
+	const auto root = directory / "boxart";
+	const auto secondary = root / "legacy" / "flycast-gamedb.json";
+	const auto corrupt = root / "corrupt" / "flycast-gamedb.json";
+	const auto recoveredCover = root / "nested" / "cover (1).png";
+	std::filesystem::create_directories(recoveredCover.parent_path());
+	std::filesystem::create_directories(secondary.parent_path());
+	std::filesystem::create_directories(corrupt.parent_path());
+	std::ofstream(recoveredCover) << "recovered image";
+	const json weakRecord = {
+		{"file_name", media.fileName}, {"name", "Weak title"}, {"overview", "Weak overview"}
+	};
+	const json preferredRecord = {
+		{"file_name", media.fileName}, {"name", "Recovered title"}, {"overview", "Recovered overview"},
+		{"scraped", true}, {"boxart_url", "https://example.invalid/cover.png"},
+		{"boxart_path", "/old/art/cover.png"}
+	};
+	writeDatabase(json::array({weakRecord}));
+	std::ofstream(secondary) << json::array({preferredRecord}).dump();
+	std::ofstream(corrupt) << "{";
+
+	const std::string secondaryContents = [&]() {
+		std::ifstream file(secondary);
+		return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+	}();
+	const std::string corruptContents = [&]() {
+		std::ifstream file(corrupt);
+		return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+	}();
+	boxart->getCachedBoxart(media);
+
+	const json recovered = readDatabase();
+	ASSERT_EQ(recovered.size(), 1u);
+	EXPECT_EQ(recovered[0]["name"], "Recovered title");
+	EXPECT_EQ(recovered[0]["overview"], "Recovered overview");
+	auto recoveredPath = std::filesystem::u8path(recovered[0]["boxart_path"].get<std::string>());
+	if (recoveredPath.is_relative())
+		recoveredPath = root / recoveredPath;
+	EXPECT_EQ(recoveredPath.lexically_normal(), recoveredCover.lexically_normal());
+	EXPECT_EQ(BoxartTestAccess::recoveryDirectoryScans(*boxart), 2u);
+	EXPECT_EQ(BoxartTestAccess::recoveryImageIndexBuilds(*boxart), 1u);
+	EXPECT_TRUE(std::filesystem::exists(root / "flycast-gamedb.json"));
+	EXPECT_TRUE(std::filesystem::exists(secondary));
+	EXPECT_TRUE(std::filesystem::exists(corrupt));
+	std::ifstream secondaryFile(secondary);
+	EXPECT_EQ(std::string(std::istreambuf_iterator<char>(secondaryFile), std::istreambuf_iterator<char>()), secondaryContents);
+	std::ifstream corruptFile(corrupt);
+	EXPECT_EQ(std::string(std::istreambuf_iterator<char>(corruptFile), std::istreambuf_iterator<char>()), corruptContents);
 }
 
 TEST_F(BoxartTest, UnreadableLocalDirectoryDoesNotAuthorizeDownloads)

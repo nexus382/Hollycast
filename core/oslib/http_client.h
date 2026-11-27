@@ -28,6 +28,10 @@
 #include <iomanip>
 #include <sstream>
 #include <locale>
+#include <limits>
+#include <functional>
+#include <type_traits>
+#include <utility>
 
 namespace http {
 
@@ -36,12 +40,66 @@ void term();
 
 using Headers = std::vector<std::pair<std::string, std::string>>;
 
+// Bounded GETs return bodyTooLarge and leave content empty if the budget is exceeded.
+constexpr size_t unlimitedBody = std::numeric_limits<size_t>::max();
+constexpr int bodyTooLarge = -2;
+
+static inline bool appendBody(std::vector<u8>& content, const void *data, size_t size, size_t limit)
+{
+	if (content.size() > limit || size > limit - content.size()) {
+		content.clear();
+		return false;
+	}
+	if (size == 0) return true;
+	const auto *bytes = static_cast<const u8 *>(data);
+	content.insert(content.end(), bytes, bytes + size);
+	return true;
+}
+
+// Accept both existing injectable transports and limit-aware transports.
+// Legacy callbacks remain source-compatible; new callbacks receive the budget.
+template<typename... Args>
+class LimitAwareTransport
+{
+public:
+	LimitAwareTransport() = default;
+	template<typename F, typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, LimitAwareTransport>>>
+	LimitAwareTransport(F&& callback)
+	{
+		if constexpr (std::is_invocable_r_v<int, F, Args..., size_t>)
+			bounded = std::forward<F>(callback);
+		else if constexpr (std::is_invocable_r_v<int, F, Args...>)
+			legacy = std::forward<F>(callback);
+		else
+			static_assert(std::is_invocable_v<F, Args...>, "HTTP transport has an incompatible signature");
+	}
+	template<typename F, typename = std::enable_if_t<!std::is_same_v<std::decay_t<F>, LimitAwareTransport>>>
+	LimitAwareTransport& operator=(F&& callback)
+	{
+		*this = LimitAwareTransport(std::forward<F>(callback));
+		return *this;
+	}
+	explicit operator bool() const { return static_cast<bool>(bounded) || static_cast<bool>(legacy); }
+	int operator()(Args... args, size_t limit) const
+	{
+		return bounded ? bounded(args..., limit) : legacy(args...);
+	}
+	int operator()(Args... args) const
+	{
+		return legacy ? legacy(args...) : bounded(args..., unlimitedBody);
+	}
+private:
+	std::function<int(Args..., size_t)> bounded;
+	std::function<int(Args...)> legacy;
+};
+
 // A positive timeout bounds network waits; zero retains the platform defaults.
 int get(const std::string& url, std::vector<u8>& content,
 		const Headers *reqHeaders = nullptr, Headers *respHeaders = nullptr, int timeoutMs = 0,
-		const std::atomic<bool> *cancelled = nullptr);
+		const std::atomic<bool> *cancelled = nullptr, size_t maxBodyBytes = unlimitedBody);
 
-int get(const std::string& url, std::vector<u8>& content, std::string& contentType);
+int get(const std::string& url, std::vector<u8>& content, std::string& contentType,
+		size_t maxBodyBytes = unlimitedBody);
 
 struct PostField
 {

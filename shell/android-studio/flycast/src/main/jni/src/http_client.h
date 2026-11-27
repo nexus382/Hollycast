@@ -34,8 +34,10 @@ namespace http {
     	jni::env()->CallVoidMethod(HttpClient, initMid, static_cast<jstring>(juserAgent));
     }
 
-    int get(const std::string &url, std::vector<u8> &content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled)
+    int get(const std::string &url, std::vector<u8> &content, const Headers *reqHeaders, Headers *respHeaders, int timeoutMs, const std::atomic<bool> *cancelled, size_t maxBodyBytes)
     {
+        content.clear();
+        if (cancelled && cancelled->load()) return 499;
         jni::String jurl(url);
         jni::ObjectArray<jni::ByteArray> contentOut(1);
         jni::ObjectArray<jni::String> reqHeaderKeys;
@@ -65,9 +67,14 @@ namespace http {
                 static_cast<jobjectArray>(reqHeaderValues),
                 static_cast<jobjectArray>(respHeaderKeys),
                 static_cast<jobjectArray>(respHeaderValues),
-                static_cast<jint>(timeoutMs), reinterpret_cast<jlong>(cancelled));
+                static_cast<jint>(timeoutMs), reinterpret_cast<jlong>(cancelled),
+                static_cast<jlong>(maxBodyBytes == unlimitedBody ? std::numeric_limits<jlong>::max() : maxBodyBytes));
 
-        content = contentOut[0];
+        content.clear();
+        if (httpStatus >= 200 && httpStatus < 300) {
+            jni::ByteArray response = contentOut[0];
+            if (!response.isNull()) content = response;
+        }
         if (respHeaders != nullptr)
         {
         	jni::ObjectArray<jni::String> keys = respHeaderKeys[0];
@@ -134,7 +141,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_HttpClient_nat
     																		"[Ljava/lang/String;"	// req header values
     																		"[[Ljava/lang/String;"	// resp header names (out)
     																		"[[Ljava/lang/String;"	// resp header values (out)
-																		"IJ"					// network timeout (ms), cancellation token
+								"IJJ"					// network timeout (ms), cancellation token, body limit
     																		")I");
     http::postMid = env->GetMethodID(env->GetObjectClass(obj), "post", "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;)I");
     http::postRawMid = env->GetMethodID(env->GetObjectClass(obj), "post", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[[B)I");

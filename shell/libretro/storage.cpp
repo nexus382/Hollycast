@@ -16,9 +16,28 @@
  */
 #include "storage.h"
 
+#include "oslib/directory.h"
 #include <file/file_path.h>
+#include <atomic>
+#include <cerrno>
+#include <cstring>
+#include <mutex>
 
 struct retro_vfs_interface* hostfs::LibretroStorage::vfs_interface = nullptr;
+
+namespace {
+std::mutex vfsReplacementMutex;
+
+static bool isTransactionalReplacementPath(const std::string& path)
+{
+	auto endsWith = [&path](const char *suffix) {
+		const size_t length = std::strlen(suffix);
+		return path.size() >= length && path.compare(path.size() - length, length, suffix) == 0;
+	};
+	return endsWith(".state") || endsWith(".state.net") || endsWith(".state.tmp")
+			|| endsWith(".cfg.save");
+}
+}
 
 bool hostfs::LibretroStorage::isFileWriteable(const std::string& path)
 {
@@ -43,12 +62,10 @@ hostfs::FileInfo hostfs::LibretroStorage::makeFileInfo(std::string name, std::st
 
 void hostfs::LibretroStorage::initialise(retro_environment_t environ_cb)
 {
-	retro_vfs_interface_info vfs_interface_info;
-	vfs_interface_info.required_interface_version = 3; // We really want those directory functions.
-
+	retro_vfs_interface_info vfs_interface_info{};
+	vfs_interface_info.required_interface_version = 3;
 	if (!environ_cb(RETRO_ENVIRONMENT_GET_VFS_INTERFACE, &vfs_interface_info))
-		return;
-
+		vfs_interface_info.iface = nullptr;
 	vfs_interface = vfs_interface_info.iface;
 
 	filestream_vfs_init(&vfs_interface_info);
@@ -57,13 +74,52 @@ void hostfs::LibretroStorage::initialise(retro_environment_t environ_cb)
 
 bool hostfs::LibretroStorage::isKnownPath(const std::string& path)
 {
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (vfs_interface == nullptr)
+		return false;
+	if (isTransactionalReplacementPath(path))
+	{
+		recoverInterruptedReplacementUnlocked(path);
+		if (rawPathExists(path))
+			return true;
+		return rawPathExists(path + ".hollycast-vfs-transaction");
+	}
+	return rawPathExists(path);
+}
+
+bool hostfs::LibretroStorage::isKnownPathForWrite(const std::string& path)
+{
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (vfs_interface == nullptr)
+		return false;
+	if (isTransactionalReplacementPath(path))
+		recoverInterruptedReplacementUnlocked(path);
+	if (rawPathExists(path))
+		return true;
+	std::string parent(path);
+	parent.resize(path_parent_dir(parent.data(), parent.size()));
+	return !parent.empty() && rawPathExists(parent);
+}
+
+bool hostfs::LibretroStorage::rawPathExists(const std::string& path)
+{
+	if (vfs_interface != nullptr && vfs_interface->stat != nullptr
+			&& (vfs_interface->stat(path.c_str(), nullptr) & RETRO_VFS_STAT_IS_VALID) != 0)
+		return true;
+	// Keep libretro-common's regular-file and native fallback behavior for paths
+	// that the frontend stat callback does not recognize.
 	return filestream_exists(path.c_str());
 }
 
 std::vector<hostfs::FileInfo> hostfs::LibretroStorage::listContent(const std::string& path)
 {
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
 	std::vector<FileInfo> list;
 
+	if (vfs_interface == nullptr || vfs_interface->opendir == nullptr
+			|| vfs_interface->readdir == nullptr || vfs_interface->dirent_get_name == nullptr
+			|| vfs_interface->closedir == nullptr)
+		return list;
 	struct retro_vfs_dir_handle* dir = vfs_interface->opendir(path.c_str(), true);
 
 	if (dir == nullptr)
@@ -72,6 +128,8 @@ std::vector<hostfs::FileInfo> hostfs::LibretroStorage::listContent(const std::st
 	while (vfs_interface->readdir(dir))
 	{
 		const auto entry_name = vfs_interface->dirent_get_name(dir);
+		if (entry_name == nullptr)
+			continue;
 		const auto entry_path = path + PATH_DEFAULT_SLASH_C() + entry_name;
 
 		list.emplace_back(makeFileInfo(entry_name, entry_path));
@@ -83,6 +141,14 @@ std::vector<hostfs::FileInfo> hostfs::LibretroStorage::listContent(const std::st
 }
 
 hostfs::File *hostfs::LibretroStorage::openFile(const std::string& path, const std::string& mode)
+{
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (isTransactionalReplacementPath(path) && !recoverInterruptedReplacementUnlocked(path))
+		return nullptr;
+	return openFileUnlocked(path, mode);
+}
+
+hostfs::File *hostfs::LibretroStorage::openFileUnlocked(const std::string& path, const std::string& mode)
 {
 	bool extended = false;
 	bool append = false;
@@ -170,12 +236,187 @@ std::string hostfs::LibretroStorage::getSubPath(const std::string& reference, co
 
 hostfs::FileInfo hostfs::LibretroStorage::getFileInfo(const std::string& path)
 {
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (isTransactionalReplacementPath(path) && !recoverInterruptedReplacementUnlocked(path))
+		return {};
 	return makeFileInfo(path_basename(path.c_str()), path);
 }
 
 bool hostfs::LibretroStorage::exists(const std::string& path)
 {
-	return filestream_exists(path.c_str());
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (isTransactionalReplacementPath(path) && !recoverInterruptedReplacementUnlocked(path))
+		return false;
+	return rawPathExists(path);
+}
+
+hostfs::File *hostfs::LibretroStorage::createTemporaryFile(const std::string& destination, std::string& temporaryPath)
+{
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (!recoverInterruptedReplacementUnlocked(destination))
+	{
+		temporaryPath.clear();
+		return nullptr;
+	}
+
+	static std::atomic<u64> sequence{0};
+	for (int attempt = 0; attempt < 128; attempt++)
+	{
+		temporaryPath = destination + ".tmp-" + std::to_string(++sequence);
+		if (rawPathExists(temporaryPath))
+			continue;
+		if (File *file = openFileUnlocked(temporaryPath, "wb"))
+			return file;
+	}
+	temporaryPath.clear();
+	return nullptr;
+}
+
+bool hostfs::LibretroStorage::replaceFile(const std::string& temporaryPath, const std::string& destination)
+{
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (!recoverInterruptedReplacementUnlocked(destination))
+		return false;
+
+	if (vfs_interface != nullptr)
+	{
+		if (vfs_interface->rename == nullptr)
+			return false;
+		if (vfs_interface->rename(temporaryPath.c_str(), destination.c_str()) == 0)
+			return true;
+
+		// Some VFS implementations (including libretro-common on Windows) do
+		// not replace an existing destination. Move the old file aside, publish
+		// into the now-empty slot, and restore the old file if publication fails.
+		if (!rawPathExists(destination) || vfs_interface->remove == nullptr)
+			return false;
+		const std::string backup = destination + ".hollycast-vfs-backup";
+		const std::string marker = destination + ".hollycast-vfs-transaction";
+		if (rawPathExists(backup) || rawPathExists(marker) || !writeVfsTransactionMarker(destination))
+			return false;
+		if (vfs_interface->rename(destination.c_str(), backup.c_str()) != 0)
+		{
+			vfs_interface->remove(marker.c_str());
+			return false;
+		}
+		if (vfs_interface->rename(temporaryPath.c_str(), destination.c_str()) == 0)
+		{
+			// Recovery sees a live destination and completes committed cleanup.
+			recoverInterruptedReplacementUnlocked(destination);
+			return true;
+		}
+
+		// If rollback itself fails, the marker and backup remain; the next
+		// open restores the original before exposing the slot.
+		recoverInterruptedReplacementUnlocked(destination);
+		return false;
+	}
+	// libretro-common falls back to host stdio when no VFS interface was
+	// supplied, so publish through the same native replacement wrapper.
+	return flycast::rename(temporaryPath.c_str(), destination.c_str()) == 0;
+}
+
+bool hostfs::LibretroStorage::recoverInterruptedReplacementUnlocked(const std::string& destination)
+{
+	if (vfs_interface == nullptr)
+		return true;
+	const std::string marker = destination + ".hollycast-vfs-transaction";
+	if (!rawPathExists(marker))
+		return true;
+	if (!validVfsTransactionMarker(destination))
+		return false;
+
+	const std::string backup = destination + ".hollycast-vfs-backup";
+	const bool hasBackup = rawPathExists(backup);
+	const bool hasDestination = rawPathExists(destination);
+	if (hasBackup && !hasDestination)
+	{
+		if (vfs_interface->rename == nullptr
+				|| vfs_interface->rename(backup.c_str(), destination.c_str()) != 0)
+			return false;
+	}
+	else if (!hasDestination)
+		return false;
+
+	// A destination alongside the backup means publication completed. A
+	// destination without a backup means rollback (or preparation) completed.
+	if (hasBackup && vfs_interface->remove != nullptr
+			&& vfs_interface->remove(backup.c_str()) != 0 && rawPathExists(backup))
+		return true;
+	if (vfs_interface->remove != nullptr)
+		vfs_interface->remove(marker.c_str());
+	return true;
+}
+
+bool hostfs::LibretroStorage::writeVfsTransactionMarker(const std::string& destination)
+{
+	static std::atomic<u64> sequence{0};
+	const std::string marker = destination + ".hollycast-vfs-transaction";
+	std::string temporary;
+	for (int attempt = 0; attempt < 128; attempt++)
+	{
+		temporary = marker + ".tmp-" + std::to_string(++sequence);
+		if (!rawPathExists(temporary))
+			break;
+		temporary.clear();
+	}
+	if (temporary.empty())
+		return false;
+
+	static constexpr char contents[] = "HCV1\n";
+	File *file = openFileUnlocked(temporary, "wb");
+	if (file == nullptr)
+		return false;
+	bool written = file->write(contents, 1, sizeof(contents) - 1) == sizeof(contents) - 1;
+	if (!file->flush())
+		written = false;
+	if (!file->close())
+		written = false;
+	delete file;
+	if (!written)
+	{
+		if (vfs_interface != nullptr && vfs_interface->remove != nullptr)
+			vfs_interface->remove(temporary.c_str());
+		return false;
+	}
+
+	if (vfs_interface == nullptr || vfs_interface->rename == nullptr
+			|| vfs_interface->rename(temporary.c_str(), marker.c_str()) != 0)
+	{
+		if (vfs_interface != nullptr && vfs_interface->remove != nullptr)
+			vfs_interface->remove(temporary.c_str());
+		return false;
+	}
+	if (validVfsTransactionMarker(destination))
+		return true;
+	if (vfs_interface != nullptr && vfs_interface->remove != nullptr)
+		vfs_interface->remove(marker.c_str());
+	return false;
+}
+
+bool hostfs::LibretroStorage::validVfsTransactionMarker(const std::string& destination)
+{
+	const std::string marker = destination + ".hollycast-vfs-transaction";
+	File *file = openFileUnlocked(marker, "rb");
+	if (file == nullptr)
+		return false;
+	static constexpr char expected[] = "HCV1\n";
+	char actual[sizeof(expected) - 1];
+	const bool valid = file->size() == sizeof(actual)
+			&& file->read(actual, 1, sizeof(actual)) == sizeof(actual)
+			&& std::memcmp(actual, expected, sizeof(actual)) == 0;
+	const bool closed = file->close();
+	delete file;
+	return valid && closed;
+}
+
+bool hostfs::LibretroStorage::removeFile(const std::string& path)
+{
+	std::lock_guard<std::mutex> lock(vfsReplacementMutex);
+	if (vfs_interface != nullptr)
+		return vfs_interface->remove != nullptr
+			&& (vfs_interface->remove(path.c_str()) == 0 || !rawPathExists(path));
+	return flycast::unlink(path.c_str()) == 0 || errno == ENOENT;
 }
 
 bool hostfs::LibretroStorage::addStorage(bool isDirectory, bool writeAccess, const std::string& description,

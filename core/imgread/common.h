@@ -1,4 +1,6 @@
 #pragma once
+
+#include <limits>
 #include "types.h"
 #include "emulator.h"
 #include "hw/gdrom/gdrom_if.h"
@@ -87,6 +89,7 @@ struct Track
 {
 	TrackFile* file = nullptr;	// handler for actual IO
 	u32 StartFAD = 0;			// Start FAD
+	u32 ReadStartFAD = 0;		// Optional earlier start for stored pregap sectors
 	u32 EndFAD = 0;				// End FAD
 	u8 CTRL = 0;
 	u8 ADR = 0;
@@ -94,7 +97,8 @@ struct Track
 
 	bool Read(u32 FAD, u8 *dst, SectorFormat *sector_type, u8 *subcode, SubcodeFormat *subcode_type)
 	{
-		if (FAD >= StartFAD && (FAD <= EndFAD || EndFAD == 0) && file != nullptr)
+		const u32 readStartFAD = ReadStartFAD != 0 ? ReadStartFAD : StartFAD;
+		if (FAD >= readStartFAD && (FAD <= EndFAD || EndFAD == 0) && file != nullptr)
 			return file->Read(FAD, dst, sector_type, subcode, subcode_type);
 		else
 			return false;
@@ -215,14 +219,14 @@ Disc* OpenDisc(const std::string& path, std::vector<u8> *digest = nullptr);
 struct RawTrackFile : TrackFile
 {
 	hostfs::File *file;
-	s32 offset;
+	s64 offset;
 	u32 fmt;
 
-	RawTrackFile(hostfs::File *file, u32 file_offs, u32 first_fad, u32 secfmt)
+	RawTrackFile(hostfs::File *file, u64 file_offs, u32 first_fad, u32 secfmt)
 	{
 		verify(file != nullptr);
 		this->file = file;
-		this->offset = file_offs - first_fad * secfmt;
+		this->offset = (s64)file_offs - (s64)first_fad * secfmt;
 		this->fmt = secfmt;
 	}
 
@@ -243,7 +247,13 @@ struct RawTrackFile : TrackFile
 			return false;
 		}
 
-		file->seek(offset + FAD * fmt, SEEK_SET);
+		const s64 sectorOffset = (s64)FAD * fmt;
+		if (offset > std::numeric_limits<s64>::max() - sectorOffset
+				|| offset < std::numeric_limits<s64>::min() + sectorOffset)
+			return false;
+		const s64 byteOffset = offset + sectorOffset;
+		if (byteOffset < 0 || file->seek(byteOffset, SEEK_SET) != 0)
+			return false;
 		if (file->read(dst, 1, fmt) != fmt)
 		{
 			WARN_LOG(GDROM, "Failed or truncated GD-Rom read");

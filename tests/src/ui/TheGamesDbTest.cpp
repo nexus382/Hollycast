@@ -5,6 +5,7 @@
 #include "ui/boxart/gamesdb.h"
 #include "ui/game_scanner.h"
 #include <stb_image_write.h>
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -46,9 +47,10 @@ protected:
 		item.requestedMedia = artwork::allMedia;
 	}
 	void TearDown() override { std::filesystem::remove_all(root); }
-	int respond(const std::string& url, std::vector<u8>& bytes, std::string& contentType)
+	int respond(const std::string& url, std::vector<u8>& bytes, std::string& contentType, size_t maxBytes = http::unlimitedBody)
 	{
 		++requests;
+		limits.push_back(maxBytes);
 		if (url.find("cdn.example/") != std::string::npos)
 		{
 			downloads.push_back(url);
@@ -78,13 +80,14 @@ protected:
 	}
 	TheGamesDb scraper()
 	{
-		return TheGamesDb([&](const std::string& url, std::vector<u8>& bytes, std::string& type) { return respond(url, bytes, type); });
+		return TheGamesDb([&](const std::string& url, std::vector<u8>& bytes, std::string& type, size_t maxBytes) { return respond(url, bytes, type, maxBytes); });
 	}
 	std::filesystem::path root;
 	GameBoxart item;
 	json game, otherGame, images;
 	std::vector<std::string> downloads;
 	int requests = 0, referenceRequests = 0;
+	std::vector<size_t> limits;
 	bool failImage = false, missingImage = false, ambiguous = false;
 };
 
@@ -93,6 +96,7 @@ TEST_F(TheGamesDbTest, OriginalImagesAndMetadataUseDistinctPersistentSlots)
 	auto source = scraper(); ASSERT_TRUE(source.initialize(root.string())); source.scrape(item);
 	ASSERT_EQ(item.tgdbMedia.size(), 7u);
 	EXPECT_EQ(downloads.size(), 7u);
+	EXPECT_NE(std::find(limits.begin(), limits.end(), 64u * 1024 * 1024), limits.end());
 	for (const auto& url : downloads) EXPECT_NE(url.find("/original/"), std::string::npos);
 	EXPECT_NE(item.tgdbMedia.at("cover"), item.tgdbMedia.at("backcover"));
 	EXPECT_EQ(item.boxartPath, item.tgdbMedia.at("cover"));
