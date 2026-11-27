@@ -2186,7 +2186,7 @@ struct retro_core_options_v2 options_ar = {
 #define CATEGORY_INPUT_LABEL_AST "Controles"
 #define CATEGORY_INPUT_INFO_0_AST NULL
 #define CATEGORY_EXPANSIONS_LABEL_AST NULL
-#define CATEGORY_EXPANSIONS_INFO_0_AST NULL
+#define CATEGORY_EXPANSIONS_INFO_0_AST "Seleiciona'l preséu (VMU o preséu de vibración, por exemplu) conectáu a cada ralura d'espansión."
 #define CATEGORY_VMU_LABEL_AST NULL
 #define CATEGORY_VMU_INFO_0_AST NULL
 #define CORE_OPTION_NAME_REGION_LABEL_AST "Rexón"
@@ -2195,7 +2195,7 @@ struct retro_core_options_v2 options_ar = {
 #define OPTION_VAL_EUROPE_AST "Europa"
 #define OPTION_VAL_DEFAULT_AST NULL
 #define CORE_OPTION_NAME_LANGUAGE_LABEL_AST "Llingua"
-#define CORE_OPTION_NAME_LANGUAGE_INFO_0_AST NULL
+#define CORE_OPTION_NAME_LANGUAGE_INFO_0_AST "Camuda la llingua usada pola BIOS ya pol cualesquier xuegu que contenga delles llingües."
 #define OPTION_VAL_JAPANESE_AST "Xaponés"
 #define OPTION_VAL_ENGLISH_AST "Inglés"
 #define OPTION_VAL_GERMAN_AST "Alemán"
@@ -2207,21 +2207,21 @@ struct retro_core_options_v2 options_ar = {
 #define CORE_OPTION_NAME_ENABLE_DSP_LABEL_AST "Activar el DSP"
 #define CORE_OPTION_NAME_ENABLE_DSP_INFO_0_AST "Activa la emulación del procesador de señal dixital d'audiu (DSP) de Dreamcast. Ameyora la precisión del soníu xeneráu mas aumenta los requirimientos de rindimientu."
 #define CORE_OPTION_NAME_ALLOW_SERVICE_BUTTONS_LABEL_AST NULL
-#define CORE_OPTION_NAME_ALLOW_SERVICE_BUTTONS_INFO_0_AST NULL
-#define CORE_OPTION_NAME_FORCE_FREEPLAY_LABEL_AST NULL
-#define CORE_OPTION_NAME_FORCE_FREEPLAY_INFO_0_AST NULL
-#define CORE_OPTION_NAME_COIN_LIMIT_LABEL_AST NULL
-#define CORE_OPTION_NAME_COIN_LIMIT_INFO_0_AST NULL
-#define CORE_OPTION_NAME_EMULATE_BBA_LABEL_AST NULL
-#define CORE_OPTION_NAME_EMULATE_BBA_INFO_0_AST NULL
-#define CORE_OPTION_NAME_UPNP_LABEL_AST NULL
-#define CORE_OPTION_NAME_UPNP_INFO_0_AST NULL
-#define CORE_OPTION_NAME_DCNET_LABEL_AST NULL
-#define CORE_OPTION_NAME_DCNET_INFO_0_AST NULL
+#define CORE_OPTION_NAME_ALLOW_SERVICE_BUTTONS_INFO_0_AST "Activa'l botón SERVICE de los xuegos arcade p'acceder a la configuración de la máquina"
+#define CORE_OPTION_NAME_FORCE_FREEPLAY_LABEL_AST "Xuegos de NAOMI gratuitos"
+#define CORE_OPTION_NAME_FORCE_FREEPLAY_INFO_0_AST "Modifica la configuración de monedes de los xuegos pa que seyan gratuitos."
+#define CORE_OPTION_NAME_COIN_LIMIT_LABEL_AST "Llende de monedes"
+#define CORE_OPTION_NAME_COIN_LIMIT_INFO_0_AST "Desactiva l'inxertu de monedes dempués de la llende definida."
+#define CORE_OPTION_NAME_EMULATE_BBA_LABEL_AST "Emulación del adautador de banda ampla"
+#define CORE_OPTION_NAME_EMULATE_BBA_INFO_0_AST "Emula l'adautador ethernet de banda ampla en cuentes del módem (ye obligatorio reaniciar)"
+#define CORE_OPTION_NAME_UPNP_LABEL_AST "Activar UPnP"
+#define CORE_OPTION_NAME_UPNP_INFO_0_AST "Usa UPnP pa configurar automáticamente'l router ya xugar en llinia."
+#define CORE_OPTION_NAME_DCNET_LABEL_AST "Usar DCNet"
+#define CORE_OPTION_NAME_DCNET_INFO_0_AST "Usa'l serviciu na ñube de DCNet pa l'accesu a internet de Dreamcast."
 #define CORE_OPTION_NAME_INTERNAL_RESOLUTION_LABEL_AST "Resolución interna"
 #define CORE_OPTION_NAME_INTERNAL_RESOLUTION_INFO_0_AST "Modifica la resolución de la renderización."
 #define OPTION_VAL_320X240_AST NULL
-#define OPTION_VAL_640X480_AST NULL
+#define OPTION_VAL_640X480_AST "640x480 (resolución nativa)"
 #define OPTION_VAL_800X600_AST "800x600 (x1,25)"
 #define OPTION_VAL_960X720_AST "960x720 (x1,5)"
 #define OPTION_VAL_1024X768_AST "1024x768 (x1,6)"
@@ -2290,7 +2290,7 @@ struct retro_core_options_v2 options_ar = {
 #define OPTION_VAL_2_AST NULL
 #define CORE_OPTION_NAME_DELAY_FRAME_SWAPPING_LABEL_AST NULL
 #define CORE_OPTION_NAME_DELAY_FRAME_SWAPPING_INFO_0_AST NULL
-#define CORE_OPTION_NAME_DETECT_VSYNC_SWAP_INTERVAL_LABEL_AST NULL
+#define CORE_OPTION_NAME_DETECT_VSYNC_SWAP_INTERVAL_LABEL_AST "Detectar cambeos na velocidá de los fotogrames"
 #define CORE_OPTION_NAME_DETECT_VSYNC_SWAP_INTERVAL_INFO_0_AST NULL
 #define CORE_OPTION_NAME_PVR2_FILTERING_LABEL_AST NULL
 #define CORE_OPTION_NAME_PVR2_FILTERING_INFO_0_AST NULL
@@ -2372,7 +2372,7 @@ struct retro_core_options_v2 options_ar = {
 #define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_AST NULL
 #define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_AST NULL
 #define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_AST NULL
-#define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_AST NULL
+#define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_AST "Volquiar les testures sustituyíes"
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_AST NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_AST NULL
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_INFO_0_AST NULL
@@ -2420,7 +2420,7 @@ struct retro_core_options_v2 options_ar = {
 #define OPTION_VAL_300_O48_AST NULL
 #define CORE_OPTION_NAME_LIGHTGUN1_CROSSHAIR_LABEL_AST NULL
 #define OPTION_VAL_WHITE_AST "Blancu"
-#define OPTION_VAL_RED_AST "Coloráu"
+#define OPTION_VAL_RED_AST "Bermeyu"
 #define OPTION_VAL_GREEN_AST "Verde"
 #define OPTION_VAL_BLUE_AST "Azul"
 #define CORE_OPTION_NAME_LIGHTGUN2_CROSSHAIR_LABEL_AST NULL
@@ -2454,7 +2454,7 @@ struct retro_core_options_v2 options_ar = {
 #define CORE_OPTION_NAME_VMU_SOUND_LABEL_AST NULL
 #define CORE_OPTION_NAME_VMU_SOUND_LABEL_CAT_AST "Soníos de la VMU"
 #define CORE_OPTION_NAME_VMU_SOUND_INFO_0_AST "Cuando s'activa esta opción, reprodúcense los pitíos de la VMU."
-#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_LABEL_AST NULL
+#define CORE_OPTION_NAME_LINKED_VMU_STORAGE_LABEL_AST "Almacenamientu VMU de DreamPotato"
 #define CORE_OPTION_NAME_LINKED_VMU_STORAGE_INFO_0_AST NULL
 #define CORE_OPTION_NAME_SHOW_VMU_SCREEN_SETTINGS_LABEL_AST NULL
 #define CORE_OPTION_NAME_SHOW_VMU_SCREEN_SETTINGS_LABEL_CAT_AST NULL
@@ -2487,7 +2487,7 @@ struct retro_core_options_v2 options_ar = {
 #define OPTION_VAL_LIGHT_GREEN_2_17_AST "Verde claro (2)"
 #define OPTION_VAL_LIGHT_GREEN_3_18_AST "Verde claro (3)"
 #define OPTION_VAL_LIGHT_CYAN_2_19_AST "Cianu claro (2)"
-#define OPTION_VAL_LIGHT_RED_2_20_AST "Coloráu claro (2)"
+#define OPTION_VAL_LIGHT_RED_2_20_AST "Bermeyu claro (2)"
 #define OPTION_VAL_MAGENTA_21_AST "Maxenta"
 #define OPTION_VAL_LIGHT_PURPLE_3_22_AST "Moráu claro (3)"
 #define OPTION_VAL_LIGHT_ORANGE_23_AST "Naranxa claro"
@@ -29705,7 +29705,7 @@ struct retro_core_options_v2 options_eo = {
 #define CATEGORY_HACKS_LABEL_ES "Arreglos de emulación"
 #define CATEGORY_HACKS_INFO_0_ES "Cambia los ajustes de forzado de imagen panorámica, la velocidad de carga de GD-ROM y la sustitución de texturas."
 #define CATEGORY_INPUT_LABEL_ES "Entrada"
-#define CATEGORY_INPUT_INFO_0_ES "Cambia los ajustes de los mandos y las pistolas de luz."
+#define CATEGORY_INPUT_INFO_0_ES "Cambia los ajustes de los mandos y las lightguns (pistolas de luz)."
 #define CATEGORY_EXPANSIONS_LABEL_ES "Puertos de expansión de los mandos"
 #define CATEGORY_EXPANSIONS_INFO_0_ES "Selecciona el dispositivo (Visual Memory/VMU/vibración) que irá conectado en cada puerto de expansión."
 #define CATEGORY_VMU_LABEL_ES "Visual Memory"
@@ -29769,7 +29769,7 @@ struct retro_core_options_v2 options_eo = {
 #define OPTION_VAL_12160X9120_ES "12160 × 9120 (1900 %)"
 #define OPTION_VAL_12800X9600_ES "12800 × 9600 (2000 %)"
 #define CORE_OPTION_NAME_CABLE_TYPE_LABEL_ES "Tipo de cable"
-#define CORE_OPTION_NAME_CABLE_TYPE_INFO_0_ES "El tipo de señal de salida de la imagen. «TV (Compuesto)» es el formato más compatible de todos."
+#define CORE_OPTION_NAME_CABLE_TYPE_INFO_0_ES "El tipo de señal de salida de la imagen. \"TV (Compuesto)\" es el formato más compatible."
 #define OPTION_VAL_VGA_ES NULL
 #define OPTION_VAL_TV_RGB_ES NULL
 #define OPTION_VAL_TV_COMPOSITE_ES "TV (Compuesto)"
@@ -29798,7 +29798,7 @@ struct retro_core_options_v2 options_eo = {
 #define CORE_OPTION_NAME_EMULATE_FRAMEBUFFER_INFO_0_ES "Activa la emulación completa del búfer de fotogramas dentro de la VRAM. Ideal para aquellos juegos que lean o escriban directamente al búfer de fotogramas de la VRAM. Al activar esta opción, se forzará una resolución interna de 640 × 480 y el rendimiento podría verse gravemente afectado."
 #define CORE_OPTION_NAME_ENABLE_RTTB_LABEL_ES "Activar el búfer RTT (renderizado a texturas)"
 #define CORE_OPTION_NAME_ENABLE_RTTB_INFO_0_ES "Copia las texturas renderizadas en la GPU de vuelta a la VRAM. Esta opción suele dejarse activada para aquellos juegos que la requieran. Al activar esta opción, se desactivará el escalado de texturas y el rendimiento podría verse afectado."
-#define CORE_OPTION_NAME_MIPMAPPING_LABEL_ES "«Mipmapping»"
+#define CORE_OPTION_NAME_MIPMAPPING_LABEL_ES NULL
 #define CORE_OPTION_NAME_MIPMAPPING_INFO_0_ES "Al activar esta opción, las texturas mostrarán una versión con un tamaño más reducido cuanto más lejos estén de la pantalla. Puede mejorar el rendimiento y reducir los efectos de distorsión."
 #define CORE_OPTION_NAME_FOG_LABEL_ES "Efectos de niebla"
 #define CORE_OPTION_NAME_VOLUME_MODIFIER_ENABLE_LABEL_ES "Modificador de volúmenes"
@@ -29807,19 +29807,19 @@ struct retro_core_options_v2 options_eo = {
 #define CORE_OPTION_NAME_ANISOTROPIC_FILTERING_INFO_0_ES "Mejora la calidad de las texturas en aquellas superficies que se encuentren en un ángulo oblicuo respecto a la cámara. Un valor muy alto necesitará de mayores recursos de la GPU. Es necesario reiniciar para aplicar los cambios en este ajuste."
 #define CORE_OPTION_NAME_TEXTURE_FILTERING_LABEL_ES "Filtrado de texturas"
 #define CORE_OPTION_NAME_TEXTURE_FILTERING_INFO_0_ES "Indica el modo de filtrado de texturas que se utilizará. Puede utilizarse para forzar un modo de filtrado concreto en todas las texturas con el fin de conseguir un aspecto más definido (o suavizado) que el valor predeterminado. Cualquier valor que no sea el predeterminado puede provocar problemas de renderizado. Es necesario reiniciar para aplicar los cambios en este ajuste."
-#define OPTION_VAL_1_ES "Forzar vecino más cercano"
+#define OPTION_VAL_1_ES "Forzar vecino más próximo"
 #define OPTION_VAL_2_ES "Forzar lineal"
 #define CORE_OPTION_NAME_DELAY_FRAME_SWAPPING_LABEL_ES "Retrasar cambio de fotogramas"
 #define CORE_OPTION_NAME_DELAY_FRAME_SWAPPING_INFO_0_ES "Ideal para evitar parpadeos constantes o vídeos con fallos gráficos. No se recomienda su uso en plataformas lentas."
 #define CORE_OPTION_NAME_DETECT_VSYNC_SWAP_INTERVAL_LABEL_ES "Detectar cambios en la frecuencia de actualización"
-#define CORE_OPTION_NAME_DETECT_VSYNC_SWAP_INTERVAL_INFO_0_ES "Informa en el front-end cuando cambie la frecuencia de actualización interna (p. ej.: de 60 a 30 FPS). Mejora la cadencia de fotogramas en aquellos juegos que se ejecuten a 30 o 20 FPS fijos, pero esta opción debería desactivarse en aquellos juegos con frecuencias de fotogramas desbloqueadas (es decir, inestables, p. ej.: Ecco the Dolphin, Unreal Tournament...). NOTA: esta opción no estará disponible si se activa Omisión automática de fotogramas."
+#define CORE_OPTION_NAME_DETECT_VSYNC_SWAP_INTERVAL_INFO_0_ES "Informa en el front-end cuando cambie la frecuencia de actualización interna (p. ej.: de 60 a 30 FPS). Mejora el ritmo de fotogramas en aquellos juegos que se ejecuten a 30 o 20 FPS fijos, pero esta opción debería desactivarse en aquellos juegos con frecuencias de fotogramas desbloqueadas (es decir, inestables, p. ej.: Ecco the Dolphin, Unreal Tournament...). NOTA: esta opción no estará disponible si se activa Omisión automática de fotogramas."
 #define CORE_OPTION_NAME_PVR2_FILTERING_LABEL_ES "Filtro de posprocesamiento del PowerVR2"
 #define CORE_OPTION_NAME_PVR2_FILTERING_INFO_0_ES "Posprocesa la imagen renderizada para simular los efectos dedicados de la GPU PowerVR2 y las señales de vídeo analógico."
 #define CORE_OPTION_NAME_TEXUPSCALE_LABEL_ES "Reescalado de texturas (xBRZ)"
-#define CORE_OPTION_NAME_TEXUPSCALE_INFO_0_ES "Mejora los gráficos 2D de corte «pixel art» dibujado a mano. Utilizar solo con juegos en 2D pixelado."
-#define OPTION_VAL_2_O27_ES NULL
-#define OPTION_VAL_4_ES NULL
-#define OPTION_VAL_6_ES NULL
+#define CORE_OPTION_NAME_TEXUPSCALE_INFO_0_ES "Mejora los gráficos 2D de corte pixel art dibujado a mano. Utilizar solo con juegos en 2D pixelado."
+#define OPTION_VAL_2_O27_ES "× 2"
+#define OPTION_VAL_4_ES "× 4"
+#define OPTION_VAL_6_ES "× 6"
 #define CORE_OPTION_NAME_TEXUPSCALE_MAX_FILTERED_TEXTURE_SIZE_LABEL_ES "Tamaño máximo del escalado de texturas"
 #define CORE_OPTION_NAME_TEXUPSCALE_MAX_FILTERED_TEXTURE_SIZE_INFO_0_ES "Selecciona un tamaño máximo para el escalado de texturas. Si el tamaño de una textura es superior al valor seleccionado, no se reescalará."
 #define CORE_OPTION_NAME_NATIVE_DEPTH_INTERPOLATION_LABEL_ES "Interpolación nativa de profundidad"
@@ -29829,7 +29829,7 @@ struct retro_core_options_v2 options_eo = {
 #define CORE_OPTION_NAME_THREADED_RENDERING_LABEL_ES "Renderizado multihilo"
 #define CORE_OPTION_NAME_THREADED_RENDERING_INFO_0_ES "Ejecuta la GPU y la CPU en hilos distintos. Muy recomendado."
 #define CORE_OPTION_NAME_AUTO_SKIP_FRAME_LABEL_ES "Omisión automática de fotogramas"
-#define CORE_OPTION_NAME_AUTO_SKIP_FRAME_INFO_0_ES "Omite fotogramas de forma automática cuando el emulador se esté ejecutando lentamente. Nota: este ajuste solo surtirá efecto cuando la opción «Renderizado multihilo» esté activada."
+#define CORE_OPTION_NAME_AUTO_SKIP_FRAME_INFO_0_ES "Omite fotogramas de forma automática cuando el emulador se esté ejecutando lentamente. Nota: este ajuste solo se aplicará cuando el renderizado multihilo esté activado."
 #define OPTION_VAL_SOME_ES NULL
 #define OPTION_VAL_MORE_ES "Valor máximo"
 #define CORE_OPTION_NAME_FRAME_SKIPPING_LABEL_ES "Omisión de fotogramas"
@@ -29886,11 +29886,11 @@ struct retro_core_options_v2 options_eo = {
 #define OPTION_VAL_490_ES "490 MHz"
 #define OPTION_VAL_500_ES "500 MHz"
 #define CORE_OPTION_NAME_CUSTOM_TEXTURES_LABEL_ES "Cargar texturas personalizadas"
-#define CORE_OPTION_NAME_CUSTOM_TEXTURES_INFO_0_ES "Carga las texturas personalizadas que se encuentren en la carpeta «system/dc/textures/<id-del-juego>/»."
+#define CORE_OPTION_NAME_CUSTOM_TEXTURES_INFO_0_ES "Carga las texturas personalizadas que se encuentren en la carpeta \"system/dc/textures/<id-del-juego>/\"."
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_LABEL_ES "Precargar texturas personalizadas"
 #define CORE_OPTION_NAME_PRELOAD_CUSTOM_TEXTURES_INFO_0_ES "Carga las texturas personalizadas al ejecutar un juego. Podría mejorar el rendimiento, pero aumentará el consumo de memoria."
 #define CORE_OPTION_NAME_DUMP_TEXTURES_LABEL_ES "Volcar texturas"
-#define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_ES "Cada vez que aparezca una textura nueva en el juego, se guardará en formato .PNG dentro de la carpeta «system/dc/texdump/<id-del-juego>/»."
+#define CORE_OPTION_NAME_DUMP_TEXTURES_INFO_0_ES "Cada vez que aparezca una textura nueva en el juego, se guardará en formato .PNG dentro de la carpeta \"system/dc/texdump/<id-del-juego>/\"."
 #define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_LABEL_ES "Omitir vídeos y texturas animadas"
 #define CORE_OPTION_NAME_DUMP_UNIQUE_TEXTURES_INFO_0_ES "Omite el volcado de vídeos (formato YUV) y de texturas que ya hayan sido actualizadas."
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_LABEL_ES "Volcar texturas ya reemplazadas"
@@ -29909,9 +29909,9 @@ struct retro_core_options_v2 options_eo = {
 #define CORE_OPTION_NAME_DIGITAL_TRIGGERS_LABEL_ES "Gatillos digitales"
 #define CORE_OPTION_NAME_DIGITAL_TRIGGERS_INFO_0_ES "Al activar esta opción, los gatillos funcionarán como botones normales, lo que significa que se procesarán como o pulsados por completo o sin pulsar, sin término medio."
 #define CORE_OPTION_NAME_NETWORK_OUTPUT_LABEL_ES "Transmitir salidas digitales"
-#define CORE_OPTION_NAME_NETWORK_OUTPUT_INFO_0_ES "Transmite las salidas digitales y el estado de la vibración al puerto TCP 8000. Compatible con la opción de MAME «-output network»."
-#define CORE_OPTION_NAME_SHOW_LIGHTGUN_SETTINGS_LABEL_ES "Mostrar ajustes de las pistolas de luz"
-#define CORE_OPTION_NAME_SHOW_LIGHTGUN_SETTINGS_INFO_0_ES "Permite configurar los puntos de mira de las pistolas de luz. NOTA: es necesario salir y volver a entrar del menú rápido para que el cambio surta efecto."
+#define CORE_OPTION_NAME_NETWORK_OUTPUT_INFO_0_ES "Transmite las salidas digitales y el estado de la vibración al puerto TCP 8000. Compatible con la opción de MAME \"-output network\"."
+#define CORE_OPTION_NAME_SHOW_LIGHTGUN_SETTINGS_LABEL_ES "Mostrar ajustes de lightguns"
+#define CORE_OPTION_NAME_SHOW_LIGHTGUN_SETTINGS_INFO_0_ES "Permite configurar los puntos de mira de las lightguns. NOTA: es necesario salir y volver a entrar del menú rápido para que el cambio surta efecto."
 #define CORE_OPTION_NAME_LIGHTGUN_CROSSHAIR_SIZE_SCALING_LABEL_ES "Escala del punto de mira de la pistola"
 #define OPTION_VAL_50_ES "50 %"
 #define OPTION_VAL_60_ES "60 %"
@@ -29969,7 +29969,7 @@ struct retro_core_options_v2 options_eo = {
 #define CORE_OPTION_NAME_DEVICE_PORT4_SLOT2_INFO_0_ES "Selecciona el dispositivo conectado al puerto de expansión D2 (puerto de mando D, ranura 2)."
 #define CORE_OPTION_NAME_PER_CONTENT_VMUS_LABEL_ES "Separar Visual Memory (VMU) por juego"
 #define CORE_OPTION_NAME_PER_CONTENT_VMUS_LABEL_CAT_ES "VMUs individuales para cada juego"
-#define CORE_OPTION_NAME_PER_CONTENT_VMUS_INFO_0_ES "Al desactivar esta opción, todos los juegos compartirán ocho archivos de guardado de VMU (A1/A2/B1/B2/C1/C2/D1/D2) que se encontrarán en la carpeta del sistema de RetroArch.\nEl ajuste «VMU A1» creará un archivo único de la VMU A1 en la carpeta de guardados de RetroArch para cada juego que se ejecute.\n«Todas las VMU» creará ocho archivos VMU únicos (A1/A2/B1/B2/C1/C2/D1/D2) para cada juego que se ejecute."
+#define CORE_OPTION_NAME_PER_CONTENT_VMUS_INFO_0_ES "Al desactivar esta opción, todos los juegos compartirán ocho archivos de guardado de VMU (A1/A2/B1/B2/C1/C2/D1/D2) que se encontrarán en la carpeta del sistema de RetroArch.\nEl ajuste VMU A1 creará un archivo único de la VMU A1 en la carpeta de guardados de RetroArch para cada juego que se ejecute.\nTodas las VMU creará ocho archivos VMU únicos (A1/A2/B1/B2/C1/C2/D1/D2) para cada juego que se ejecute."
 #define OPTION_VAL_VMU_A1_ES NULL
 #define OPTION_VAL_ALL_VMUS_ES "Todas las VMUs"
 #define CORE_OPTION_NAME_VMU_SOUND_LABEL_ES "Sonidos de las Visual Memory (VMU)"
@@ -42412,12 +42412,12 @@ struct retro_core_options_v2 options_gl = {
 #define CATEGORY_EXPANSIONS_INFO_0_HE NULL
 #define CATEGORY_VMU_LABEL_HE NULL
 #define CATEGORY_VMU_INFO_0_HE NULL
-#define CORE_OPTION_NAME_REGION_LABEL_HE NULL
+#define CORE_OPTION_NAME_REGION_LABEL_HE "אזור"
 #define OPTION_VAL_JAPAN_HE NULL
 #define OPTION_VAL_USA_HE NULL
 #define OPTION_VAL_EUROPE_HE NULL
-#define OPTION_VAL_DEFAULT_HE NULL
-#define CORE_OPTION_NAME_LANGUAGE_LABEL_HE NULL
+#define OPTION_VAL_DEFAULT_HE "ברירת מחדל"
+#define CORE_OPTION_NAME_LANGUAGE_LABEL_HE "שפה"
 #define CORE_OPTION_NAME_LANGUAGE_INFO_0_HE NULL
 #define OPTION_VAL_JAPANESE_HE NULL
 #define OPTION_VAL_ENGLISH_HE NULL
@@ -42480,7 +42480,7 @@ struct retro_core_options_v2 options_gl = {
 #define OPTION_VAL_PAL_HE NULL
 #define OPTION_VAL_PAL_N_HE NULL
 #define OPTION_VAL_PAL_M_HE NULL
-#define CORE_OPTION_NAME_SCREEN_ROTATION_LABEL_HE NULL
+#define CORE_OPTION_NAME_SCREEN_ROTATION_LABEL_HE "כיוון מסך"
 #define OPTION_VAL_HORIZONTAL_HE NULL
 #define OPTION_VAL_VERTICAL_HE NULL
 #define CORE_OPTION_NAME_ALPHA_SORTING_LABEL_HE NULL
@@ -42532,7 +42532,7 @@ struct retro_core_options_v2 options_gl = {
 #define CORE_OPTION_NAME_THREADED_RENDERING_INFO_0_HE NULL
 #define CORE_OPTION_NAME_AUTO_SKIP_FRAME_LABEL_HE NULL
 #define CORE_OPTION_NAME_AUTO_SKIP_FRAME_INFO_0_HE NULL
-#define OPTION_VAL_SOME_HE NULL
+#define OPTION_VAL_SOME_HE "רגיל"
 #define OPTION_VAL_MORE_HE NULL
 #define CORE_OPTION_NAME_FRAME_SKIPPING_LABEL_HE NULL
 #define CORE_OPTION_NAME_FRAME_SKIPPING_INFO_0_HE NULL
@@ -42643,9 +42643,9 @@ struct retro_core_options_v2 options_gl = {
 #define OPTION_VAL_300_O48_HE NULL
 #define CORE_OPTION_NAME_LIGHTGUN1_CROSSHAIR_LABEL_HE NULL
 #define OPTION_VAL_WHITE_HE NULL
-#define OPTION_VAL_RED_HE NULL
-#define OPTION_VAL_GREEN_HE NULL
-#define OPTION_VAL_BLUE_HE NULL
+#define OPTION_VAL_RED_HE "אדום"
+#define OPTION_VAL_GREEN_HE "ירוק"
+#define OPTION_VAL_BLUE_HE "כחול"
 #define CORE_OPTION_NAME_LIGHTGUN2_CROSSHAIR_LABEL_HE NULL
 #define CORE_OPTION_NAME_LIGHTGUN3_CROSSHAIR_LABEL_HE NULL
 #define CORE_OPTION_NAME_LIGHTGUN4_CROSSHAIR_LABEL_HE NULL
@@ -42654,7 +42654,7 @@ struct retro_core_options_v2 options_gl = {
 #define OPTION_VAL_VMU_HE NULL
 #define OPTION_VAL_PURUPURU_HE NULL
 #define OPTION_VAL_DREAMPOTATO_HE NULL
-#define OPTION_VAL_NONE_HE NULL
+#define OPTION_VAL_NONE_HE "ללא"
 #define CORE_OPTION_NAME_DEVICE_PORT1_SLOT2_LABEL_HE NULL
 #define CORE_OPTION_NAME_DEVICE_PORT1_SLOT2_INFO_0_HE NULL
 #define CORE_OPTION_NAME_DEVICE_PORT2_SLOT1_LABEL_HE NULL
@@ -42704,7 +42704,7 @@ struct retro_core_options_v2 options_gl = {
 #define OPTION_VAL_LIGHT_CYAN_10_HE NULL
 #define OPTION_VAL_PURPLE_12_HE NULL
 #define OPTION_VAL_LIGHT_PURPLE_13_HE NULL
-#define OPTION_VAL_YELLOW_14_HE NULL
+#define OPTION_VAL_YELLOW_14_HE "צהוב"
 #define OPTION_VAL_GRAY_15_HE NULL
 #define OPTION_VAL_LIGHT_PURPLE_2_16_HE NULL
 #define OPTION_VAL_LIGHT_GREEN_2_17_HE NULL
@@ -76384,7 +76384,7 @@ struct retro_core_options_v2 options_sr = {
 #define OPTION_VAL_1_SV "Tvinga Närmsta granne"
 #define OPTION_VAL_2_SV "Tvinga Linjär"
 #define CORE_OPTION_NAME_DELAY_FRAME_SWAPPING_LABEL_SV "Fördröj bildrutebyte"
-#define CORE_OPTION_NAME_DELAY_FRAME_SWAPPING_INFO_0_SV "Användbart för att undvika blinkande skärmar eller glitchiga videor. Rekommenderas inte på långsamma plattformar."
+#define CORE_OPTION_NAME_DELAY_FRAME_SWAPPING_INFO_0_SV "Användbart för att undvika blinkande skärmar eller störningsfyllda videor. Rekommenderas inte på långsamma plattformar."
 #define CORE_OPTION_NAME_DETECT_VSYNC_SWAP_INTERVAL_LABEL_SV "Upptäck ändringar i bildhastighet"
 #define CORE_OPTION_NAME_DETECT_VSYNC_SWAP_INTERVAL_INFO_0_SV "Meddela gränssnittet när den interna bildrutefrekvensen ändras (till exempel från 60 fps till 30 fps). Förbättrar taktningen av bildfrekvensen i spel som körs med en låst hastighet på 30 fps eller 20 fps, men bör vara inaktiverad för spel med upplåsta (ostadiga) bildrutefrekvenser (till exempel Ecco the Dolphin, Unreal Tournament). Observera!: Ej tillgänglig när \"Auto Skip Frame\" är aktiverad."
 #define CORE_OPTION_NAME_PVR2_FILTERING_LABEL_SV "PowerVR2 Efterbehandlingsfilter"
@@ -76415,7 +76415,7 @@ struct retro_core_options_v2 options_sr = {
 #define CORE_OPTION_NAME_GDROM_FAST_LOADING_LABEL_SV "GD-ROM Snabbladdning (felaktig)"
 #define CORE_OPTION_NAME_GDROM_FAST_LOADING_INFO_0_SV "Ökar hastigheten på GD-ROM laddningen."
 #define CORE_OPTION_NAME_DC_32MB_MOD_LABEL_SV "\"Dreamcast 32MB RAM-modifikation\""
-#define CORE_OPTION_NAME_DC_32MB_MOD_INFO_0_SV "Aktiverar 32MB RAM-modifikation för Dreamcast. Kan påverka kompatibiliteten."
+#define CORE_OPTION_NAME_DC_32MB_MOD_INFO_0_SV "Aktiverar 32 MB RAM-modifikation för Dreamcast, vilket kan påverka kompatibiliteten"
 #define CORE_OPTION_NAME_SH4CLOCK_LABEL_SV "SH4 CPU under/överklockning"
 #define CORE_OPTION_NAME_SH4CLOCK_INFO_0_SV "Ändra SH4 huvud-CPU-klockan från standarden 200 MHz. Att sänka klockfrekvensen kan hjälpa på långsamma plattformar. Att öka klockfrekvensen kan öka bildhastigheten i vissa spel. Använd på egen risk."
 #define OPTION_VAL_100_SV NULL
@@ -76471,12 +76471,12 @@ struct retro_core_options_v2 options_sr = {
 #define CORE_OPTION_NAME_DUMP_REPLACED_TEXTURES_INFO_0_SV "Dumpa alltid texturer som redan ersatts av anpassade texturer."
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_LABEL_SV "Analoga spakens dödzon"
 #define CORE_OPTION_NAME_ANALOG_STICK_DEADZONE_INFO_0_SV "Välj hur långt du måste flytta på den analoga spaken innan den börjar bearbetas."
-#define OPTION_VAL_0_SV NULL
-#define OPTION_VAL_5_SV NULL
-#define OPTION_VAL_10_SV NULL
+#define OPTION_VAL_0_SV "0 %"
+#define OPTION_VAL_5_SV "5 %"
+#define OPTION_VAL_10_SV "10 %"
 #define OPTION_VAL_15_SV NULL
 #define OPTION_VAL_20_SV NULL
-#define OPTION_VAL_25_SV NULL
+#define OPTION_VAL_25_SV "25 %"
 #define OPTION_VAL_30_SV NULL
 #define CORE_OPTION_NAME_TRIGGER_DEADZONE_LABEL_SV "Dödläge för avtryckare"
 #define CORE_OPTION_NAME_TRIGGER_DEADZONE_INFO_0_SV "Välj hur mycket du måste trycka på avtryckaren innan den börjar bearbetas."
@@ -76542,7 +76542,7 @@ struct retro_core_options_v2 options_sr = {
 #define CORE_OPTION_NAME_DEVICE_PORT4_SLOT2_LABEL_SV "Enhet i expansionsfack D2"
 #define CORE_OPTION_NAME_DEVICE_PORT4_SLOT2_INFO_0_SV "Välj den enhet som är ansluten till expansionsfack D2 (port D plats 2)."
 #define CORE_OPTION_NAME_PER_CONTENT_VMUS_LABEL_SV "Per-spel visningsminnesenheter/systemer (VMU)"
-#define CORE_OPTION_NAME_PER_CONTENT_VMUS_LABEL_CAT_SV "Per-spel VMU:er"
+#define CORE_OPTION_NAME_PER_CONTENT_VMUS_LABEL_CAT_SV "VMU:er per spel"
 #define CORE_OPTION_NAME_PER_CONTENT_VMUS_INFO_0_SV "När den är inaktiverad delar alla spel upp till 8 VMU-sparfiler (A1/A2/B1/B2/C1/C2/D1/D2) som finns i RetroArchs systemmapp.\nInställningen ”VMU A1” skapar en unik VMU-fil ”A1” i RetroArchs sparmapp för varje spel som startas.\nInställningen ”Alla VMU: er” skapar upp till 8 unika VMU-filer (A1/A2/B1/B2/C1/C2/D1/D2) för varje spel som startas."
 #define OPTION_VAL_VMU_A1_SV NULL
 #define OPTION_VAL_ALL_VMUS_SV "Alla VMU:er"

@@ -733,7 +733,8 @@ void DX11Renderer::displayFramebuffer()
 			std::swap(w, h);
 		}
 	}
-	deviceContext->OMSetBlendState(blendStates.getState(false), nullptr, 0xffffffff);
+	// Preserve the cleared alpha for video-routing receivers that blend frames.
+	deviceContext->OMSetBlendState(blendStates.getState(false, 0, 0, false, false), nullptr, 0xffffffff);
 	if (fullPresentation) {
 		x = -1.f;
 		y = 1.f - (getScaledTopInset() + presentationHeight) * 2.f / settings.display.height;
@@ -1663,6 +1664,7 @@ void DX11Renderer::renderVideoRouting()
 			deviceContext->OMSetRenderTargets(1, &vrScaledRenderTarget.get(), nullptr);
 			deviceContext->RSSetViewports(1, &scaledViewPort);
 			deviceContext->CopyResource(vrStagingTexture.get(), backBufferTexture);
+			deviceContext->OMSetBlendState(blendStates.getState(false), nullptr, 0xffffffff);
 			quad->draw(vrStagingTextureSRV, samplers->getSampler(true));
 			os_VideoRoutingPublishFrameTexture(vrScaledTexture);
 

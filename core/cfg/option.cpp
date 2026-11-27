@@ -172,6 +172,7 @@ Option<int> AnisotropicFiltering("rend.AnisotropicFiltering", 1);
 Option<int> TextureFiltering("rend.TextureFiltering", 0); // Default
 Option<int> SampleTextureFilter("rend.SampleTextureFilter", 0);
 Option<bool> ThreadedRendering("rend.ThreadedRendering", true);
+Option<bool> VblankPacing("");
 Option<bool> DupeFrames("rend.DupeFrames", false);
 Option<int> PerPixelLayers("rend.PerPixelLayers", 32);
 #ifdef TARGET_UWP
