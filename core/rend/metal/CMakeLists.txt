@@ -231,7 +231,7 @@ target_include_directories(metal_context_presentation_smoke PRIVATE
     "${PROJECT_SOURCE_DIR}/core" "${PROJECT_SOURCE_DIR}/core/deps"
     "${PROJECT_SOURCE_DIR}/core/deps/glm" "${PROJECT_SOURCE_DIR}/core/deps/imgui"
     "${PROJECT_SOURCE_DIR}/core/deps/nowide/include")
-target_compile_definitions(metal_context_presentation_smoke PRIVATE USE_SDL VIDEO_ROUTING TARGET_MAC)
+target_compile_definitions(metal_context_presentation_smoke PRIVATE USE_SDL VIDEO_ROUTING TARGET_MAC METAL_FX_TEST_READBACK)
 target_compile_options(metal_context_presentation_smoke PRIVATE
     -fobjc-arc -ffunction-sections -fdata-sections)
 target_link_options(metal_context_presentation_smoke PRIVATE -Wl,-dead_strip)

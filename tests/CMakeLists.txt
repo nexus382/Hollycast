@@ -23,6 +23,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/serialize_test.cpp
         src/LibretroHelpersTest.cpp
         src/MapleGgpoTest.cpp
+        src/audio/AlsaCaptureTest.cpp
         src/GgpoAdaptiveDelayTest.cpp
         src/GgpoResumeBarrierTest.cpp
         src/SessionStateTest.cpp
@@ -44,6 +45,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/hw/modem/v42bisTest.cpp
         src/network/NetworkServiceTest.cpp
         src/hw/sh4/modules/TimerTest.cpp
+        src/hw/NaomiRomReadTest.cpp
         src/imgread/ChdTest.cpp
         src/imgread/CueTest.cpp
         src/imgread/GdiTest.cpp
@@ -58,6 +60,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/input/MouseTest.cpp
         src/oslib/I18nTest.cpp
         src/oslib/DirectoryTest.cpp
+        src/oslib/SavestateWriteTest.cpp
         src/rend/SampleTextureFilterTest.cpp
         src/rend/TextureAtlasTest.cpp
         src/rend/CustomTextureDumpTest.cpp
@@ -77,6 +80,22 @@ target_sources(${PROJECT_NAME} PRIVATE
 
 if(LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE ../core/ui/dcnet_status.cpp)
+elseif(NOT ANDROID AND NOT IOS AND NOT NINTENDO_SWITCH AND NOT WINDOWS_STORE)
+    # The desktop test executable can install a frontend VFS for this suite.
+    # With no frontend installed, AllStorage continues to use native files.
+    set(storage_test_source ${CMAKE_CURRENT_SOURCE_DIR}/src/LibretroStorageTest.cpp)
+    set(vfs_backend_source ${PROJECT_SOURCE_DIR}/shell/libretro/storage.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE ${storage_test_source} ${vfs_backend_source} ${libretro_vfs_sources})
+    set_property(SOURCE ${storage_test_source} ${vfs_backend_source} ${libretro_vfs_sources}
+        DIRECTORY ${PROJECT_SOURCE_DIR} APPEND PROPERTY INCLUDE_DIRECTORIES ${PROJECT_SOURCE_DIR}/core/deps/libretro-common/include)
+    set_property(SOURCE ${PROJECT_SOURCE_DIR}/core/oslib/storage.cpp ${vfs_backend_source} ${libretro_vfs_sources}
+        DIRECTORY ${PROJECT_SOURCE_DIR} APPEND PROPERTY COMPILE_DEFINITIONS LIBRETRO)
+    if(ENABLE_CTEST)
+        # Build with: cmake --build <build-dir> --target Hollycast
+        # Run with: ctest --test-dir <build-dir> -R '^libretro_storage$' --output-on-failure
+        add_test(NAME libretro_storage
+            COMMAND $<TARGET_FILE:${PROJECT_NAME}> --gtest_filter=LibretroStorageTest.*)
+    endif()
 endif()
 
 if(USE_HIKARU)
@@ -100,6 +119,7 @@ if(NOT LIBRETRO)
     target_sources(${PROJECT_NAME} PRIVATE
         src/RewindTest.cpp
         src/util/RewindBufferTest.cpp
+        src/hw/VmuMigrationTest.cpp
         src/oslib/VmuPathTest.cpp
         src/DcnetProbeTest.cpp
         src/network/HttpTimeoutTest.cpp

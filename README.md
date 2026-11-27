@@ -54,9 +54,11 @@ Releases tagged `-dev` are built from the `dev` branch and contain the newest, l
 
 Everything Flycast offers is still included: the full Dreamcast, Naomi, Naomi 2 and Atomiswave core, RetroAchievements, upscaling and widescreen options, and the libretro core.
 
-An optional desktop OpenGL backend adds experimental **Sega Hikaru / Air Trix**
-support. It is disabled by default and still has graphics and audio limitations.
-See [Hikaru setup and compatibility](docs/Hikaru.md) before enabling `USE_HIKARU`.
+Experimental **Sega Hikaru / Air Trix** support is enabled by default in eligible
+standalone builds for Windows, Android, Linux and macOS. Building with Hikaru
+requires OpenGL 3.2 or OpenGL ES 3.0 support. At runtime, Hikaru can use OpenGL,
+OpenGL ES, Vulkan, Metal or Direct3D 11, depending on the platform. See
+[Hikaru setup and compatibility](docs/Hikaru.md) for known graphics and audio limitations.
 
 ## Why a fork?
 

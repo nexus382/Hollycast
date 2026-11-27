@@ -23,6 +23,8 @@
 #include "oslib/storage.h"
 #include "oslib/i18n.h"
 #include <sstream>
+#include <limits>
+#include <optional>
 
 static u32 getSectorSize(const std::string& type) {
 		if (type == "AUDIO")
@@ -43,6 +45,31 @@ static u32 getSectorSize(const std::string& type) {
 			return 2352;	// CDI Mode2 Data
 		else
 			return 0;
+}
+
+struct CueTrackLayout
+{
+	u32 sectorSize = 0;
+	std::string type;
+	std::string isrc;
+	std::optional<u32> index00;
+	std::optional<u32> index01;
+	u32 pregap = 0;
+	u64 index00ByteOffset = 0;
+	u64 index01ByteOffset = 0;
+};
+
+static u32 parseCueIndex(const std::string& time)
+{
+	int minutes = 0, seconds = 0, frames = 0;
+	char extra = 0;
+	if (sscanf(time.c_str(), "%d:%d:%d%c", &minutes, &seconds, &frames, &extra) != 3
+			|| minutes < 0 || seconds < 0 || seconds >= 60 || frames < 0 || frames >= 75)
+		throw FlycastException(i18n::T("Invalid INDEX in CUE file"));
+	const u64 result = (u64)minutes * 60 * 75 + (u64)seconds * 75 + frames;
+	if (result > std::numeric_limits<u32>::max())
+		throw FlycastException(i18n::T("Invalid INDEX in CUE file"));
+	return (u32)result;
 }
 
 Disc* cue_parse(const char* file, std::vector<u8> *digest)
@@ -81,19 +108,113 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 	MD5Sum md5;
 
 	std::unique_ptr<Disc> disc = std::make_unique<Disc>();
-	u32 currentFAD = 150;
+	u64 currentFAD = 150;
 	// SESSION context
 	u32 session_number = 0;
 	bool firstTrackOfSession = false;
 	// FILE context
 	std::string track_filename;
-	u32 fileStartFAD = 0;
+	u64 fileStartFAD = 0;
+	std::vector<CueTrackLayout> fileTracks;
 	// TRACK context
 	u32 track_number = -1;
 	std::string track_type;
 	u32 track_secsize = 0;
 	std::string track_isrc;
 	u32 pregap = 0;
+
+	auto checkedAdd = [](u64 lhs, u64 rhs) {
+		if (rhs > std::numeric_limits<u64>::max() - lhs)
+			throw FlycastException(i18n::T("CUE file layout is too large"));
+		return lhs + rhs;
+	};
+	auto checkedMultiply = [](u64 lhs, u64 rhs) {
+		if (lhs != 0 && rhs > std::numeric_limits<u64>::max() / lhs)
+			throw FlycastException(i18n::T("CUE file layout is too large"));
+		return lhs * rhs;
+	};
+	auto finalizeFile = [&]() {
+		if (fileTracks.empty())
+			return;
+		for (const CueTrackLayout& track : fileTracks)
+			if (!track.index01.has_value())
+				throw FlycastException(i18n::T("Invalid CUE file"));
+
+		CueTrackLayout& firstTrack = fileTracks.front();
+		firstTrack.index01ByteOffset = checkedMultiply(*firstTrack.index01, firstTrack.sectorSize);
+		if (firstTrack.index00.has_value())
+			firstTrack.index00ByteOffset = checkedMultiply(*firstTrack.index00, firstTrack.sectorSize);
+		for (size_t i = 1; i < fileTracks.size(); i++) {
+			CueTrackLayout& previous = fileTracks[i - 1];
+			CueTrackLayout& track = fileTracks[i];
+			const u32 boundary = track.index00.value_or(*track.index01);
+			if (boundary < *previous.index01 || *track.index01 < boundary)
+				throw FlycastException(i18n::T("Invalid or out-of-range INDEX in CUE file"));
+			u64 offset = checkedAdd(previous.index01ByteOffset,
+					checkedMultiply(boundary - *previous.index01, previous.sectorSize));
+			track.index00ByteOffset = offset;
+			if (track.index00.has_value())
+				offset = checkedAdd(offset, checkedMultiply(*track.index01 - boundary, track.sectorSize));
+			track.index01ByteOffset = offset;
+		}
+
+		const u64 fileSize = fileInfo.size;
+		const CueTrackLayout& lastTrack = fileTracks.back();
+		// Existing TOC-only CUE fixtures (and some placeholder images) have
+		// empty FILEs. Keep their advertised INDEX positions; reads still fail
+		// naturally if a caller tries to access those sectors.
+		if (fileSize != 0 && lastTrack.index01ByteOffset > fileSize)
+			throw FlycastException(i18n::T("INDEX is outside the CUE track file"));
+		const u64 remainingBytes = fileSize == 0 ? 0 : fileSize - lastTrack.index01ByteOffset;
+		if (remainingBytes % lastTrack.sectorSize != 0)
+			WARN_LOG(GDROM, "Warning: Size of track %s is not multiple of sector size %d", track_filename.c_str(), lastTrack.sectorSize);
+		u64 syntheticPregapFrames = 0;
+		for (const CueTrackLayout& track : fileTracks)
+			syntheticPregapFrames = checkedAdd(syntheticPregapFrames, track.pregap);
+		const u64 fileFrames = checkedAdd(fileSize == 0 ? 0 : checkedAdd(*lastTrack.index01, remainingBytes / lastTrack.sectorSize),
+				syntheticPregapFrames);
+		const u64 fileEndFAD = checkedAdd(fileStartFAD, fileFrames);
+		if (fileEndFAD == 0 || fileEndFAD > std::numeric_limits<u32>::max())
+			throw FlycastException(i18n::T("CUE file layout exceeds the supported FAD range"));
+
+		u64 priorSyntheticPregap = 0;
+		for (CueTrackLayout& layout : fileTracks) {
+			const u64 trackStartFAD = checkedAdd(fileStartFAD,
+					checkedAdd(*layout.index01, checkedAdd(priorSyntheticPregap, layout.pregap)));
+			const u64 storedPregapFrames = layout.index00.has_value() ? *layout.index01 - *layout.index00 : 0;
+			const u64 readStartFAD = trackStartFAD - storedPregapFrames;
+			const u64 trackEndFAD = fileEndFAD - 1;
+			if (trackStartFAD > std::numeric_limits<u32>::max() || trackEndFAD > std::numeric_limits<u32>::max()
+					|| readStartFAD > std::numeric_limits<u32>::max()
+					|| layout.index01ByteOffset > (u64)std::numeric_limits<s64>::max()
+					|| layout.index00ByteOffset > (u64)std::numeric_limits<s64>::max())
+				throw FlycastException(i18n::T("CUE file layout exceeds the supported range"));
+
+			Track track;
+			track.StartFAD = (u32)trackStartFAD;
+			track.ReadStartFAD = layout.index00.has_value() ? (u32)readStartFAD : 0;
+			track.EndFAD = (u32)trackEndFAD;
+			track.CTRL = (layout.type == "AUDIO" || layout.type == "CDG") ? 0 : 4;
+			track.isrc = layout.isrc;
+			DEBUG_LOG(GDROM, "file[%zd] \"%s\": session %d type %s FAD:%d -> %d %s", disc->tracks.size() + 1, track_filename.c_str(),
+					session_number, layout.type.c_str(), track.StartFAD, track.EndFAD, track.isrc.empty() ? "" : ("ISRC " + track.isrc).c_str());
+			hostfs::File *trackFile = hostfs::storage().openFile(track_filename, "rb");
+			if (trackFile == nullptr)
+				throw FlycastException(strprintf(i18n::T("CUE file: cannot open track %s"), track_filename.c_str()));
+			const u64 byteOffset = layout.index00.has_value() ? layout.index00ByteOffset : layout.index01ByteOffset;
+			const u32 firstFAD = layout.index00.has_value() ? track.ReadStartFAD : track.StartFAD;
+			track.file = new RawTrackFile(trackFile, byteOffset, firstFAD, layout.sectorSize);
+			disc->tracks.push_back(track);
+			if (disc->tracks.size() >= 2) {
+				Track& previous = disc->tracks[disc->tracks.size() - 2];
+				const u32 pregapStartFAD = (u32)(readStartFAD - layout.pregap);
+				previous.EndFAD = std::min(previous.EndFAD, pregapStartFAD - 1);
+			}
+			priorSyntheticPregap = checkedAdd(priorSyntheticPregap, layout.pregap);
+		}
+		currentFAD = fileEndFAD;
+		fileTracks.clear();
+	};
 
 	std::string line;
 	while (std::getline(istream, line))
@@ -106,6 +227,8 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 		if (token == "REM")
 		{
 			cuesheet >> token;
+			if (token == "SESSION" || token == "HIGH-DENSITY" || token == "SINGLE-DENSITY")
+				finalizeFile();
 			if (token == "SESSION")
 			{
 				// Multi-session
@@ -118,13 +241,15 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 					session_number = cur_session;
 					if (session_number == 2) {
 						// session 1 lead-out: 01:30:00, session 2 lead-in: 01:00:00, pregap: 00:02:00
-						currentFAD += 6750 + 4500 + 150;
+						currentFAD = checkedAdd(currentFAD, 6750 + 4500 + 150);
+						if (currentFAD > std::numeric_limits<u32>::max())
+							throw FlycastException(i18n::T("CUE file layout exceeds the supported FAD range"));
 						firstTrackOfSession = true;
 					}
 
 					Session ses;
 					ses.FirstTrack = (u8)disc->tracks.size() + 1;
-					ses.StartFAD = currentFAD;
+					ses.StartFAD = (u32)currentFAD;
 					disc->sessions.push_back(ses);
 					DEBUG_LOG(GDROM, "session[%zd]: 1st track: %d FAD:%d", disc->sessions.size(), ses.FirstTrack, ses.StartFAD);
 				}
@@ -148,6 +273,7 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 			// Clear file context
 			track_filename.clear();
 			fileStartFAD = 0;
+			fileTracks.clear();
 			// Clear track context
 			track_number = -1;
 			track_type.clear();
@@ -156,6 +282,7 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 		}
 		else if (token == "FILE")
 		{
+			finalizeFile();
 			track_filename.clear();
 			char last;
 			do {
@@ -194,6 +321,7 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 			delete track_file;
 			fileInfo = hostfs::storage().getFileInfo(track_filename);
 			fileStartFAD = currentFAD;
+			fileTracks.clear();
 			// Clear track context
 			track_number = -1;
 			track_type.clear();
@@ -203,11 +331,12 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 		else if (token == "PREGAP")
 		{
 			cuesheet >> token;
-			int min = 0, sec = 0, frame = 0;
-			if (sscanf(token.c_str(), "%d:%d:%d", &min, &sec, &frame) == 3)
-				pregap = frame + 75 * (sec + 60 * min);
-			else
+			try {
+				pregap = parseCueIndex(token);
+			}
+			catch (const FlycastException&) {
 				throw FlycastException(i18n::T("Invalid PREGAP in CUE file"));
+			}
 		}
 		else if (token == "TRACK")
 		{
@@ -221,62 +350,49 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 				WARN_LOG(GDROM, "CUE parse error: Invalid track number %d", track_number);
 				throw FlycastException(i18n::T("Invalid CUE file"));
 			}
-			bool firstTrackOfFile = track_secsize == 0;
 			track_secsize = getSectorSize(track_type);
 			if (track_secsize == 0)
 				throw FlycastException(strprintf(i18n::T("CUE file: track has unknown sector type: %s"), track_type.c_str()));
-			// Can happen if multiple tracks with different sector sizes share the same file
-			if (fileInfo.size % track_secsize != 0)
-				WARN_LOG(GDROM, "Warning: Size of track %s is not multiple of sector size %d", track_filename.c_str(), track_secsize);
-			// FIXME This is wrong if tracks of different sector size share the same file
-			if (firstTrackOfFile)
-				currentFAD += fileInfo.size / track_secsize;
+			CueTrackLayout layout;
+			layout.sectorSize = track_secsize;
+			layout.type = track_type;
+			layout.isrc = track_isrc;
+			fileTracks.push_back(layout);
 		}
 		else if (token == "INDEX")
 		{
-			u32 index_num;
-			cuesheet >> index_num;
-			if (index_num == 1)
+			u32 index_num = std::numeric_limits<u32>::max();
+			if (!(cuesheet >> index_num) || !(cuesheet >> token))
+				throw FlycastException(i18n::T("Invalid INDEX in CUE file"));
+			if (fileTracks.empty())
+				throw FlycastException(i18n::T("INDEX without TRACK in CUE file"));
+			CueTrackLayout& layout = fileTracks.back();
+			const u32 indexFAD = parseCueIndex(token);
+			if (index_num == 0)
 			{
-				cuesheet >> token;
-				int indexFAD = 0;
-				int min = 0, sec = 0, frame = 0;
-				if (sscanf(token.c_str(), "%d:%d:%d", &min, &sec, &frame) == 3)
-					indexFAD = frame + 75 * (sec + 60 * min);
+				if (layout.index00.has_value() || layout.index01.has_value())
+					throw FlycastException(i18n::T("Invalid INDEX 00 in CUE file"));
+				layout.index00 = indexFAD;
+			}
+			else if (index_num == 1)
+			{
+				if (layout.index01.has_value() || (layout.index00.has_value() && indexFAD < *layout.index00))
+					throw FlycastException(i18n::T("Invalid INDEX 01 in CUE file"));
 				if (firstTrackOfSession && indexFAD > 0) {
 					// The session gap above already includes this track's pregap so don't
 					// count the sectors stored before INDEX 01 twice.
-					const u32 pregap = std::min(indexFAD, 150);
-					fileStartFAD -= pregap;
-					currentFAD -= pregap;
+					const u64 sessionPregap = std::min(indexFAD, 150u);
+					if (fileStartFAD < sessionPregap || currentFAD < sessionPregap)
+						throw FlycastException(i18n::T("Invalid session pregap in CUE file"));
+					fileStartFAD -= sessionPregap;
+					currentFAD -= sessionPregap;
 				}
 				firstTrackOfSession = false;
-				Track t;
-				t.StartFAD = fileStartFAD + indexFAD;
-				t.CTRL = (track_type == "AUDIO" || track_type == "CDG") ? 0 : 4;
-				t.EndFAD = currentFAD - 1;
-				t.isrc = track_isrc;
-
-				if (pregap > 0) 
-				{
-					t.StartFAD += pregap;
-					t.EndFAD += pregap;
-					pregap = 0; // reset pregap after track is added
-				}
-
-				DEBUG_LOG(GDROM, "file[%zd] \"%s\": session %d type %s FAD:%d -> %d %s", disc->tracks.size() + 1, track_filename.c_str(),
-						session_number, track_type.c_str(), t.StartFAD, t.EndFAD, t.isrc.empty() ? "" : ("ISRC " + t.isrc).c_str());
-				hostfs::File *track_file = hostfs::storage().openFile(track_filename, "rb");
-				if (track_file == nullptr)
-					throw FlycastException(strprintf(i18n::T("CUE file: cannot open track %s"), track_filename.c_str()));
-				t.file = new RawTrackFile(track_file, indexFAD * track_secsize, t.StartFAD, track_secsize);
-				disc->tracks.push_back(t);
-				if (disc->tracks.size() >= 2) {
-					Track& prevTrack = disc->tracks[disc->tracks.size() - 2];
-					prevTrack.EndFAD = std::min(prevTrack.EndFAD, t.StartFAD - 1);
-				}
+				layout.index01 = indexFAD;
+				layout.pregap = pregap;
+				pregap = 0;
 			}
-			else if (index_num != 0) {
+			else {
 				WARN_LOG(GDROM, "INDEX %02d not supported", index_num);
 				throw FlycastException(i18n::T("Invalid CUE file"));
 			}
@@ -288,8 +404,11 @@ Disc* cue_parse(const char* file, std::vector<u8> *digest)
 		else if (token == "ISRC")
 		{
 			cuesheet >> track_isrc;
+			if (!fileTracks.empty() && !fileTracks.back().index01.has_value())
+				fileTracks.back().isrc = track_isrc;
 		}
 	}
+	finalizeFile();
 	if (disc->tracks.empty())
 		throw FlycastException(i18n::Ts("CUE parse error: failed to parse or invalid file with 0 tracks"));
 	if (disc->tracks.size() > 99) {

@@ -57,7 +57,7 @@ public class HttpClient {
     }
 
     public int openUrl(String url_string, byte[][] content, String[] reqHeaderNames, String[] reqHeaderValues,
-                       String[][] respHeaderNames, String[][] respHeaderValues, int timeoutMs, long cancellationToken)
+                       String[][] respHeaderNames, String[][] respHeaderValues, int timeoutMs, long cancellationToken, long bodyLimit)
     {
         HttpURLConnection conn = null;
         Thread canceller = null;
@@ -106,6 +106,11 @@ public class HttpClient {
                     respHeaderNames[0] = keys.toArray(new String[keys.size()]);
                     respHeaderValues[0] = values.toArray(new String[values.size()]);
                 }
+                int declaredLength = conn.getContentLength();
+                if (bodyLimit >= 0 && declaredLength >= 0 && declaredLength > bodyLimit) {
+                    content[0] = new byte[0];
+                    return -2;
+                }
                 InputStream is = conn.getInputStream();
 
                 byte[] buffer = new byte[1024];
@@ -113,6 +118,11 @@ public class HttpClient {
 
                 ByteArrayOutputStream baos = new ByteArrayOutputStream();
                 while ((length = is.read(buffer)) > 0) {
+                    if (bodyLimit >= 0 && length > bodyLimit - baos.size()) {
+                        is.close();
+                        content[0] = new byte[0];
+                        return -2;
+                    }
                     baos.write(buffer, 0, length);
                 }
                 is.close();
@@ -125,6 +135,8 @@ public class HttpClient {
             Log.e("hollycast", "Malformed URL", e);
         } catch (IOException e) {
             Log.e("hollycast", "I/O error", e);
+            if (cancellationToken != 0 && isCancelled(cancellationToken))
+                return 499;
         } catch (SecurityException e) {
             Log.e("hollycast", "Security error", e);
         } catch (Throwable t) {

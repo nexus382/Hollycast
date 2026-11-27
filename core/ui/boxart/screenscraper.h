@@ -62,7 +62,7 @@ struct Account
 class Session
 {
 public:
-	using Transport = std::function<int(const std::string&, std::vector<u8>&, std::string&)>;
+	using Transport = http::LimitAwareTransport<const std::string&, std::vector<u8>&, std::string&>;
 	// Tests can exercise retry recovery without waiting for the production backoff.
 	explicit Session(Credentials credentials, Transport transport = {},
 		std::chrono::milliseconds retryDelay = std::chrono::minutes(1));
@@ -80,7 +80,8 @@ private:
 	enum class FailureType { Transport, InvalidResponse, InvalidJson };
 	static RequestType classifyRequest(const std::string& endpoint);
 	int request(const std::string& endpoint, const std::string& parameters,
-		std::vector<u8>& bytes, std::string& contentType, std::chrono::steady_clock::time_point& started);
+		std::vector<u8>& bytes, std::string& contentType, std::chrono::steady_clock::time_point& started,
+		size_t bodyLimit);
 	void requestSucceeded(std::chrono::steady_clock::time_point started);
 	void updateLimits(const json& response);
 	void fail(int code, RequestType requestType = RequestType::Other,

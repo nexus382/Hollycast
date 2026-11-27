@@ -10,9 +10,14 @@
 #include <array>
 #include <cctype>
 #include <ctime>
+#include <fstream>
+#include <iterator>
 #include <memory>
+#include <mutex>
 #include <string_view>
 #include <filesystem>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace {
 constexpr const char *metadataUrl = "https://gamesdb.launchbox-app.com/Metadata.zip";
@@ -156,7 +161,123 @@ void writeJson(const std::string& path, const json& data)
 		WARN_LOG(COMMON, "Cannot save LaunchBox cache: %s", path.c_str());
 	}
 }
+
+json mergeMatchEntry(const json& previous, const json& update)
+{
+	json merged = previous.is_object() ? previous : json::object();
+	if (!update.is_object()) return merged;
+	for (auto field = update.begin(); field != update.end(); ++field)
+		if (field.key() != "media") merged[field.key()] = field.value();
+	json media = merged.value("media", json::object());
+	if (!media.is_object()) media = json::object();
+	const json incomingMedia = update.value("media", json::object());
+	if (incomingMedia.is_object())
+	{
+		for (auto image = incomingMedia.begin(); image != incomingMedia.end(); ++image)
+		{
+			json imageData = image.value().is_object() ? image.value() : json::object();
+			const auto existing = media.find(image.key());
+			if (existing != media.end() && existing->is_object())
+			{
+				const std::string oldUrl = existing->value("url", "");
+				const std::string newUrl = imageData.value("url", "");
+				if (newUrl.empty()) imageData["url"] = oldUrl;
+				if (imageData.value("path", "").empty()
+						&& (newUrl.empty() || newUrl == oldUrl))
+					imageData["path"] = existing->value("path", "");
+			}
+			media[image.key()] = std::move(imageData);
+		}
+	}
+	merged["media"] = std::move(media);
+	return merged;
+}
+
+void writeAtomicText(const std::string& path, const std::string& text)
+{
+	const std::string temporary = path + ".tmp";
+	FILE *file = nowide::fopen(temporary.c_str(), "wb");
+	if (file == nullptr)
+		throw std::runtime_error("Cannot open LaunchBox match cache for writing: " + path);
+	const bool written = fwrite(text.data(), 1, text.size(), file) == text.size();
+	const bool flushed = fflush(file) == 0;
+	const bool closed = fclose(file) == 0;
+	if (!written || !flushed || !closed || flycast::rename(temporary.c_str(), path.c_str()) != 0)
+	{
+		const int error = errno;
+		nowide::remove(temporary.c_str());
+		throw std::runtime_error("Cannot publish LaunchBox match cache: " + path + " (" + std::to_string(error) + ")");
+	}
+}
+
+void truncateUpdateLog(const std::string& path)
+{
+	std::ofstream file(std::filesystem::u8path(path), std::ios::binary | std::ios::trunc);
+	if (!file) throw std::runtime_error("Cannot truncate LaunchBox match update log: " + path);
+	file.flush();
+	if (!file) throw std::runtime_error("Cannot flush LaunchBox match update log: " + path);
+	file.close();
+	if (!file) throw std::runtime_error("Cannot close LaunchBox match update log: " + path);
+}
+
+std::filesystem::file_type repairUpdateLog(const std::filesystem::path& path)
+{
+	std::error_code typeError;
+	const auto type = std::filesystem::status(path, typeError).type();
+	if (typeError && type != std::filesystem::file_type::not_found)
+		throw std::filesystem::filesystem_error("Cannot inspect LaunchBox match update log", path, typeError);
+	if (type != std::filesystem::file_type::regular)
+		return type;
+	std::ifstream file(path, std::ios::binary);
+	if (!file)
+		throw std::runtime_error("Cannot open LaunchBox match update log: " + path.u8string());
+	file.seekg(0, std::ios::end);
+	const std::streamoff size = file.tellg();
+	if (size < 0)
+		throw std::runtime_error("Cannot measure LaunchBox match update log: " + path.u8string());
+	if (size == 0) return type;
+	file.seekg(-1, std::ios::end);
+	char last = 0;
+	file.get(last);
+	if (last == '\n') return type;
+	constexpr std::streamoff chunkSize = 4096;
+	std::array<char, chunkSize> buffer{};
+	std::streamoff end = size;
+	std::streamoff validSize = 0;
+	while (end > 0)
+	{
+		const std::streamoff start = std::max<std::streamoff>(0, end - chunkSize);
+		const std::streamsize length = static_cast<std::streamsize>(end - start);
+		file.clear();
+		file.seekg(start, std::ios::beg);
+		file.read(buffer.data(), length);
+		if (file.gcount() != length)
+			throw std::runtime_error("Cannot read LaunchBox match update log: " + path.u8string());
+		for (std::streamoff i = length; i > 0; --i)
+			if (buffer[static_cast<size_t>(i - 1)] == '\n')
+			{
+				validSize = start + i;
+				end = 0;
+				break;
+			}
+		if (end != 0) end = start;
+	}
+	file.close();
+	std::filesystem::resize_file(path, validSize);
+	return type;
+}
 } // namespace
+
+struct LaunchBox::MatchCacheState
+{
+	std::mutex mutex;
+	json matches = json::object();
+	uint64_t sequence = 0;
+	uint64_t snapshotSequence = 0;
+	size_t bulkOwners = 0;
+	std::unordered_set<std::string> pendingKeys;
+	bool loaded = false;
+};
 
 std::string LaunchBoxCatalog::normalizeTitle(std::string title)
 {
@@ -361,6 +482,24 @@ std::string LaunchBoxCatalog::identity(const GameBoxart& item)
 	return std::string(item.arcade ? "arcade:" : "disc:") + id + ":" + std::to_string(item.region);
 }
 
+std::shared_ptr<LaunchBox::MatchCacheState> LaunchBox::sharedCacheState(const std::string& saveDirectory)
+{
+	static std::mutex registryMutex;
+	static std::unordered_map<std::string, std::weak_ptr<MatchCacheState>> registry;
+	std::error_code error;
+	const auto absolute = std::filesystem::absolute(std::filesystem::u8path(saveDirectory), error);
+	const std::string key = (error ? std::filesystem::u8path(saveDirectory) : absolute).lexically_normal().u8string();
+	std::lock_guard<std::mutex> lock(registryMutex);
+	auto& weak = registry[key];
+	std::shared_ptr<MatchCacheState> state = weak.lock();
+	if (!state)
+	{
+		state = std::make_shared<MatchCacheState>();
+		weak = state;
+	}
+	return state;
+}
+
 bool LaunchBox::initialize(const std::string& saveDirectory)
 {
 	Scraper::initialize(saveDirectory);
@@ -370,14 +509,59 @@ bool LaunchBox::initialize(const std::string& saveDirectory)
  std::error_code error;
  std::filesystem::create_directories(std::filesystem::u8path(imageDirectory), error);
  if (error) return false;
-	http::init();
-	try {
-		const json saved = readJson(directory + "launchbox-matches.json");
-		if (saved.is_object() && (saved.value("version", 0) == 1 || saved.value("version", 0) == 2) && saved.contains("matches") && saved["matches"].is_object())
-			matches = saved["matches"];
-	} catch (const json::exception& e) {
-		WARN_LOG(COMMON, "Ignoring invalid LaunchBox match cache: %s", e.what());
+	matchCache = sharedCacheState(directory);
+	{
+		std::lock_guard<std::mutex> lock(matchCache->mutex);
+		if (!matchCache->loaded)
+		{
+			uint64_t snapshotSequence = 0;
+			try
+			{
+				const json saved = readJson(directory + "launchbox-matches.json");
+				if (saved.is_object() && (saved.value("version", 0) == 1 || saved.value("version", 0) == 2)
+						&& saved.contains("matches") && saved["matches"].is_object())
+				{
+					matchCache->matches = saved["matches"];
+					snapshotSequence = saved.value("sequence", uint64_t(0));
+					matchCache->sequence = snapshotSequence;
+					matchCache->snapshotSequence = snapshotSequence;
+				}
+			}
+			catch (const json::exception& e)
+			{
+				WARN_LOG(COMMON, "Ignoring invalid LaunchBox match cache: %s", e.what());
+			}
+			const auto updatePath = std::filesystem::u8path(directory + "launchbox-matches.json.updates");
+			if (repairUpdateLog(updatePath) == std::filesystem::file_type::regular)
+			{
+				std::ifstream updatesFile(updatePath, std::ios::binary);
+				if (!updatesFile)
+					throw std::runtime_error("Cannot open LaunchBox match update log: " + updatePath.u8string());
+				std::string line;
+				while (std::getline(updatesFile, line))
+				{
+					const json record = json::parse(line, nullptr, false);
+					if (!record.is_object() || !record.contains("sequence") || !record.contains("key")
+							|| !record.contains("match") || !record["key"].is_string() || !record["match"].is_object())
+						continue;
+					if (!record["sequence"].is_number_unsigned()
+							&& (!record["sequence"].is_number_integer() || record["sequence"].get<int64_t>() < 0))
+						continue;
+					const uint64_t sequence = record["sequence"].get<uint64_t>();
+					matchCache->sequence = std::max(matchCache->sequence, sequence);
+					if (sequence <= snapshotSequence) continue;
+					const std::string key = record["key"].get<std::string>();
+					auto existing = matchCache->matches.find(key);
+					matchCache->matches[key] = mergeMatchEntry(existing == matchCache->matches.end() ? json::object() : *existing,
+						record["match"]);
+				}
+				if (updatesFile.bad())
+					throw std::runtime_error("Cannot read LaunchBox match update log: " + updatePath.u8string());
+			}
+			matchCache->loaded = true;
+		}
 	}
+	http::init();
 	return true;
 }
 
@@ -395,7 +579,7 @@ void LaunchBox::loadCatalog()
 	try {
 		std::vector<u8> data;
 		std::string contentType;
-  const int status = transport ? transport(metadataUrl, data, contentType) : http::get(metadataUrl, data, contentType);
+  const int status = transport ? transport(metadataUrl, data, contentType, http::unlimitedBody) : http::get(metadataUrl, data, contentType);
 		if (!http::success(status)) throw std::runtime_error("LaunchBox catalog HTTP " + std::to_string(status));
 		ZipArchive archive;
 		if (!archive.Open(data.data(), data.size())) throw std::runtime_error("Invalid LaunchBox ZIP");
@@ -412,9 +596,92 @@ void LaunchBox::loadCatalog()
 	}
 }
 
-void LaunchBox::saveMatches()
+void LaunchBox::saveMatches(const std::string& key, const json& match)
 {
-	writeJson(directory + "launchbox-matches.json", {{"version", 2}, {"matches", matches}});
+	const auto started = std::chrono::steady_clock::now();
+	if (!matchCache) throw std::runtime_error("LaunchBox match cache is not initialized");
+	std::lock_guard<std::mutex> lock(matchCache->mutex);
+	auto existing = matchCache->matches.find(key);
+	const json updated = mergeMatchEntry(existing == matchCache->matches.end() ? json::object() : *existing, match);
+	matchCache->matches[key] = updated;
+	matchCache->pendingKeys.insert(key);
+	if (bulkActive)
+	{
+		const std::string path = directory + "launchbox-matches.json.updates";
+		const auto updatePath = std::filesystem::u8path(path);
+		const auto type = repairUpdateLog(updatePath);
+		if (type != std::filesystem::file_type::regular && type != std::filesystem::file_type::not_found)
+			throw std::runtime_error("LaunchBox match update path is not a file: " + path);
+		const uint64_t sequence = ++matchCache->sequence;
+		const std::string serialized = json{{"sequence", sequence}, {"key", key}, {"match", updated}}.dump() + "\n";
+		std::ofstream file(updatePath, std::ios::binary | std::ios::app);
+		if (!file) throw std::runtime_error("Cannot open LaunchBox match update log: " + path);
+		file.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
+		file.flush();
+		if (!file) throw std::runtime_error("Cannot write LaunchBox match update log: " + path);
+		file.close();
+		if (!file) throw std::runtime_error("Cannot close LaunchBox match update log: " + path);
+		metrics.recordsSerialized += 1;
+		metrics.bytesWritten += serialized.size();
+		++metrics.physicalWrites;
+	}
+	else
+	{
+		const std::string serialized = json{{"version", 2}, {"sequence", matchCache->sequence},
+			{"matches", matchCache->matches}}.dump();
+		writeAtomicText(directory + "launchbox-matches.json", serialized);
+		matchCache->snapshotSequence = matchCache->sequence;
+		metrics.recordsSerialized += matchCache->matches.size();
+		metrics.bytesWritten += serialized.size();
+		++metrics.physicalWrites;
+		truncateUpdateLog(directory + "launchbox-matches.json.updates");
+		++metrics.physicalWrites;
+		matchCache->pendingKeys.clear();
+	}
+	matchCache->pendingKeys.erase(key);
+	metrics.elapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started);
+}
+
+void LaunchBox::beginBulk()
+{
+	if (bulkActive) return;
+	if (!matchCache) throw std::runtime_error("LaunchBox match cache is not initialized");
+	std::lock_guard<std::mutex> lock(matchCache->mutex);
+	bulkActive = true;
+	++matchCache->bulkOwners;
+}
+
+void LaunchBox::endBulk()
+{
+	if (!bulkActive || !matchCache) return;
+	std::lock_guard<std::mutex> lock(matchCache->mutex);
+	// Release this provider's participation before I/O so a failed snapshot cannot
+	// strand other providers behind a bulk owner that no longer exists.
+	bulkActive = false;
+	if (matchCache->bulkOwners) --matchCache->bulkOwners;
+	const bool lastOwner = matchCache->bulkOwners == 0;
+	if (lastOwner && matchCache->sequence > matchCache->snapshotSequence)
+	{
+		const auto started = std::chrono::steady_clock::now();
+		const std::string serialized = json{{"version", 2}, {"sequence", matchCache->sequence},
+			{"matches", matchCache->matches}}.dump();
+		writeAtomicText(directory + "launchbox-matches.json", serialized);
+		matchCache->snapshotSequence = matchCache->sequence;
+		metrics.recordsSerialized += matchCache->matches.size();
+		metrics.bytesWritten += serialized.size();
+		++metrics.physicalWrites;
+		truncateUpdateLog(directory + "launchbox-matches.json.updates");
+		++metrics.physicalWrites;
+		matchCache->pendingKeys.clear();
+		metrics.elapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started);
+	}
+}
+
+LaunchBox::~LaunchBox()
+{
+	try { endBulk(); }
+	catch (const std::exception& error) { WARN_LOG(COMMON, "Cannot compact LaunchBox match cache: %s", error.what()); }
+	catch (...) { WARN_LOG(COMMON, "Cannot compact LaunchBox match cache"); }
 }
 
 bool LaunchBox::ready() const
@@ -431,26 +698,55 @@ bool LaunchBox::needsMedia(const GameBoxart& item, u32 selection)
 void LaunchBox::scrape(GameBoxart& item)
 {
  const u32 selection = (item.requestedMedia ? item.requestedMedia : artwork::coverMedia) & supportedMedia;
- if (!needsMedia(item, item.requestedMedia ? item.requestedMedia : artwork::coverMedia)) return;
+ const std::string identity = LaunchBoxCatalog::identity(item);
+ bool persistencePending = false;
+ if (matchCache && !identity.empty())
+ {
+  std::lock_guard<std::mutex> lock(matchCache->mutex);
+  persistencePending = matchCache->pendingKeys.count(identity) != 0;
+ }
+ if (!persistencePending && !needsMedia(item, item.requestedMedia ? item.requestedMedia : artwork::coverMedia)) return;
  if (!ready()) throw std::runtime_error("");
+ if (persistencePending)
+ {
+  json pendingMatch;
+  {
+   std::lock_guard<std::mutex> lock(matchCache->mutex);
+   const auto found = matchCache->matches.find(identity);
+   if (found != matchCache->matches.end()) pendingMatch = found.value();
+  }
+  if (!pendingMatch.is_discarded() && !pendingMatch.is_null())
+  {
+   saveMatches(identity, pendingMatch);
+   if (!needsMedia(item, item.requestedMedia ? item.requestedMedia : artwork::coverMedia)) return;
+  }
+ }
  // Keep category progress current in memory, but serialize once per item.
  bool matchesChanged = false;
+ std::string cacheKey;
+ json changedMatch;
  try {
-  const std::string key = LaunchBoxCatalog::identity(item);
+  cacheKey = LaunchBoxCatalog::identity(item);
   LaunchBoxCatalog::Match match;
   json cachedImages = json::object();
-  const auto cached = matches.find(key);
-  bool expanded = false;
-  if (cached != matches.end() && cached->is_object())
+  json cachedEntry;
   {
-   match.id = cached->value("id", 0);
-   match.name = cached->value("name", "");
-   match.metadata = cached->value("metadata", json::object());
-   expanded = cached->value("expanded", false);
-   cachedImages = cached->value("media", json::object());
+   if (!matchCache) throw std::runtime_error("LaunchBox match cache is not initialized");
+   std::lock_guard<std::mutex> lock(matchCache->mutex);
+   const auto cached = matchCache->matches.find(cacheKey);
+   if (cached != matchCache->matches.end()) cachedEntry = cached.value();
+  }
+  bool expanded = false;
+  if (cachedEntry.is_object())
+  {
+   match.id = cachedEntry.value("id", 0);
+   match.name = cachedEntry.value("name", "");
+   match.metadata = cachedEntry.value("metadata", json::object());
+   expanded = cachedEntry.value("expanded", false);
+   cachedImages = cachedEntry.value("media", json::object());
    // Upgrade the PR's original cover-only match cache without a new download.
-   if (!cached->value("url", "").empty())
-    cachedImages["cover"] = {{"url", cached->value("url", "")}, {"path", cached->value("path", "")}};
+   if (!cachedEntry.value("url", "").empty())
+    cachedImages["cover"] = {{"url", cachedEntry.value("url", "")}, {"path", cachedEntry.value("path", "")}};
    for (const auto& image : cachedImages.items())
    {
     const std::string url = image.value().value("url", "");
@@ -505,11 +801,11 @@ void LaunchBox::scrape(GameBoxart& item)
     if (remaining != item.launchboxMedia.end() && !file_exists(remaining->second)) item.launchboxMedia.erase(remaining);
     item.launchboxCheckedMedia |= bit;
     // Keep partial paths and catalogue URLs for the item-level flush.
-    if (!key.empty())
+   if (!cacheKey.empty())
     {
      for (const auto& remote : match.media)
       cachedImages[remote.first]["url"] = remote.second;
-     matches[key] = {{"id", match.id}, {"name", match.name}, {"metadata", match.metadata}, {"expanded", expanded}, {"media", cachedImages}};
+     changedMatch = {{"id", match.id}, {"name", match.name}, {"metadata", match.metadata}, {"expanded", expanded}, {"media", cachedImages}};
      matchesChanged = true;
     }
    }
@@ -521,14 +817,14 @@ void LaunchBox::scrape(GameBoxart& item)
   retryAfter = std::chrono::steady_clock::now() + std::chrono::minutes(1);
   if (matchesChanged)
   {
-   try { saveMatches(); }
-   catch (const std::exception& error) { WARN_LOG(COMMON, "Cannot save partial LaunchBox match cache: %s", error.what()); }
+   try { saveMatches(cacheKey, changedMatch); }
+   catch (const std::exception& error) { WARN_LOG(COMMON, "Cannot save partial LaunchBox match cache: %s", error.what()); throw; }
   }
   throw;
  }
  if (matchesChanged)
  {
-  try { saveMatches(); }
+  try { saveMatches(cacheKey, changedMatch); }
   catch (const std::exception&)
   {
    retryAfter = std::chrono::steady_clock::now() + std::chrono::minutes(1);

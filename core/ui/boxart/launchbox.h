@@ -5,6 +5,8 @@
 #include "artwork_media.h"
 #include <chrono>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <unordered_map>
 
 // A compact index of Dreamcast/arcade metadata and categorized original images.
@@ -43,21 +45,35 @@ private:
 class LaunchBox : public Scraper
 {
 public:
+	struct MatchCacheMetrics {
+		size_t recordsSerialized = 0;
+		size_t bytesWritten = 0;
+		size_t physicalWrites = 0;
+		std::chrono::nanoseconds elapsed{};
+	};
  explicit LaunchBox(Transport transport = {}) : transport(std::move(transport)) {}
+ ~LaunchBox() override;
  // LaunchBox has no composite miximage category. Other slots use native images.
  inline static constexpr u32 supportedMedia = artwork::allMedia & ~(1u << 1);
  static bool needsMedia(const GameBoxart& item, u32 selection);
  bool initialize(const std::string& saveDirectory) override;
  bool ready() const override;
+ void beginBulk() override;
+ void endBulk() override;
  void scrape(GameBoxart& item) override;
+	MatchCacheMetrics matchCacheMetrics() const { return metrics; }
 
 private:
+	struct MatchCacheState;
+	static std::shared_ptr<MatchCacheState> sharedCacheState(const std::string& directory);
  void loadCatalog();
- void saveMatches();
+	void saveMatches(const std::string& key, const json& match);
  LaunchBoxCatalog catalog;
  bool catalogLoaded = false;
  std::string directory, imageDirectory;
- json matches = json::object();
+	std::shared_ptr<MatchCacheState> matchCache;
+	bool bulkActive = false;
+	MatchCacheMetrics metrics;
  Transport transport;
  std::chrono::steady_clock::time_point retryAfter{};
 };

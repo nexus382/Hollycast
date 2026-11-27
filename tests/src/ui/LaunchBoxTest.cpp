@@ -12,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 namespace {
@@ -257,12 +258,13 @@ protected:
  }
  void TearDown() override { std::filesystem::remove_all(root); }
  LaunchBox source() {
-  return LaunchBox([&](const std::string& url, std::vector<u8>& bytes, std::string& type) {
+  return LaunchBox([&](const std::string& url, std::vector<u8>& bytes, std::string& type, size_t maxBytes) {
    ++downloads;
    if (url.find("Metadata.zip") != std::string::npos) { ADD_FAILURE() << "The cached catalog should be reused"; return 500; }
    if (failLogo && url.find("logo.png") != std::string::npos) return 503;
    if (url.find("https://images.launchbox-app.com/") == 0)
    {
+    mediaLimit = maxBytes;
     if (observeMatchCacheDuringImages && imageRequests > 0 && std::filesystem::exists(root / "launchbox-matches.json"))
      matchCachePresentDuringLaterImage = true;
     ++imageRequests;
@@ -275,7 +277,7 @@ protected:
    return 200;
   });
  }
- std::filesystem::path root; GameBoxart item; int downloads = 0, imageRequests = 0;
+ std::filesystem::path root; GameBoxart item; int downloads = 0, imageRequests = 0; size_t mediaLimit = 0;
  bool failLogo = false, observeMatchCacheDuringImages = false, matchCachePresentDuringLaterImage = false;
 };
 
@@ -283,6 +285,7 @@ TEST_F(LaunchBoxMediaTest, CoversStayAutomaticAndManualRequestsFillDistinctSlots
 {
  auto scraper = source(); ASSERT_TRUE(scraper.initialize(root.string()));
  scraper.scrape(item);
+ EXPECT_EQ(mediaLimit, 64u * 1024 * 1024);
  ASSERT_EQ(1, downloads); ASSERT_EQ(1u, item.launchboxMedia.size());
  const auto cover = item.boxartPath;
  item.requestedMedia = artwork::allMedia; scraper.scrape(item);
@@ -339,6 +342,280 @@ TEST_F(LaunchBoxMediaTest, PartialFailureKeepsCompletedMediaAndRetriesOnlyPendin
  EXPECT_FALSE(cachedMedia.at(failedKind).contains("path"));
  failLogo = false; auto retry = source(); ASSERT_TRUE(retry.initialize(root.string())); retry.scrape(item);
  EXPECT_EQ(10u, item.launchboxMedia.size()); EXPECT_EQ(11, downloads);
+}
+
+TEST_F(LaunchBoxMediaTest, BulkMatchWriteWorkload)
+{
+ for (const int count : {128, 256})
+ {
+  const auto workloadRoot = root / ("inventory-" + std::to_string(count));
+  std::filesystem::create_directories(workloadRoot);
+  std::ostringstream xml;
+  xml << "<LaunchBox>";
+  for (int i = 0; i < count; ++i)
+  {
+   const std::string suffix = (i < 10 ? "000" : i < 100 ? "00" : "0") + std::to_string(i);
+   xml << "<Game><Name>Bulk Game " << suffix << "</Name><DatabaseID>" << (1000 + i)
+    << "</DatabaseID><Platform>Sega Dreamcast</Platform></Game>"
+    << "<GameImage><DatabaseID>" << (1000 + i) << "</DatabaseID><FileName>bulk-"
+    << suffix << ".png</FileName><Type>Box - Front</Type><Region>World</Region></GameImage>";
+  }
+  xml << "</LaunchBox>";
+  LaunchBoxCatalog catalog;
+  readXml(catalog, xml.str());
+  auto index = catalog.toJson();
+  index["downloaded_at"] = std::time(nullptr);
+  std::ofstream(workloadRoot / "launchbox-catalog.json") << index.dump();
+
+  LaunchBox scraper([](const std::string&, std::vector<u8>& bytes, std::string& type) {
+   type = "image/png";
+   const u8 pixel[] = {1, 2, 3, 255};
+   stbi_write_png_to_func([](void *context, void *data, int size) {
+    auto& output = *static_cast<std::vector<u8>*>(context);
+    const auto *first = static_cast<u8*>(data);
+    output.insert(output.end(), first, first + size);
+   }, &bytes, 1, 1, 4, pixel, 4);
+   return 200;
+  });
+  ASSERT_TRUE(scraper.initialize(workloadRoot.string()));
+  scraper.beginBulk();
+  const auto started = std::chrono::steady_clock::now();
+  for (int i = 0; i < count; ++i)
+  {
+   const std::string suffix = (i < 10 ? "000" : i < 100 ? "00" : "0") + std::to_string(i);
+   GameBoxart bulkItem;
+   bulkItem.searchName = "Bulk Game " + suffix;
+   bulkItem.uniqueId = "BULK" + suffix;
+   bulkItem.region = GameBoxart::USA;
+   scraper.scrape(bulkItem);
+   ASSERT_EQ(1000 + i, bulkItem.launchboxId);
+  }
+  scraper.endBulk();
+  const auto wallTime = std::chrono::steady_clock::now() - started;
+  const auto metrics = scraper.matchCacheMetrics();
+  std::cout << "BulkMatchWriteWorkload records=" << count
+   << " serialized_records=" << metrics.recordsSerialized
+   << " bytes_written=" << metrics.bytesWritten
+   << " physical_writes=" << metrics.physicalWrites
+   << " cache_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(metrics.elapsed).count()
+   << " workload_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(wallTime).count() << std::endl;
+  EXPECT_EQ(static_cast<size_t>(count) * 2, metrics.recordsSerialized);
+  EXPECT_EQ(static_cast<size_t>(count) + 2, metrics.physicalWrites);
+ }
+}
+
+TEST_F(LaunchBoxMediaTest, EmptyBulkAndCachedRescanDoNotRewriteSnapshot)
+{
+	item.requestedMedia = artwork::allMedia;
+	auto initial = source();
+	ASSERT_TRUE(initial.initialize(root.string()));
+	initial.beginBulk();
+	ASSERT_NO_THROW(initial.scrape(item));
+	initial.endBulk();
+
+	const auto snapshotPath = root / "launchbox-matches.json";
+	const auto updatePath = root / "launchbox-matches.json.updates";
+	ASSERT_TRUE(std::filesystem::exists(snapshotPath));
+	ASSERT_TRUE(std::filesystem::exists(updatePath));
+	ASSERT_EQ(0u, std::filesystem::file_size(updatePath));
+	const auto snapshotMtime = std::filesystem::last_write_time(snapshotPath);
+
+	auto rescan = source();
+	ASSERT_TRUE(rescan.initialize(root.string()));
+	rescan.beginBulk();
+	ASSERT_NO_THROW(rescan.scrape(item));
+	rescan.endBulk();
+
+	EXPECT_EQ(snapshotMtime, std::filesystem::last_write_time(snapshotPath));
+	EXPECT_EQ(0u, rescan.matchCacheMetrics().recordsSerialized);
+	EXPECT_EQ(0u, rescan.matchCacheMetrics().physicalWrites);
+	EXPECT_EQ(0u, std::filesystem::file_size(updatePath));
+}
+
+TEST_F(LaunchBoxMediaTest, BulkMatchesSurviveRestartWithoutPerItemSnapshots)
+{
+ const auto restartRoot = root / "interrupted-run";
+ std::filesystem::create_directories(restartRoot);
+ GameBoxart first = sonic();
+ first.uniqueId = "HDR-0002";
+ GameBoxart partial = sonic();
+ partial.requestedMedia = artwork::allMedia;
+ failLogo = true;
+
+ {
+  auto scraper = source();
+  ASSERT_TRUE(scraper.initialize(root.string()));
+  scraper.beginBulk();
+  ASSERT_NO_THROW(scraper.scrape(first));
+  EXPECT_THROW(scraper.scrape(partial), std::runtime_error);
+  EXPECT_FALSE(std::filesystem::exists(root / "launchbox-matches.json"));
+  ASSERT_TRUE(std::filesystem::exists(root / "launchbox-matches.json.updates"));
+  std::filesystem::copy_file(root / "launchbox-matches.json.updates",
+   restartRoot / "launchbox-matches.json.updates");
+ }
+	std::ifstream interruptedLogFile(restartRoot / "launchbox-matches.json.updates", std::ios::binary);
+	const std::string interruptedLog((std::istreambuf_iterator<char>(interruptedLogFile)), std::istreambuf_iterator<char>());
+	std::ofstream(restartRoot / "launchbox-matches.json.updates", std::ios::binary | std::ios::app) << "{\"sequence\":999" << std::string(9000, 'x');
+
+ // Copy only files visible at interruption, before the original provider's
+ // destructor compacts the log. The second provider replays that state and
+ // retries the partially completed request without a catalog or network fetch.
+ GameBoxart retryItem = partial;
+ failLogo = false;
+ auto retry = source();
+ ASSERT_TRUE(retry.initialize(restartRoot.string()));
+ ASSERT_NO_THROW(retry.scrape(retryItem));
+ EXPECT_EQ(10u, retryItem.launchboxMedia.size());
+
+ std::ifstream snapshot(restartRoot / "launchbox-matches.json");
+ ASSERT_TRUE(snapshot);
+ const json saved = json::parse(snapshot);
+ ASSERT_EQ(2u, saved.at("matches").size());
+ EXPECT_TRUE(saved.at("matches").contains(LaunchBoxCatalog::identity(first)));
+ EXPECT_EQ(10u, saved.at("matches").at(LaunchBoxCatalog::identity(retryItem)).at("media").size());
+ EXPECT_FALSE(std::filesystem::exists(restartRoot / "launchbox-matches.json.updates")
+  && std::filesystem::file_size(restartRoot / "launchbox-matches.json.updates") > 0);
+
+	// A crash after publishing the snapshot but before retiring its old log must
+	// not apply stale updates over that newer snapshot.
+	const auto staleRoot = root / "snapshot-published";
+	std::filesystem::create_directories(staleRoot);
+	std::filesystem::copy_file(restartRoot / "launchbox-matches.json", staleRoot / "launchbox-matches.json");
+	std::istringstream oldUpdates(interruptedLog);
+	std::string line;
+	std::ostringstream staleUpdates;
+	bool changedOldValue = false;
+	while (std::getline(oldUpdates, line))
+	{
+		json record = json::parse(line);
+		if (!changedOldValue && record.at("key") == LaunchBoxCatalog::identity(first))
+		{
+			record["match"]["name"] = "Stale cached name";
+			changedOldValue = true;
+		}
+		staleUpdates << record.dump() << '\n';
+	}
+	ASSERT_TRUE(changedOldValue);
+	std::ofstream(staleRoot / "launchbox-matches.json.updates") << staleUpdates.str();
+	LaunchBox recovered;
+	ASSERT_TRUE(recovered.initialize(staleRoot.string()));
+	GameBoxart restored = first;
+	restored.requestedMedia = artwork::metadataMedia;
+	ASSERT_NO_THROW(recovered.scrape(restored));
+	EXPECT_EQ("Sonic Adventure", restored.name);
+}
+
+TEST_F(LaunchBoxMediaTest, FailedBulkWriteRetriesPendingMatchOnNextProvider)
+{
+	const auto updatePath = root / "launchbox-matches.json.updates";
+	std::filesystem::create_directories(updatePath);
+	GameBoxart item = sonic();
+	auto first = source();
+	ASSERT_TRUE(first.initialize(root.string()));
+	first.beginBulk();
+	EXPECT_THROW(first.scrape(item), std::runtime_error);
+	EXPECT_FALSE(std::filesystem::exists(root / "launchbox-matches.json"));
+	std::filesystem::remove_all(updatePath);
+
+	auto retry = source();
+	ASSERT_TRUE(retry.initialize(root.string()));
+	EXPECT_NO_THROW(retry.scrape(item));
+	std::ifstream snapshot(root / "launchbox-matches.json");
+	ASSERT_TRUE(snapshot);
+	const json saved = json::parse(snapshot);
+	EXPECT_TRUE(saved.at("matches").contains(LaunchBoxCatalog::identity(item)));
+}
+
+TEST_F(LaunchBoxMediaTest, OverlappingBulkOwnersMergeLatestMediaSlots)
+{
+	GameBoxart coverItem = sonic();
+	coverItem.uniqueId = "HDR-0020";
+	auto firstOwner = source();
+	auto secondOwner = source();
+	ASSERT_TRUE(firstOwner.initialize(root.string()));
+	ASSERT_TRUE(secondOwner.initialize(root.string()));
+	firstOwner.beginBulk();
+	secondOwner.beginBulk();
+	ASSERT_NO_THROW(firstOwner.scrape(coverItem));
+	GameBoxart expanded = coverItem;
+	expanded.requestedMedia = artwork::allMedia;
+	ASSERT_NO_THROW(secondOwner.scrape(expanded));
+	coverItem.requestedMedia = 1u << 6;
+	ASSERT_NO_THROW(firstOwner.scrape(coverItem));
+	EXPECT_FALSE(std::filesystem::exists(root / "launchbox-matches.json"));
+	firstOwner.endBulk();
+	EXPECT_FALSE(std::filesystem::exists(root / "launchbox-matches.json"));
+	secondOwner.endBulk();
+
+	std::ifstream snapshot(root / "launchbox-matches.json");
+	ASSERT_TRUE(snapshot);
+	const auto saved = json::parse(snapshot);
+	EXPECT_EQ(10u, saved.at("matches").at(LaunchBoxCatalog::identity(coverItem)).at("media").size());
+}
+
+TEST_F(LaunchBoxMediaTest, FailedFinalDestructorCompactionReleasesOwnerForRecovery)
+{
+	const auto recoveryRoot = root / "blocked-snapshot";
+	std::filesystem::create_directories(recoveryRoot);
+	std::filesystem::copy_file(root / "launchbox-catalog.json", recoveryRoot / "launchbox-catalog.json");
+	auto survivor = source();
+	ASSERT_TRUE(survivor.initialize(recoveryRoot.string()));
+	survivor.beginBulk();
+	GameBoxart item = sonic();
+	item.uniqueId = "HDR-0098";
+	{
+		auto failingOwner = source();
+		ASSERT_TRUE(failingOwner.initialize(recoveryRoot.string()));
+		failingOwner.beginBulk();
+		ASSERT_NO_THROW(failingOwner.scrape(item));
+		survivor.endBulk();
+		std::filesystem::create_directory(recoveryRoot / "launchbox-matches.json.tmp");
+	}
+
+	const auto snapshotPath = recoveryRoot / "launchbox-matches.json";
+	const auto updatePath = recoveryRoot / "launchbox-matches.json.updates";
+	EXPECT_FALSE(std::filesystem::exists(snapshotPath));
+	ASSERT_TRUE(std::filesystem::exists(updatePath));
+	EXPECT_GT(std::filesystem::file_size(updatePath), 0u);
+	std::filesystem::remove(recoveryRoot / "launchbox-matches.json.tmp");
+
+	// The still-open provider takes part in another drain and compacts the
+	// preserved journal after the failed owner's destructor released its count.
+	survivor.beginBulk();
+	EXPECT_NO_THROW(survivor.endBulk());
+	std::ifstream snapshot(snapshotPath);
+	ASSERT_TRUE(snapshot);
+	const json saved = json::parse(snapshot);
+	EXPECT_TRUE(saved.at("matches").contains(LaunchBoxCatalog::identity(item)));
+	EXPECT_EQ(0u, std::filesystem::file_size(updatePath));
+}
+
+TEST_F(LaunchBoxMediaTest, MatchJournalReplaysInUtf8Directory)
+{
+	const auto utf8Root = root / std::filesystem::u8path("café-ゲーム");
+	const auto restartRoot = root / std::filesystem::u8path("復旧-cache");
+	std::filesystem::create_directories(utf8Root);
+	std::filesystem::create_directories(restartRoot);
+	std::filesystem::copy_file(root / "launchbox-catalog.json", utf8Root / "launchbox-catalog.json");
+	std::filesystem::copy_file(root / "launchbox-catalog.json", restartRoot / "launchbox-catalog.json");
+	GameBoxart item = sonic();
+	item.uniqueId = "UTF8-0001";
+	auto scraper = source();
+	ASSERT_TRUE(scraper.initialize(utf8Root.u8string()));
+	scraper.beginBulk();
+	ASSERT_NO_THROW(scraper.scrape(item));
+	const auto updatePath = utf8Root / "launchbox-matches.json.updates";
+	ASSERT_TRUE(std::filesystem::exists(updatePath));
+	std::filesystem::copy_file(updatePath, restartRoot / "launchbox-matches.json.updates");
+
+	GameBoxart recovered = item;
+	recovered.launchboxCheckedMedia = 0;
+	recovered.launchboxMedia.clear();
+	auto restart = source();
+	ASSERT_TRUE(restart.initialize(restartRoot.u8string()));
+	ASSERT_NO_THROW(restart.scrape(recovered));
+	EXPECT_EQ(item.launchboxId, recovered.launchboxId);
+	EXPECT_TRUE(std::filesystem::exists(restartRoot / "launchbox-matches.json"));
 }
 
 TEST(LaunchBoxCatalogTest, SharedSlotsHaveDiscAndBoxImagesAndKeepMixUnavailable)
