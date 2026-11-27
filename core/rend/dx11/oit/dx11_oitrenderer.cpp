@@ -671,7 +671,8 @@ struct DX11OITRenderer : public DX11Renderer
 				//
 				if (!multipassTex)
 				{
-					createTexAndRenderTarget(multipassTex, multipassRenderTarget, width, height);
+					// These resources swap with the opaque targets after each pass.
+					createTexAndRenderTarget(multipassTex, multipassRenderTarget, maxWidth, maxHeight);
 					multipassTextureView.reset();
 					D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
 					viewDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;

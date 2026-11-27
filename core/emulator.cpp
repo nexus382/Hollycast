@@ -637,12 +637,14 @@ void Emulator::runAt(u64 sh4TimePoint, const std::function<void()>& func)
 	runner.runOnThread(sh4TimePoint, func);
 }
 
-int getGamePlatform(const std::string& filename)
+int getGamePlatform(const std::string& filename, bool *multiboard)
 {
 	if (settings.naomi.slave)
 		// Multiboard slave
 		return DC_PLATFORM_NAOMI;
 
+	if (multiboard != nullptr)
+		*multiboard = false;
 	if (filename.empty())
 		// Dreamcast BIOS
 		return DC_PLATFORM_DREAMCAST;
@@ -658,14 +660,10 @@ int getGamePlatform(const std::string& filename)
 		if (hikaru::findGame(basename) != nullptr)
 			return DC_PLATFORM_HIKARU;
 #endif
-		return naomi_cart_GetPlatform(filename.c_str());
+		return naomi_cart_GetPlatform(filename.c_str(), multiboard);
 	}
 	if (extension == "bin" || extension == "dat" || extension == "lst")
-	{
-		// Decrypted carts use a single board even after a multiboard game.
-		settings.naomi.multiboard = false;
 		return DC_PLATFORM_NAOMI;
-	}
 
 	return DC_PLATFORM_DREAMCAST;
 }
@@ -700,7 +698,8 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 			settings.content.fileName.clear();
 		}
 
-		const int platform = getGamePlatform(settings.content.fileName);
+		// Only loading a game may change board mode. Artwork lookups also classify files.
+		const int platform = getGamePlatform(settings.content.fileName, &settings.naomi.multiboard);
 #ifdef USE_HIKARU
 		if (platform == DC_PLATFORM_HIKARU)
 		{

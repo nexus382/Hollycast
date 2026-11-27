@@ -1890,14 +1890,8 @@ void OpenGLRenderer::initVideoRoutingFrameBuffer()
 		if (gl.videorouting.framebuffer == nullptr)
 		{
 			// No alpha channel: receivers that blend with alpha must get an opaque frame
-			GLuint texture = glcache.GenTexture();
-			glcache.BindTexture(GL_TEXTURE_2D, texture);
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, targetWidth, targetHeight, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-			glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-			gl.videorouting.framebuffer = std::make_unique<GlFramebuffer>(targetWidth, targetHeight, true, texture);
+			gl.videorouting.framebuffer = std::make_unique<GlFramebuffer>(targetWidth, targetHeight, true, 0,
+					GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE);
 		}
 	}
 #endif

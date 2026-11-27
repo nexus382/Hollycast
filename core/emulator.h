@@ -304,4 +304,4 @@ private:
 };
 extern Emulator emu;
 
-int getGamePlatform(const std::string& filename);
+int getGamePlatform(const std::string& filename, bool *multiboard = nullptr);

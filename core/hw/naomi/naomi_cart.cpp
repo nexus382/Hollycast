@@ -1,5 +1,6 @@
 /*
 	This file is part of reicast.
+	Portions Copyright 2026 The Hollycast Authors
 
     reicast is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -942,17 +943,18 @@ void naomi_cart_deserialize(Deserializer& deser)
 	hopper::deserialize(deser);
 }
 
-int naomi_cart_GetPlatform(const char *path)
+int naomi_cart_GetPlatform(const char *path, bool *multiboard)
 {
-	settings.naomi.multiboard = false;
+	if (multiboard != nullptr)
+		*multiboard = false;
 	const Game *game = FindGame(path);
 	if (game == nullptr)
 		return DC_PLATFORM_NAOMI;
 	const int platform = game->platform();
 #ifdef NAOMI_MULTIBOARD
-	if (platform == DC_PLATFORM_NAOMI && game->multiboard > 0
+	if (multiboard != nullptr && platform == DC_PLATFORM_NAOMI && game->multiboard > 0
 			&& (!strncmp("f355", game->name, 4) || config::MultiboardSlaves == 2))
-		settings.naomi.multiboard = true;
+		*multiboard = true;
 #endif
 	return platform;
 }

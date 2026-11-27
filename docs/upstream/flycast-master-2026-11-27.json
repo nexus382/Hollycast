@@ -25,7 +25,7 @@
     {
       "sha": "11ba75f843bb573e43dfe26ba7befede223ddbf2",
       "subject": "libretro: add a Vblank Pacing option (#2562)",
-      "disposition": "applied",
+      "disposition": "adapted",
       "reason": "Add opt-in Libretro Vblank Pacing for non-threaded rendering."
     },
     {
@@ -49,8 +49,8 @@
     {
       "sha": "222c9530da7552fc1a95f33acfb4848856fafa28",
       "subject": "bba: don't [de]serialize bba if not available on the current platform",
-      "disposition": "applied",
-      "reason": "Skip BBA state I/O when the device does not exist on the current emulated platform."
+      "disposition": "already_present",
+      "reason": "Hollycast writes and skips a fixed RTL8139 placeholder for an absent device. Preserve the existing save-state layout."
     },
     {
       "sha": "1b7c7d63b73ea6987fb23f9334a7d597401a50f8",

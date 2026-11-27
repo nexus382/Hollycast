@@ -1229,7 +1229,11 @@ void VulkanContext::Present() noexcept
 				const int interval = swapInterval * gameSwapInterval;
 				for (int i = 1; i < interval && !resized; i++)
 				{
+					renderDone = false;
 					PresentFrame(vk::Image(), lastFrameView, lastFrameSourceExtent, lastFrameSourceAR);
+					// Acquisition can fail during resize, leaving no completion semaphore to wait on.
+					if (!renderDone)
+						break;
 					res = presentQueue.presentKHR(vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentImage]), 1, &(*swapChain), &currentImage));
 					if (res == vk::Result::eSuccess || res == vk::Result::eSuboptimalKHR)
 						performance_overlay::recordPresentedFrame();
