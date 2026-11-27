@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <deque>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -194,7 +195,7 @@ public:
 
 };
 
-template<typename Texture>
+template<typename Texture, bool UseSharedCleanup = true>
 class BaseTextureCache
 {
 public:
@@ -227,7 +228,10 @@ public:
 		}
 		else //create if not existing
 		{
-			texture = &cache.emplace(std::make_pair(key, Texture(tsp, tcw, area))).first->second;
+			it = cache.emplace(std::make_pair(key, Texture(tsp, tcw, area))).first;
+			texture = &it->second;
+			if constexpr (UseSharedCleanup)
+				cleanupOrder.push_back(key);
 		}
 
 		return texture;
@@ -259,23 +263,37 @@ public:
 
 	void CollectCleanup()
 	{
-		std::vector<u64> list;
+		static_assert(UseSharedCleanup, "This cache uses its own eviction policy");
+		constexpr size_t MaxScan = 256;
+		constexpr size_t MaxCandidates = 6;
+		const u32 targetFrame = std::max(120u, FrameCount) - 120;
+		std::array<u64, MaxCandidates> candidates;
+		size_t candidateCount = 0;
+		const size_t scanCount = std::min(MaxScan, cleanupOrder.size());
 
-		u32 TargetFrame = std::max((u32)120, FrameCount) - 120;
-
-		for (const auto& [id, texture] : cache)
+		for (size_t visited = 0; visited < scanCount && candidateCount < MaxCandidates; ++visited)
 		{
-			if (texture.dirty && texture.dirty < TargetFrame)
-				list.push_back(id);
+			const u64 id = cleanupOrder.front();
+			cleanupOrder.pop_front();
 
-			if (list.size() > 5)
-				break;
+			auto it = cache.find(id);
+			if (it == cache.end())
+				continue;
+
+			if (it->second.dirty && it->second.dirty < targetFrame)
+				candidates[candidateCount++] = id;
+			else
+				cleanupOrder.push_back(id);
 		}
 
-		for (u64 id : list)
+		for (size_t i = 0; i < candidateCount; ++i)
 		{
-			if (cache.find(id)->second.Delete())
-				cache.erase(id);
+			const u64 id = candidates[i];
+			auto it = cache.find(id);
+			if (it != cache.end() && it->second.Delete())
+				cache.erase(it);
+			else if (it != cache.end())
+				cleanupOrder.push_back(id);
 		}
 	}
 
@@ -285,11 +303,15 @@ public:
 			texture.Delete();
 
 		cache.clear();
+		if constexpr (UseSharedCleanup)
+			cleanupOrder.clear();
 		INFO_LOG(RENDERER, "Texture cache cleared");
 	}
 
 protected:
 	std::unordered_map<u64, Texture> cache;
+	// A key queue preserves scan progress without retaining rehash-invalidated iterators.
+	std::deque<u64> cleanupOrder;
 	// Only use TexU and TexV from TSP in the cache key
 	//     TexV : 7, TexU : 7
 	const TSP TSPTextureCacheMask = { { 7, 7 } };

@@ -210,7 +210,7 @@ private:
 	vk::Device device;
 };
 
-class TextureCache final : public BaseTextureCache<Texture>
+class TextureCache final : public BaseTextureCache<Texture, false>
 {
 public:
 	TextureCache() {

@@ -255,7 +255,12 @@ bool parseReShadePassState(const ReShadePass& effectPass, ShaderPass& pass, std:
 		"viewportwidth", "viewportheight", "dispatchsizex", "dispatchsizey", "dispatchsizez", "vertexcount", "primitivetopology"
 	};
 	static const std::regex renderTargetState(R"(rendertarget[0-7]?)", std::regex::icase);
-	const std::regex assignment(R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*=)");
+	static const std::regex assignment(R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*=)");
+	static const std::regex indexedState(R"((?:blendenable|srcblend|destblend|blendop|srcblendalpha|destblendalpha|blendopalpha|colorwritemask|rendertargetwritemask)[0-7])");
+	static const std::regex blendEnable(R"(\bBlendEnable\s*=\s*(true|false)\s*;)", std::regex::icase);
+	static const std::regex sourceBlend(R"(\bSrcBlend\s*=\s*([A-Za-z_]+)\s*;)", std::regex::icase);
+	static const std::regex destinationBlend(R"(\bDestBlend\s*=\s*([A-Za-z_]+)\s*;)", std::regex::icase);
+	static const std::regex blendOperation(R"(\bBlendOp\s*=\s*([A-Za-z_]+)\s*;)", std::regex::icase);
 	for (std::sregex_iterator it(effectPass.stateBlock.begin(), effectPass.stateBlock.end(), assignment), end;
 			it != end; ++it) {
 		std::string name = (*it)[1].str();
@@ -263,21 +268,19 @@ bool parseReShadePassState(const ReShadePass& effectPass, ShaderPass& pass, std:
 				[](unsigned char character) { return static_cast<char>(std::tolower(character)); });
 		if (supportedStates.find(name) == supportedStates.end()
 				&& !std::regex_match(name, renderTargetState)
-				&& !std::regex_match(name, std::regex(R"((?:blendenable|srcblend|destblend|blendop|srcblendalpha|destblendalpha|blendopalpha|colorwritemask|rendertargetwritemask)[0-7])")))
+				&& !std::regex_match(name, indexedState))
 			return fail(error, "ReShade FX pass state '" + (*it)[1].str() + "' is not supported.");
 	}
 
 	std::smatch value;
 	bool blendEnableSpecified = false;
-	if (std::regex_search(effectPass.stateBlock, value,
-			std::regex(R"(\bBlendEnable\s*=\s*(true|false)\s*;)", std::regex::icase))) {
+	if (std::regex_search(effectPass.stateBlock, value, blendEnable)) {
 		std::string enabled = value[1].str();
 		std::transform(enabled.begin(), enabled.end(), enabled.begin(), [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
 		pass.blendEnabled = enabled == "true";
 		blendEnableSpecified = true;
 	}
-	if (std::regex_search(effectPass.stateBlock, value,
-			std::regex(R"(\bSrcBlend\s*=\s*([A-Za-z_]+)\s*;)", std::regex::icase))) {
+	if (std::regex_search(effectPass.stateBlock, value, sourceBlend)) {
 		if (!parseBlendFactor(value[1].str(), pass.sourceBlend)) {
 			error = "ReShade FX pass has an unsupported source blend factor.";
 			return false;
@@ -285,8 +288,7 @@ bool parseReShadePassState(const ReShadePass& effectPass, ShaderPass& pass, std:
 		if (!blendEnableSpecified)
 			pass.blendEnabled = true;
 	}
-	if (std::regex_search(effectPass.stateBlock, value,
-			std::regex(R"(\bDestBlend\s*=\s*([A-Za-z_]+)\s*;)", std::regex::icase))) {
+	if (std::regex_search(effectPass.stateBlock, value, destinationBlend)) {
 		if (!parseBlendFactor(value[1].str(), pass.destinationBlend)) {
 			error = "ReShade FX pass has an unsupported destination blend factor.";
 			return false;
@@ -294,8 +296,7 @@ bool parseReShadePassState(const ReShadePass& effectPass, ShaderPass& pass, std:
 		if (!blendEnableSpecified)
 			pass.blendEnabled = true;
 	}
-	if (std::regex_search(effectPass.stateBlock, value,
-			std::regex(R"(\bBlendOp\s*=\s*([A-Za-z_]+)\s*;)", std::regex::icase))) {
+	if (std::regex_search(effectPass.stateBlock, value, blendOperation)) {
 		std::string operation = value[1].str();
 		std::transform(operation.begin(), operation.end(), operation.begin(), [](unsigned char character) { return static_cast<char>(std::toupper(character)); });
 		if (operation == "ADD")
@@ -329,14 +330,14 @@ bool configureReShadeColorOutput(const ReShadeEffect& effect, ShaderPassOutput& 
 	output.heightExpression = "1";
 	static const std::regex width(R"(\bWidth\s*=\s*([^;]+))", std::regex::icase);
 	static const std::regex height(R"(\bHeight\s*=\s*([^;]+))", std::regex::icase);
+	static const std::regex formatPattern(R"(\bFormat\s*=\s*([A-Za-z0-9_]+)\s*;)", std::regex::icase);
 	std::smatch dimension;
 	if (std::regex_search(texture->definition, dimension, width))
 		output.widthExpression = trim_ws(dimension[1].str(), " \t\r\n");
 	if (std::regex_search(texture->definition, dimension, height))
 		output.heightExpression = trim_ws(dimension[1].str(), " \t\r\n");
 	std::smatch formatMatch;
-	if (!std::regex_search(texture->definition, formatMatch,
-			std::regex(R"(\bFormat\s*=\s*([A-Za-z0-9_]+)\s*;)", std::regex::icase)))
+	if (!std::regex_search(texture->definition, formatMatch, formatPattern))
 		return true;
 	std::string format = formatMatch[1].str();
 	std::transform(format.begin(), format.end(), format.begin(), [](unsigned char character) {
@@ -456,7 +457,8 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 				continue;
 			}
 			std::smatch previousPass;
-			if (std::regex_match(resource.name, previousPass, std::regex(R"(PassPrev([0-9]+)Texture)"))) {
+			static const std::regex previousPassPattern(R"(PassPrev([0-9]+)Texture)");
+			if (std::regex_match(resource.name, previousPass, previousPassPattern)) {
 				uint32_t distance;
 				if (!parseShaderUnsigned(previousPass[1].str(), distance))
 					return fail(error, "RetroArch GLSL resource '" + resource.name + "' has an invalid pass distance.");
@@ -474,7 +476,8 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 				continue;
 			}
 			std::smatch indexed;
-			if (std::regex_match(resource.name, indexed, std::regex(R"(Pass([1-9][0-9]*)Texture)"))) {
+			static const std::regex indexedPassPattern(R"(Pass([1-9][0-9]*)Texture)");
+			if (std::regex_match(resource.name, indexed, indexedPassPattern)) {
 				uint32_t number;
 				if (!parseShaderUnsigned(indexed[1].str(), number) || number > passIndex)
 					return fail(error, "GLSL pass texture must reference an earlier pass.");
@@ -483,7 +486,8 @@ bool resolveSlangResourceInputs(ShaderChain& chain, size_t passIndex,
 				pass.inputs.push_back(std::move(input));
 				continue;
 			}
-			if (std::regex_match(resource.name, indexed, std::regex(R"(Prev([0-9]*)Texture)"))) {
+			static const std::regex historyPattern(R"(Prev([0-9]*)Texture)");
+			if (std::regex_match(resource.name, indexed, historyPattern)) {
 				uint32_t number = 0;
 				if ((!indexed[1].str().empty() && !parseShaderUnsigned(indexed[1].str(), number))
 						|| number >= MaxHistoryFrames - 1)
@@ -626,9 +630,9 @@ bool shaderFileExists(const std::string& path)
 std::string reShadeSamplerTexture(const ReShadeSampler& sampler)
 {
 	std::smatch match;
-	if (std::regex_search(sampler.definition, match,
-			std::regex(R"(\bTexture\s*=\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*;)",
-					std::regex::icase)))
+	static const std::regex texture(R"(\bTexture\s*=\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*;)",
+			std::regex::icase);
+	if (std::regex_search(sampler.definition, match, texture))
 		return match[1].str();
 	return {};
 }
@@ -649,7 +653,7 @@ bool isReShadeLookupTexture(const ReShadeEffect& effect, const std::string& text
 bool parseReShadeSamplerState(const ReShadeSampler& sampler, ShaderPassSampler& state, std::string& error)
 {
 	state.minLinear = state.magLinear = true;
-	const std::regex assignment(R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
+	static const std::regex assignment(R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^;]+);)");
 	for (std::sregex_iterator it(sampler.definition.begin(), sampler.definition.end(), assignment), end;
 			it != end; ++it) {
 		std::string name = (*it)[1].str();
@@ -819,13 +823,13 @@ void removePortableInterfaceDeclarations(std::string& source, const std::vector<
 {
 	// Slang files usually declare the same interfaces supplied by HollyCast.
 	// Strip only those exact declarations, leaving all author code untouched.
-	const std::regex interfaceDeclaration(
+	static const std::regex interfaceDeclaration(
 			R"(^\s*(?:layout\s*\([^\n]*\)\s*)?(?:in|out)\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?[^;\n]*\b(?:vTexCoord|FragColor)\s*;\s*$)",
 			std::regex::icase);
-	const std::regex frameDeclaration(
+	static const std::regex frameDeclaration(
 			R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:sampler2D|vec2|int)\s+(?:Source|SourceSize|OriginalSize|OutputSize|FinalViewportSize|FrameCount|Rotation)\s*;\s*$)",
 			std::regex::icase);
-	const std::regex parameterDeclaration(
+	static const std::regex parameterDeclaration(
 			R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:float|int|bool)\s+([^;]+)\s*;\s*$)",
 			std::regex::icase);
 	const auto declaresOnlyParameters = [&](const std::string& line) {
@@ -851,7 +855,7 @@ void removePortableInterfaceDeclarations(std::string& source, const std::vector<
 	std::string cleaned;
 	std::istringstream stream(source);
 	bool firstLine = true;
-	const std::regex uniformStart(R"(^\s*uniform\b)");
+	static const std::regex uniformStart(R"(^\s*uniform\b)");
 	for (std::string line; std::getline(stream, line);) {
 		// Comma-separated parameter declarations may span several lines. Decide
 		// whether the entire declaration is host-owned before removing any of it.
@@ -1152,9 +1156,10 @@ bool parseDisplayOptions(const std::string& shaderText, std::vector<ShaderParame
 
 bool isDisplayGlsl(const std::string& source)
 {
+	static const std::regex setOutput(R"(\bSetOutput\s*\()");
+	static const std::regex sampleCall(R"(\b(?:Sample|SampleLocation|GetCoordinates)\s*\()");
 	return source.find("[configuration]") != std::string::npos
-			|| (std::regex_search(source, std::regex(R"(\bSetOutput\s*\()"))
-					&& std::regex_search(source, std::regex(R"(\b(?:Sample|SampleLocation|GetCoordinates)\s*\()")));
+			|| (std::regex_search(source, setOutput) && std::regex_search(source, sampleCall));
 }
 
 void removePreprocessorDirectives(std::string& source)
@@ -1175,6 +1180,9 @@ void removePreprocessorDirectives(std::string& source)
 
 bool parseDisplayGlsl(const std::string& shaderText, ShaderPassSource& source, std::string& error)
 {
+	static const std::regex unsizedArrayConstructor(
+			R"((\b(vec[234]|ivec[234]|uvec[234]|float|int|uint|bool)\s+[A-Za-z_][A-Za-z0-9_]*\s*\[\s*([0-9]+)\s*\]\s*=\s*)\2\s*\[\s*\]\s*\()");
+	static const std::regex fragmentCoordinates(R"(\bgl_FragCoord\s*\.\s*xy\b)");
 	ShaderPassSource parsed;
 	if (!parseDisplayOptions(shaderText, parsed.parameters, error))
 		return false;
@@ -1240,9 +1248,7 @@ bool parseDisplayGlsl(const std::string& shaderText, ShaderPassSource& source, s
 	removePreprocessorDirectives(normalized);
 	// Some DolphinFX imports use an unsized constructor beside a sized array
 	// declaration. Canonical GLSL requires the constructor size as well.
-	replaceAll(normalized, std::regex(
-			R"((\b(vec[234]|ivec[234]|uvec[234]|float|int|uint|bool)\s+[A-Za-z_][A-Za-z0-9_]*\s*\[\s*([0-9]+)\s*\]\s*=\s*)\2\s*\[\s*\]\s*\()"),
-			"$1$2[$3](");
+	replaceAll(normalized, unsizedArrayConstructor, "$1$2[$3](");
 	// Vulkan exposes frame values through macros backed by push constants.
 	// Rename legacy locals which legally shadow those GLSL host names before
 	// composition, otherwise macro substitution corrupts their declarations.
@@ -1252,6 +1258,7 @@ bool parseDisplayGlsl(const std::string& shaderText, ShaderPassSource& source, s
 	for (std::string line; std::getline(declarationLines, line);)
 		declarationSource += stripCommentsForDirective(line, inBlockComment) + '\n';
 	for (const char *name : { "SourceSize", "OriginalSize", "OutputSize", "FrameCount", "Rotation" }) {
+		// Identifier-specific patterns below are assembled from the current loop name.
 		if (std::regex_search(declarationSource, std::regex(
 				"\\b(?:bool|int|uint|float|[biu]?vec[234]|mat[234])\\s+" + std::string(name) + "\\b"))) {
 			const std::string replacement = "HollycastLocal" + std::string(name);
@@ -1269,7 +1276,7 @@ vec4 HollycastSample() { return texture(Source, vTexCoord); }
 )");
 	// Physical fragment coordinates are reconstructed from the normalized display
 	// UV so all backends use the same pixel center and orientation.
-	replaceAll(normalized, std::regex(R"(\bgl_FragCoord\s*\.\s*xy\b)"), "HollycastGetFragCoord()");
+	replaceAll(normalized, fragmentCoordinates, "HollycastGetFragCoord()");
 	parsed.fragment = std::move(normalized);
 	parsed.displayGlsl = true;
 	source = std::move(parsed);
@@ -1953,6 +1960,17 @@ bool parseGlslPreset(const std::string& presetText, const std::string& presetPat
 
 bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, std::string& error)
 {
+	static const std::regex parameterDirective(R"(^\s*#\s*pragma\s+parameter\b)", std::regex::icase);
+	static const std::regex versionDirective(R"(^\s*#\s*version\b.*$)", std::regex::icase);
+	static const std::regex scalarUniform(
+			R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?float\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$)",
+			std::regex::icase);
+	static const std::regex scalarDefault(
+			R"(^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s+([-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)\s*(?://.*)?$)");
+	static const std::regex vertexStage(R"(#\s*(?:if|elif)\s+defined\s*\(\s*VERTEX\s*\)|#\s*ifdef\s+VERTEX\b)");
+	static const std::regex fragmentStage(R"(#\s*(?:if|elif)\s+defined\s*\(\s*FRAGMENT\s*\)|#\s*ifdef\s+FRAGMENT\b)");
+	static const std::regex retroArchNames(R"(\b(?:TextureSize|InputSize|FrameDirection|MVPMatrix|TEX0)\b)");
+	static const std::regex consumedDirectives(R"((^|\n)[ \t]*#[ \t]*(?:define|undef)\b[^\n]*)");
 	if (shaderText.empty() || shaderText.find('\0') != std::string::npos)
 		return fail(error, "GLSL source is empty or contains NUL bytes.");
 	if (isDisplayGlsl(shaderText))
@@ -1961,7 +1979,6 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 	ShaderPassSource parsed;
 	std::string cleaned;
 	std::istringstream lines(shaderText);
-	const std::regex parameterDirective(R"(^\s*#\s*pragma\s+parameter\b)", std::regex::icase);
 	bool inBlockComment = false;
 	for (std::string line; std::getline(lines, line);) {
 		// std::getline removes LF but retains CR. Normalize here so line-based
@@ -2005,7 +2022,7 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 			parsed.parameters.push_back(std::move(parameter));
 			continue;
 		}
-		if (std::regex_match(line, std::regex(R"(^\s*#\s*version\b.*$)", std::regex::icase)))
+		if (std::regex_match(line, versionDirective))
 			continue;
 		cleaned += line + '\n';
 	}
@@ -2013,11 +2030,6 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 	// Some official multi-pass GLSL packs declare a shared parameter in one
 	// pass and only its uniform/default pair in later passes. Reflect the latter
 	// as a read-only default so raw-stage selection also remains compilable.
-	const std::regex scalarUniform(
-			R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?float\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$)",
-			std::regex::icase);
-	const std::regex scalarDefault(
-			R"(^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s+([-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)\s*(?://.*)?$)");
 	std::unordered_set<std::string> uniformNames;
 	std::unordered_map<std::string, float> defaultValues;
 	std::istringstream metadataLines(cleaned);
@@ -2048,12 +2060,10 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 		parsed.parameters.push_back(std::move(parameter));
 	}
 
-	const bool hasVertexStage = std::regex_search(cleaned,
-			std::regex(R"(#\s*(?:if|elif)\s+defined\s*\(\s*VERTEX\s*\)|#\s*ifdef\s+VERTEX\b)"));
-	const bool hasFragmentStage = std::regex_search(cleaned,
-			std::regex(R"(#\s*(?:if|elif)\s+defined\s*\(\s*FRAGMENT\s*\)|#\s*ifdef\s+FRAGMENT\b)"));
+	const bool hasVertexStage = std::regex_search(cleaned, vertexStage);
+	const bool hasFragmentStage = std::regex_search(cleaned, fragmentStage);
 	const bool retroArchContract = hasVertexStage || hasFragmentStage
-			|| std::regex_search(cleaned, std::regex(R"(\b(?:TextureSize|InputSize|FrameDirection|MVPMatrix|TEX0)\b)"));
+			|| std::regex_search(cleaned, retroArchNames);
 
 	auto preprocessStage = [&](const char *stage, std::string& result) {
 		if (!preprocessShaderSource(cleaned,
@@ -2062,7 +2072,7 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 			return false;
 		// These macros have already been expanded. Passing their definitions to
 		// the backend would expand self-references and normalized host names again.
-		result = std::regex_replace(result, std::regex(R"((^|\n)[ \t]*#[ \t]*(?:define|undef)\b[^\n]*)"), "$1");
+		result = std::regex_replace(result, consumedDirectives, "$1");
 		return true;
 	};
 	if (hasVertexStage && !preprocessStage("VERTEX", parsed.vertex))
@@ -2074,22 +2084,33 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 		return fail(error, "GLSL shader has no fragment stage.");
 
 	if (retroArchContract) {
-		const std::regex resourceDeclaration(
+		static const std::regex resourceDeclaration(
 				R"(^\s*uniform\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:sampler2D|vec2|int|mat4)\s+(?:Texture|InputSize|OrigInputSize|OrigTextureSize|TextureSize|OutputSize|FinalViewportSize|FrameDirection|FrameCount|Rotation|MVPMatrix)\s*;\s*$)",
 				std::regex::icase);
-		const std::regex interfaceDeclaration(
+		static const std::regex interfaceDeclaration(
 				R"(^\s*(?:layout\s*\([^)]*\)\s*)?(?:in|out|attribute|varying|COMPAT_ATTRIBUTE|COMPAT_VARYING)\s+(?:(?:lowp|mediump|highp|[A-Z][A-Z0-9_]*)\s+)?(?:vec2|vec3|vec4)\s+(?:VertexCoord|TexCoord|TEX0|vTexCoord|FragColor|COLOR|COL0)\s*;\s*$)",
 				std::regex::icase);
-		const std::regex compatibilityDefine(
+		static const std::regex compatibilityDefine(
 				R"(^\s*#\s*define\s+(?:COMPAT_PRECISION|COMPAT_ATTRIBUTE|COMPAT_VARYING|COMPAT_TEXTURE|Source|SourceSize|OutSize|OutputSize|vTexCoord)\b.*$)",
 				std::regex::icase);
-		const std::regex sourceSizeDefine(R"(^\s*#\s*define\s+SourceSize\b.*$)", std::regex::icase);
-		const std::regex outputSizeDefine(R"(^\s*#\s*define\s+(?:OutSize|OutputSize)\b.*$)", std::regex::icase);
-		const std::regex textureSizeDeclaration(
+		static const std::regex sourceSizeDefine(R"(^\s*#\s*define\s+SourceSize\b.*$)", std::regex::icase);
+		static const std::regex outputSizeDefine(R"(^\s*#\s*define\s+(?:OutSize|OutputSize)\b.*$)", std::regex::icase);
+		static const std::regex textureSizeDeclaration(
 				R"(^\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?vec2\s+([A-Za-z_][A-Za-z0-9_]*)(InputSize|TextureSize)\s*;\s*$)");
-		const std::regex textureCoordinateDeclaration(
+		static const std::regex textureCoordinateDeclaration(
 				R"(^\s*(?:layout\s*\([^)]*\)\s*)?in\s+(?:(?:lowp|mediump|highp)\s+)?vec([234])\s+((?:Orig|Prev[0-9]*|Pass[0-9]+|PassPrev[0-9]+)TexCoord)\s*;\s*$)");
 		auto normalize = [&](std::string& stageSource, bool vertex) {
+			static const std::regex sourceSizeName(R"(\bSourceSize\b)", std::regex::icase);
+			static const std::regex outputSizeName(R"(\bOutSize\b)", std::regex::icase);
+			static const std::regex compatTexture(R"(\bCOMPAT_TEXTURE\b)");
+			static const std::regex textureName(R"(\bTexture\b)");
+			static const std::regex originalSizeName(R"(\b(?:OrigInputSize|OrigTextureSize)\b)");
+			static const std::regex inputSizeName(R"(\b(?:InputSize|TextureSize)\b)");
+			static const std::regex frameDirectionName(R"(\bFrameDirection\b)");
+			static const std::regex colorAssignment(R"(\bCOL0\s*=\s*COLOR\s*;)");
+			static const std::regex mvpMatrixName(R"(\bMVPMatrix\b)");
+			static const std::regex tex0Name(R"(\bTEX0\b)");
+			static const std::regex tex0Coordinates(R"(\bTEX0\s*\.\s*xy\b)");
 			std::string normalized;
 			std::string textureCoordinates;
 			std::istringstream stageLines(stageSource);
@@ -2130,31 +2151,31 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 			// not padded. Query the selected resource, not the current pass input:
 			// earlier passes may have a completely different scale.
 			for (const auto& size : textureSizes)
+				// The identifier comes from the shader source, so this pattern is dynamic.
 				replaceAll(stageSource, std::regex("\\b" + size.first + "\\b"),
 						("vec2(textureSize(" + size.second + ", 0))").c_str());
 			if (hasSourceSizeAlias)
-				replaceAll(stageSource, std::regex(R"(\bSourceSize\b)", std::regex::icase), "HollycastSourceSize4");
+				replaceAll(stageSource, sourceSizeName, "HollycastSourceSize4");
 			if (hasOutputSizeAlias)
-				replaceAll(stageSource, std::regex(R"(\bOutSize\b)", std::regex::icase),
-						"HollycastOutputSize4");
-			replaceAll(stageSource, std::regex(R"(\bCOMPAT_TEXTURE\b)"), "texture");
-			replaceAll(stageSource, std::regex(R"(\bTexture\b)"), "Source");
-			replaceAll(stageSource, std::regex(R"(\b(?:OrigInputSize|OrigTextureSize)\b)"), "OriginalSize");
-			replaceAll(stageSource, std::regex(R"(\b(?:InputSize|TextureSize)\b)"), "SourceSize");
-			replaceAll(stageSource, std::regex(R"(\bFrameDirection\b)"), "(1)");
+				replaceAll(stageSource, outputSizeName, "HollycastOutputSize4");
+			replaceAll(stageSource, compatTexture, "texture");
+			replaceAll(stageSource, textureName, "Source");
+			replaceAll(stageSource, originalSizeName, "OriginalSize");
+			replaceAll(stageSource, inputSizeName, "SourceSize");
+			replaceAll(stageSource, frameDirectionName, "(1)");
 			if (vertex) {
 				// COLOR/COL0 is legacy libretro fixed-function boilerplate. HollyCast's
 				// display quad has no color stream, and the imported shaders do not read
 				// COL0 in their fragment stages, so discard the dead passthrough safely.
-				replaceAll(stageSource, std::regex(R"(\bCOL0\s*=\s*COLOR\s*;)"), "");
+				replaceAll(stageSource, colorAssignment, "");
 				// Vertices are already in clip space. An identity also supports legacy
 				// shaders that accumulate the MVP columns in separate statements.
-				replaceAll(stageSource, std::regex(R"(\bMVPMatrix\b)"), "mat4(1.0)");
-				replaceAll(stageSource, std::regex(R"(\bTEX0\b)"), "vTexCoord");
+				replaceAll(stageSource, mvpMatrixName, "mat4(1.0)");
+				replaceAll(stageSource, tex0Name, "vTexCoord");
 			}
 			else {
-				replaceAll(stageSource, std::regex(R"(\bTEX0\s*\.\s*xy\b)"), "vTexCoord");
-				replaceAll(stageSource, std::regex(R"(\bTEX0\b)"), "vec4(vTexCoord, 0.0, 1.0)");
+				replaceAll(stageSource, tex0Coordinates, "vTexCoord");
+				replaceAll(stageSource, tex0Name, "vec4(vTexCoord, 0.0, 1.0)");
 			}
 			if (hasOutputSizeAlias)
 				stageSource.insert(0, "#define HollycastOutputSize4 vec4(OutputSize, 1.0 / OutputSize)\n");
@@ -2165,7 +2186,7 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 		if (!parsed.vertex.empty())
 			normalize(parsed.vertex, true);
 		normalize(parsed.fragment, false);
-		const std::regex samplerDeclaration(
+		static const std::regex samplerDeclaration(
 				R"(^\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?sampler2D\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$)",
 				std::regex::icase);
 		auto reflectSamplers = [&](std::string& stageSource) {
@@ -2208,6 +2229,7 @@ bool parseGlslShader(const std::string& shaderText, ShaderPassSource& source, st
 		{ R"(\btexture2DProjGrad(?:EXT|ARB)?\b)", "textureProjGrad" },
 	};
 	for (const auto& function : textureFunctions) {
+		// The pattern is selected from this table of legacy function names.
 		const std::regex name(function.first);
 		replaceAll(parsed.vertex, name, function.second);
 		replaceAll(parsed.fragment, name, function.second);
@@ -2252,8 +2274,8 @@ static bool loadPresetDocument(const std::string& path, const std::string& root,
 	sourceBytes += text.size();
 	std::istringstream lines(text);
 	std::string ownText;
-	const std::regex reference(R"ref(^\s*#\s*reference\s+"([^"]+)"\s*(?:#.*|//.*)?$)ref");
-	const std::regex referenceDirective(R"(^\s*#\s*reference\b)");
+	static const std::regex reference(R"ref(^\s*#\s*reference\s+"([^"]+)"\s*(?:#.*|//.*)?$)ref");
+	static const std::regex referenceDirective(R"(^\s*#\s*reference\b)");
 	for (std::string line; std::getline(lines, line);) {
 		if (!line.empty() && line.back() == '\r')
 			line.pop_back();
@@ -2279,7 +2301,7 @@ static bool loadPresetDocument(const std::string& path, const std::string& root,
 	// Otherwise a simple preset in a different folder misresolves every inherited
 	// stage and lookup image relative to itself.
 	const std::vector<std::string> textures = splitParameters(own.getString("", "textures", document.getString("", "textures")));
-	const std::regex shaderPathKey(R"(shader[0-9]+)");
+	static const std::regex shaderPathKey(R"(shader[0-9]+)");
 	for (const std::string& name : own.getEntryNames("")) {
 		std::string value = own.getString("", name);
 		if (std::regex_match(name, shaderPathKey)
@@ -2392,6 +2414,7 @@ bool loadShaderPassSource(const ShaderPass& pass, ShaderPassSource& source, std:
 			std::smatch size;
 			for (uint32_t axis = 0; axis < 3; ++axis) {
 				const std::string key = std::string("local_size_") + "xyz"[axis];
+				// The selected axis is part of the pattern, so keep this construction dynamic.
 				if (std::regex_search(source.compute, size, std::regex(key + R"(\s*=\s*([0-9]+))"))
 						&& (!parseShaderUnsigned(size[1].str(), source.localSize[axis]) || source.localSize[axis] == 0))
 					return fail(error, "Invalid Slang compute workgroup size.");
@@ -2516,7 +2539,7 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			pass.format = format;
 			pass.effectTechnique = static_cast<uint32_t>(selectedTechnique);
 			pass.effectPass = static_cast<uint32_t>(passIndex);
-			const std::regex renderTarget(R"(\bRenderTarget([0-9]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)", std::regex::icase);
+			static const std::regex renderTarget(R"(\bRenderTarget([0-9]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;)", std::regex::icase);
 			for (std::sregex_iterator it(effectPass.stateBlock.begin(), effectPass.stateBlock.end(), renderTarget), end; it != end; ++it) {
 				const std::string indexText = (*it)[1].str();
 				uint32_t output = 0;
@@ -2579,9 +2602,12 @@ static bool loadShaderChainInternal(const std::string& path, const std::string& 
 			ShaderPresetTexture lookup;
 			lookup.name = texture.name;
 			std::smatch dimension;
-			if (std::regex_search(texture.definition, dimension, std::regex(R"(\bDepth\s*=\s*([0-9]+))"))) parseShaderUnsigned(dimension[1].str(), lookup.depth);
-			if (std::regex_search(texture.definition, dimension, std::regex(R"(\bWidth\s*=\s*([0-9]+)\s*;)"))) parseShaderUnsigned(dimension[1].str(), lookup.width);
-			if (std::regex_search(texture.definition, dimension, std::regex(R"(\bHeight\s*=\s*([0-9]+)\s*;)"))) parseShaderUnsigned(dimension[1].str(), lookup.height);
+			static const std::regex depth(R"(\bDepth\s*=\s*([0-9]+))");
+			static const std::regex width(R"(\bWidth\s*=\s*([0-9]+)\s*;)");
+			static const std::regex height(R"(\bHeight\s*=\s*([0-9]+)\s*;)");
+			if (std::regex_search(texture.definition, dimension, depth)) parseShaderUnsigned(dimension[1].str(), lookup.depth);
+			if (std::regex_search(texture.definition, dimension, width)) parseShaderUnsigned(dimension[1].str(), lookup.width);
+			if (std::regex_search(texture.definition, dimension, height)) parseShaderUnsigned(dimension[1].str(), lookup.height);
 
 			lookup.path = relativeShaderPath(effectRoot, annotation->value);
 			if (!shaderFileExists(lookup.path)) {

@@ -5,6 +5,8 @@
 #include "oslib/i18n.h"
 #include "chd.h"
 
+#include <limits>
+
 struct CHDDisc : Disc
 {
 	// tracks are padded to a multiple of this many frames
@@ -33,11 +35,11 @@ struct CHDDisc : Disc
 struct CHDTrack : TrackFile
 {
 	CHDDisc* disc;
-	s32 Offset;
+	u32 Offset; // FAD plus Offset uses unsigned arithmetic to reach the file sector.
 	u32 fmt;
 	bool swap_bytes;
 
-	CHDTrack(CHDDisc* disc, s32 Offset, u32 fmt, bool swap_bytes)
+	CHDTrack(CHDDisc* disc, u32 Offset, u32 fmt, bool swap_bytes)
 	{
 		this->disc = disc;
 		this->Offset = Offset;
@@ -127,13 +129,11 @@ void CHDDisc::tryOpen(const char* file)
 	const chd_header* head = chd_get_header(chd);
 
 	hunkbytes = head->hunkbytes;
+	if (hunkbytes == 0 || hunkbytes % (2352 + 96) != 0)
+		throw FlycastException(strprintf(i18n::T("Invalid hunkbytes for CHD file %s"), file));
 	hunk_mem = new u8[hunkbytes];
 	old_hunk=0xFFFFFFF;
-
 	sph = hunkbytes/(2352+96);
-
-	if (hunkbytes % (2352 + 96) != 0)
-		throw FlycastException(strprintf(i18n::T("Invalid hunkbytes for CHD file %s"), file));
 
 	u32 tag;
 	u8 flags;
@@ -149,7 +149,12 @@ void CHDDisc::tryOpen(const char* file)
 	for(;;)
 	{
 		char type[16], subtype[16], pgtype[16], pgsub[16];
-		int tkid=-1, frames=0, pregap=0, postgap=0, padframes=0;
+		long long tkid = -1, frames = 0, pregap = 0, postgap = 0, padframes = 0;
+		const auto terminateMetadata = [&]() {
+			if (temp_len == 0 || temp_len >= sizeof(temp))
+				throw FlycastException(i18n::Ts("Invalid CHD track metadata"));
+			temp[temp_len] = '\0';
+		};
 		strcpy(subtype, "NONE");
 		strcpy(pgtype, "NONE");
 		strcpy(pgsub, "NONE");
@@ -157,15 +162,21 @@ void CHDDisc::tryOpen(const char* file)
 		err = chd_get_metadata(chd, CDROM_TRACK_METADATA2_TAG, (u32)tracks.size(), temp, sizeof(temp), &temp_len, &tag, &flags);
 		if (err == CHDERR_NONE)
 		{
-			//"TRACK:%d TYPE:%s SUBTYPE:%s FRAMES:%d PREGAP:%d PGTYPE:%s PGSUB:%s POSTGAP:%d"
-			sscanf(temp, CDROM_TRACK_METADATA2_FORMAT, &tkid, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap);
+			// Keep in sync with libchdr's CDROM_TRACK_METADATA2_FORMAT, adding widths for the local buffers.
+			terminateMetadata();
+			if (sscanf(temp, "TRACK:%11lld TYPE:%15s SUBTYPE:%15s FRAMES:%11lld PREGAP:%11lld PGTYPE:%15s PGSUB:%15s POSTGAP:%11lld",
+					&tkid, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
+				throw FlycastException(i18n::Ts("Invalid CHD track metadata"));
 			// CD-Rom audio tracks are always stored big-endian
 			needAudioSwap = true;
 		}
 		else if (CHDERR_NONE== (err = chd_get_metadata(chd, CDROM_TRACK_METADATA_TAG, (u32)tracks.size(), temp, sizeof(temp), &temp_len, &tag, &flags)) )
 		{
-			//CDROM_TRACK_METADATA_FORMAT	"TRACK:%d TYPE:%s SUBTYPE:%s FRAMES:%d"
-			sscanf(temp, CDROM_TRACK_METADATA_FORMAT, &tkid, type, subtype, &frames);
+			// Keep in sync with libchdr's CDROM_TRACK_METADATA_FORMAT, adding widths for the local buffers.
+			terminateMetadata();
+			if (sscanf(temp, "TRACK:%11lld TYPE:%15s SUBTYPE:%15s FRAMES:%11lld",
+					&tkid, type, subtype, &frames) != 4)
+				throw FlycastException(i18n::Ts("Invalid CHD track metadata"));
 			// CD-Rom audio tracks are always stored big-endian
 			needAudioSwap = true;
 		}
@@ -181,20 +192,27 @@ void CHDDisc::tryOpen(const char* file)
 
 			if (err != CHDERR_NONE)
 				break;
-			//GDROM_TRACK_METADATA_FORMAT	"TRACK:%d TYPE:%s SUBTYPE:%s FRAMES:%d PAD:%d PREGAP:%d PGTYPE:%s PGSUB:%s POSTGAP:%d"
-			sscanf(temp, GDROM_TRACK_METADATA_FORMAT, &tkid, type, subtype, &frames, &padframes, &pregap, pgtype, pgsub, &postgap);
+			// Keep in sync with libchdr's GDROM_TRACK_METADATA_FORMAT, adding widths for the local buffers.
+			terminateMetadata();
+			if (sscanf(temp, "TRACK:%11lld TYPE:%15s SUBTYPE:%15s FRAMES:%11lld PAD:%11lld PREGAP:%11lld PGTYPE:%15s PGSUB:%15s POSTGAP:%11lld",
+					&tkid, type, subtype, &frames, &padframes, &pregap, pgtype, pgsub, &postgap) != 9)
+				throw FlycastException(i18n::Ts("Invalid CHD track metadata"));
 			isGdrom = true;
 		}
 
-		if (tkid != (int)tracks.size() + 1)
+		if (tkid != static_cast<long long>(tracks.size()) + 1)
 			throw FlycastException(i18n::Ts("Unexpected track number"));
+		constexpr auto maxField = std::numeric_limits<int>::max();
+		if (frames <= 0 || frames > maxField || pregap < 0 || pregap > maxField
+				|| postgap < 0 || postgap > maxField || padframes < 0 || padframes > maxField)
+			throw FlycastException(i18n::Ts("Invalid CHD track metadata"));
 
 		// Subcode data is stored in the CHD but we don't use it. It doesn't change the sector layout.
 		if (strcmp(subtype, "NONE") != 0)
-			WARN_LOG(GDROM, "chd: track %d has subcode data (%s). Ignoring", tkid, subtype);
+			WARN_LOG(GDROM, "chd: track %lld has subcode data (%s). Ignoring", tkid, subtype);
 		// Postgap sectors are never stored in the file
 		if (postgap != 0)
-			WARN_LOG(GDROM, "chd: track %d has a %d frame postgap. Ignoring", tkid, postgap);
+			WARN_LOG(GDROM, "chd: track %lld has a %lld frame postgap. Ignoring", tkid, postgap);
 
 		DEBUG_LOG(GDROM, "%s", temp);
 		// When PGTYPE is prefixed with 'V', the pregap sectors are included in the track data,
@@ -202,12 +220,20 @@ void CHDDisc::tryOpen(const char* file)
 		const u32 pregapInFile = pregap > 0 && pgtype[0] == 'V' ? (u32)pregap : 0;
 		if ((int)pregapInFile > frames)
 			throw FlycastException(i18n::Ts("Invalid CHD: pregap is longer than the track"));
+		const u64 startFad = static_cast<u64>(total_frames) + static_cast<u32>(pregap);
+		const u64 trackLength = static_cast<u32>(frames) - pregapInFile;
+		const u64 nextTotalFrames = startFad + trackLength;
+		if (nextTotalFrames > std::numeric_limits<u32>::max() || static_cast<u64>(padframes) >= trackLength)
+			throw FlycastException(i18n::Ts("Invalid CHD track metadata"));
+		const u64 paddedFrames = (static_cast<u64>(frames) + CD_TRACK_PADDING - 1) / CD_TRACK_PADDING * CD_TRACK_PADDING;
+		if (static_cast<u64>(Offset) + paddedFrames > std::numeric_limits<u32>::max())
+			throw FlycastException(i18n::Ts("Invalid CHD track metadata"));
 
 		Track t;
 		// StartFAD is the position of INDEX 01, hence after the pregap
-		t.StartFAD = total_frames + pregap;
+		t.StartFAD = static_cast<u32>(startFad);
 		lastPregap = pregap;
-		total_frames = t.StartFAD + frames - pregapInFile;
+		total_frames = static_cast<u32>(nextTotalFrames);
 		t.EndFAD = total_frames - 1 - padframes;
 		t.CTRL = strcmp(type,"AUDIO") == 0 ? 0 : 4;
 
@@ -217,8 +243,7 @@ void CHDDisc::tryOpen(const char* file)
 							  !t.isDataTrack() && needAudioSwap);
 
 		// CHD files are padded, so we have to respect the offset
-		int padded = (frames + CD_TRACK_PADDING - 1) / CD_TRACK_PADDING;
-		Offset += padded * CD_TRACK_PADDING;
+		Offset += static_cast<u32>(paddedFrames);
 
 		tracks.push_back(t);
 	}
@@ -252,6 +277,8 @@ void CHDDisc::tryOpen(const char* file)
 			// SESSION_GAP includes the pregap of the first track of the second session.
 			// When these sectors are part of the track data they have already been accounted for.
 			const u32 gap = SESSION_GAP - std::min(lastPregap, 150u);
+			if (total_frames > std::numeric_limits<u32>::max() - gap)
+				throw FlycastException(i18n::Ts("Invalid CHD track metadata"));
 			tracks.back().StartFAD += gap;
 			tracks.back().EndFAD += gap;
 			((CHDTrack *)tracks.back().file)->Offset -= gap;

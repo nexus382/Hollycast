@@ -94,12 +94,25 @@ u32 makeDnsQueryPacket(void *buf, const char *host)
     return sizeof(pico_dns_packet) + qname_len + sizeof(pico_dns_question_suffix);
 }
 
-static int dnsNameLen(const char *s)
+static bool skipDnsName(const char *&reader, const char *end)
 {
-	if ((uint8_t)s[0] & 0xC0)
-		return 2;
-	else
-		return strlen(s) + 1;
+	while (reader < end)
+	{
+		const u8 length = static_cast<u8>(*reader++);
+		if (length == 0)
+			return true;
+		if ((length & 0xc0) == 0xc0)
+		{
+			if (reader == end)
+				return false;
+			++reader;
+			return true;
+		}
+		if (length > 63 || end - reader < length)
+			return false;
+		reader += length;
+	}
+	return false;
 }
 
 int get_dns_answer(struct pico_ip4 *address, struct pico_ip4 dnsaddr)
@@ -128,29 +141,38 @@ int get_dns_answer(struct pico_ip4 *address, struct pico_ip4 dnsaddr)
 
 pico_ip4 parseDnsResponsePacket(const void *buf, size_t len)
 {
+	if (buf == nullptr || len < sizeof(pico_dns_packet))
+		return { ~0u };
+	const char *end = (const char *)buf + len;
 	const pico_dns_packet *dns = (const pico_dns_packet *)buf;
 
-    // move to the first answer
 	const char *reader = (const char *)buf + sizeof(pico_dns_packet);
-    reader += strlen(reader) + 1 + sizeof(pico_dns_question_suffix);
-
-    for (int i = 0; i < ntohs(dns->ancount); i++)
-    {
-    	// TODO Check name?
-        reader += dnsNameLen(reader);
-        const pico_dns_record_suffix *record = (const pico_dns_record_suffix *)reader;
-        reader += sizeof(pico_dns_record_suffix);
-
-        if (ntohs(record->rtype) == PICO_DNS_TYPE_A) // Address record
-        {
-        	pico_ip4 address;
-            memcpy(&address.addr, reader, 4);
-
-            return address;
-        }
-        reader = reader + ntohs(record->rdlength);
-    }
-    return { ~0u };
+	for (int i = 0, count = ntohs(dns->qdcount); i < count; ++i)
+	{
+		if (!skipDnsName(reader, end) || static_cast<size_t>(end - reader) < sizeof(pico_dns_question_suffix))
+			return { ~0u };
+		reader += sizeof(pico_dns_question_suffix);
+	}
+	for (int i = 0, count = ntohs(dns->ancount); i < count; ++i)
+	{
+		if (!skipDnsName(reader, end) || static_cast<size_t>(end - reader) < sizeof(pico_dns_record_suffix))
+			return { ~0u };
+		const auto *record = reinterpret_cast<const pico_dns_record_suffix *>(reader);
+		reader += sizeof(*record);
+		const size_t dataLen = ntohs(record->rdlength);
+		if (static_cast<size_t>(end - reader) < dataLen)
+			return { ~0u };
+		if (ntohs(record->rtype) == PICO_DNS_TYPE_A)
+		{
+			pico_ip4 address;
+			if (dataLen != sizeof(address.addr))
+				return { ~0u };
+			memcpy(&address.addr, reader, sizeof(address.addr));
+			return address;
+		}
+		reader += dataLen;
+	}
+	return { ~0u };
 }
 
 #if !defined(_WIN32) && !defined(__SWITCH__)

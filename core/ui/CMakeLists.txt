@@ -94,7 +94,15 @@ if(NOT LIBRETRO)
             custom_theme.h
             settings_network.cpp
             settings_video.cpp
+            settings_about_tab.cpp
+            settings_video_tab.cpp
+            settings_shader_tab.cpp
+            settings_osd_tab.cpp
+            settings_audio_tab.cpp
+            settings_controls_tab.cpp
+            settings_network_tab.cpp
             settings_new.cpp
+            settings_new_internal.h
             settings_new.h
             video_preset.cpp
             video_preset.h

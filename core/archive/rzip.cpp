@@ -22,6 +22,17 @@
 #include <cstring>
 #include <limits>
 
+namespace
+{
+constexpr u32 WriterChunkSize = 1_MB;
+constexpr u32 MaxPlausibleChunkSize = 64 * WriterChunkSize;
+
+constexpr u64 maxCompressedChunkSize(u32 chunkSize)
+{
+	return chunkSize + chunkSize / 1000 + 12;
+}
+}
+
 const u8 RZipHeader[8] = { '#', 'R', 'Z', 'I', 'P', 'v', 1, '#' };
 
 bool RZipFile::Open(hostfs::File *file, bool write)
@@ -48,6 +59,11 @@ bool RZipFile::Open(hostfs::File *file, bool write)
 			size &= 0xffffffff;
 			file->seek(-4, SEEK_CUR);
 		}
+		if (maxChunkSize == 0 || maxChunkSize > MaxPlausibleChunkSize || size > MaxStateSize)
+		{
+			file->seek(startOffset, SEEK_SET);
+			return false;
+		}
 		chunk = new u8[maxChunkSize];
 		chunkIndex = 0;
 		chunkSize = 0;
@@ -58,7 +74,7 @@ bool RZipFile::Open(hostfs::File *file, bool write)
 		if (startOffset < 0 || startOffset > std::numeric_limits<s64>::max() - headerPrefixSize)
 			return completionSucceeded = false;
 		size = 0;
-		maxChunkSize = 1_MB;
+		maxChunkSize = WriterChunkSize;
 		if (file->write(RZipHeader, sizeof(RZipHeader), 1) != 1
 			|| file->write(&maxChunkSize, sizeof(maxChunkSize), 1) != 1
 			|| file->write(&size, sizeof(size), 1) != 1)
@@ -105,7 +121,7 @@ bool RZipFile::Finish()
 	{
 		delete file;
 		file = nullptr;
-		return completionSucceeded = true;
+		return completionSucceeded;
 	}
 
 	hostfs::File *closing = file;
@@ -132,6 +148,7 @@ size_t RZipFile::Read(void *data, size_t length)
 
 	u8 *p = (u8 *)data;
 	size_t rv = 0;
+	const s64 fileSize = file->size();
 	while (rv < length)
 	{
 		if (chunkIndex == chunkSize)
@@ -143,16 +160,29 @@ size_t RZipFile::Read(void *data, size_t length)
 				break;
 			if (zippedSize == 0)
 				continue;
+			if (zippedSize > maxCompressedChunkSize(maxChunkSize))
+			{
+				completionSucceeded = false;
+				break;
+			}
+			const s64 position = file->tell();
+			if (fileSize >= 0 && (position < 0 || position > fileSize || zippedSize > (u64)(fileSize - position)))
+			{
+				completionSucceeded = false;
+				break;
+			}
 			u8 *zipped = new u8[zippedSize];
 			if (file->read(zipped, zippedSize, 1) != 1)
 			{
 				delete [] zipped;
+				completionSucceeded = false;
 				break;
 			}
 			uLongf tl = maxChunkSize;
 			if (uncompress(chunk, &tl, zipped, zippedSize) != Z_OK)
 			{
 				delete [] zipped;
+				completionSucceeded = false;
 				break;
 			}
 			delete [] zipped;
@@ -177,7 +207,7 @@ size_t RZipFile::Write(const void *data, size_t length)
 		return 0;
 	const u8 *p = (const u8 *)data;
 	// compression output buffer must be 0.1% larger + 12 bytes
-	uLongf maxZippedSize = maxChunkSize + maxChunkSize / 1000 + 12;
+	uLongf maxZippedSize = maxCompressedChunkSize(maxChunkSize);
 	u8 *zipped = new u8[maxZippedSize];
 	size_t rv = 0;
 	while (rv < length)

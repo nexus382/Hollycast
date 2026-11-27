@@ -19,6 +19,7 @@
 #include "isofs.h"
 #include "iso9660.h"
 
+#include <cstddef>
 #include <cstring>
 
 static u32 decode_iso733(iso733_t v)
@@ -54,10 +55,12 @@ IsoFs::Directory *IsoFs::getRoot(bool *valid)
 		u32 len = decode_iso733(pvd->root_directory_record.size);
 		const u64 rootStart = 150ULL + lba;
 		const u64 sectorCount = (static_cast<u64>(len) + 2047) / 2048;
-		if (valid != nullptr && (len == 0 || rootStart + sectorCount > disc->LeadOut.StartFAD))
+		const u64 roundedLength = sectorCount * 2048;
+		if (len == 0 || rootStart + sectorCount > disc->LeadOut.StartFAD
+				|| roundedLength > std::numeric_limits<u32>::max())
 			return root;
 
-		len = ((len + 2047) / 2048) * 2048;
+		len = static_cast<u32>(roundedLength);
 		root->data.resize(len);
 
 		DEBUG_LOG(GDROM, "iso9660 root directory FAD: %d, len: %d", 150 + lba, len);
@@ -86,42 +89,78 @@ void IsoFs::Directory::reset()
 
 IsoFs::Entry *IsoFs::Directory::nextEntry()
 {
-	if (index >= data.size())
-		return nullptr;
-	const iso9660_dir_t *dir = (const iso9660_dir_t *)&data[index];
-	if (dir->length == 0)
+	while (index < data.size())
 	{
-		if ((index & 2047) == 0)
-			return nullptr;
-		index = ((index + 2047) / 2048) * 2048;
-		if (index >= data.size())
-			return nullptr;
-		dir = (const iso9660_dir_t *)&data[index];
-		if (dir->length == 0)
-			return nullptr;
-	}
-	std::string name(dir->filename.str + 1, dir->filename.str[0]);
+		const size_t recordStart = index;
+		const size_t recordLength = data[recordStart];
+		const size_t sectorOffset = recordStart % 2048;
+		if (recordLength == 0)
+		{
+			if (sectorOffset == 0)
+				return nullptr;
+			const u64 nextSector = static_cast<u64>(recordStart) + 2048 - sectorOffset;
+			if (nextSector >= data.size())
+				return nullptr;
+			index = static_cast<u32>(nextSector);
+			continue;
+		}
 
-	u32 startFad = decode_iso733(dir->extent) + 150;
-	u32 len = decode_iso733(dir->size);
-	Entry *entry;
-	if ((dir->file_flags & ISO_DIRECTORY) == 0)
-	{
-		File *file = new File(fs);
-		entry = file;
-	}
-	else
-	{
-		Directory *directory = new Directory(fs);
-		len = ((len + 2047) / 2048) * 2048;
-		entry = directory;
-	}
-	entry->startFad = startFad;
-	entry->len = len;
-	entry->name = name;
-	index += dir->length;
+		if (recordLength < sizeof(iso9660_dir_t) || recordLength > data.size() - recordStart
+				|| recordLength > 2048 - sectorOffset)
+		{
+			index = static_cast<u32>(data.size());
+			return nullptr;
+		}
+		const auto *dir = reinterpret_cast<const iso9660_dir_t *>(&data[recordStart]);
+		constexpr size_t filenameOffset = offsetof(iso9660_dir_t, filename) + 1;
+		const size_t filenameLength = dir->filename.len;
+		if (recordLength < filenameOffset || filenameLength > recordLength - filenameOffset)
+		{
+			index = static_cast<u32>(data.size());
+			return nullptr;
+		}
+		std::string name(dir->filename.str + 1, filenameLength);
 
-	return entry;
+		const u64 startFad64 = static_cast<u64>(decode_iso733(dir->extent)) + 150;
+		const u32 originalLength = decode_iso733(dir->size);
+		const u64 sectorCount = (static_cast<u64>(originalLength) + 2047) / 2048;
+		if (startFad64 > fs->disc->LeadOut.StartFAD
+				|| sectorCount > static_cast<u64>(fs->disc->LeadOut.StartFAD) - startFad64)
+		{
+			index = static_cast<u32>(data.size());
+			return nullptr;
+		}
+
+		u32 len = originalLength;
+		if ((dir->file_flags & ISO_DIRECTORY) != 0)
+		{
+			const u64 roundedLength = sectorCount * 2048;
+			if (roundedLength > std::numeric_limits<u32>::max())
+			{
+				index = static_cast<u32>(data.size());
+				return nullptr;
+			}
+			len = static_cast<u32>(roundedLength);
+		}
+
+		Entry *entry;
+		if ((dir->file_flags & ISO_DIRECTORY) == 0)
+		{
+			File *file = new File(fs);
+			entry = file;
+		}
+		else
+		{
+			Directory *directory = new Directory(fs);
+			entry = directory;
+		}
+		entry->startFad = static_cast<u32>(startFad64);
+		entry->len = len;
+		entry->name = std::move(name);
+		index = static_cast<u32>(recordStart + recordLength);
+		return entry;
+	}
+	return nullptr;
 }
 
 IsoFs::Entry *IsoFs::Directory::getEntry(const std::string& name)
@@ -141,6 +180,8 @@ IsoFs::Entry *IsoFs::Directory::getEntry(const std::string& name)
 
 u32 IsoFs::File::read(u8 *buf, u32 size, u32 offset) const
 {
+	if (offset >= len)
+		return 0;
 	size = std::min(size, len - offset);
 	u32 sectors = size / 2048;
 	fs->disc->ReadSectors(startFad + offset / 2048, sectors, buf, 2048);

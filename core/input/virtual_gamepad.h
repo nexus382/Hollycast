@@ -95,6 +95,9 @@ public:
 		if (previousFastForward)
 			gamepad_btn_input(EMU_BTN_FFORWARD, false);
 		previousFastForward = false;
+		if (rewindTouches != 0)
+			gamepad_btn_input(EMU_BTN_REWIND, false);
+		rewindTouches = 0;
 	}
 
 	virtual bool handleButtonInput(u32& state, u32 key, bool pressed) {
@@ -110,6 +113,18 @@ public:
 			return;
 		if (handleButtonInput(buttonState, kcode, pressed))
 			return;
+		if (kcode == EMU_BTN_REWIND)
+		{
+			// Keep the hold active until the last touch is released.
+			if (pressed)
+			{
+				if (rewindTouches++ == 0)
+					gamepad_btn_input(kcode, true);
+			}
+			else if (rewindTouches != 0 && --rewindTouches == 0)
+				gamepad_btn_input(kcode, false);
+			return;
+		}
 		if (kcode == DC_AXIS_LT) {
 			gamepad_axis_input(DC_AXIS_LT, pressed ? 32767 : -32768);
 		}
@@ -148,5 +163,6 @@ public:
 private:
 	u32 buttonState = 0;
 	bool previousFastForward = false;
+	unsigned rewindTouches = 0;
 };
 #endif

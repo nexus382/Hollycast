@@ -50,6 +50,8 @@ enum ControlId
 	RightUp,
 	LeftDown,
 	RightDown,
+	// Keep newly added controls after the existing gesture IDs.
+	Rewind,
 	
 	_Count,
 	_VisibleCount = LeftUp,
@@ -78,6 +80,8 @@ enum Element
 	Elem_ButtonY,
 	Elem_ButtonB,
 	Elem_ButtonA,
+	// Keep new layout elements append-only for existing touch/editor IDs.
+	Elem_Rewind,
 	Elem_Count,
 };
 

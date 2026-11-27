@@ -235,7 +235,7 @@ TEST_F(ThemeRepositoryTest, InstallsCurrentCatalogueFormatsInSequence)
 	}
 	const themes::Theme bloom = themes::load((fs::path(themes::directory()) / "bloom-test").u8string());
 	ASSERT_EQ(bloom.layouts.size(), 2u);
-	EXPECT_EQ(bloom.layouts[0].mode, "grid");
+	EXPECT_EQ(bloom.layouts[0].mode, "carousel");
 	EXPECT_EQ(bloom.layouts[1].mode, "list");
 }
 

@@ -115,12 +115,12 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `id` | Unique within the package; 1–64 lowercase ASCII letters, digits, hyphens, or underscores. |
 | `name` | Display label used by **Library Layout**. |
 | `screen` | `library` (default) or `dcnet`. DCnet layouts frame the native dashboard inside `browser` and are excluded from the Library Layout picker. The first DCnet layout is used, with its normal responsive fallback. Hidden-toolbar themes retain their authored navigation and backgrounds on that page. |
-| `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), `rail`, or `orbit` (upright circular disc carousel). See [Rail mode](#rail-mode). Newer catalogues may use `carousel`; this build renders those layouts as `grid`. |
+| `mode` | `grid`, `list`, `rack` (vertical jewel-case spines on scrollable shelves), `rail`, `orbit` (upright circular disc carousel), or `carousel` (horizontal cover strip). See [Rail mode](#rail-mode), [Disc orbit mode](#disc-orbit-mode), and [Cover carousel mode](#cover-carousel-mode). |
 | `browser` | `[x, y, width, height]` rectangle for the interactive game browser. Coordinates are fractions of the library content area. Position and size must fit wholly inside 0–1; width and height must each be at least `0.1`. |
 | `navigation` | Optional `[x, y, width, height]` rectangle for library navigation. With a hidden toolbar, the All Games / Continue Playing / Favourites buttons and a Settings button are placed inside it. |
-| `columns` | Grid column count, integer 1–12, or 1–64 for racks. Default `4`; list mode ignores it. The library Icon Size control adjusts the displayed column count to resize artwork. |
-| `itemAspect` | Cell width divided by height, from `0.3` to `3`, or `0.03` to `3` for racks. Default `0.8`; list mode ignores it. Rack heights are bounded to keep spines readable. |
-| `spacing` | Logical UI pixels between browser items, from `0` to `48`. Default `12`. |
+| `columns` | Grid column count or maximum visible carousel covers, integer 1–12. Racks accept 1–64. Default `4`; list mode ignores it. The library Icon Size control adjusts the displayed column count to resize grid artwork. |
+| `itemAspect` | Cell width divided by height, from `0.3` to `3`, or `0.03` to `3` for racks. Default `0.8`; list mode ignores it. Carousel mode uses it for cover proportions. Rack heights are bounded to keep spines readable. |
+| `spacing` | Logical UI pixels between browser items, from `0` to `48`. Default `12`; in carousel mode it sets the gap between covers. |
 | `fontSize` | Optional browser text height as a fraction of canvas height, from `0.01` to `0.08`; clamped to 10–96 screen pixels. Omit to inherit the application font size. |
 | `rowHeight` | Optional list row height as a fraction of canvas height, from `0.02` to `0.2`. Rows stay large enough to fit their text and padding. Omit for automatic sizing. |
 | `textColor` | Optional browser title color, as 6- or 8-digit hex. Defaults to the app text color. |
@@ -132,7 +132,7 @@ Rack cases remain bounded to fit a complete case and shelf on screen.
 | `elements` | Optional array of up to 64 decorative or selected-game elements. |
 | `artworkSource` | Browser artwork: empty (default library media), `cover`, `miximage`, `case`, `screenshot`, `fanart`, `title`, `physical`, `titlescreen`, `banner`, `backcover`, `spine`, `disc`, or `boxtexture`. Missing media falls back to library artwork, except racks, which show a vertical title label. Rack spines fill the case height with proportional widths and wrap onto shelves; horizontal scans rotate to fit. |
 | `rounding` | Browser selection/image corner radius in logical UI pixels, 0–48; default `0`. |
-| `inactiveOpacity` | Unselected grid artwork opacity, 0.1–1; default `1`. |
+| `inactiveOpacity` | Unselected grid or carousel artwork opacity, 0.1–1; default `1`. |
 | `selectorBorderColor` | Optional selection outline color, separate from the selection fill. |
 | `separatorColor` | Optional list-row divider or rack shelf-edge color. |
 | `showArtwork` | Show square artwork thumbnails beside list titles; default `false`. |
@@ -368,6 +368,10 @@ shares the usual asset validation; themes still execute no scripts.
 ## Disc orbit mode
 
 `mode: "orbit"` arranges up to seven upright, circular game discs around a perspective ring. Left/Right and controller navigation rotate through the full filtered library; the mouse wheel also steps, click selects, and double-click or confirm plays. The selected disc rises from the ring. `artworkSource: "disc"` prefers physical media and embedded labels with existing artwork as fallback. Library Icon Size scales the discs within the browser viewport. Other layout elements provide the selected miximage, title and metadata. This mode uses the shared draw-list renderer on standalone platforms.
+
+## Cover carousel mode
+
+`"mode": "carousel"` draws a horizontal strip of up to `columns` covers, with the selected cover centered in the `browser` rectangle. Left/Right and controller navigation step through the filtered library and wrap at its ends. The mouse wheel and horizontal touch drags move the selection. A touch flick can advance several covers. Clicking a cover selects it. The activation setting, Enter/controller confirm, or an `activate` button controls when it launches. Empty libraries use the standard empty view, and one-item libraries keep that cover centered. Use `itemAspect`, `spacing`, `inactiveOpacity`, `rounding`, `artworkSource`, `selectorColor`, and `selectorBorderColor` to style the strip and `showTitles` to place a label under each cover. Selection follows the same game when it remains in the filtered results.
 
 ## Automatic media requirements
 

@@ -82,6 +82,7 @@ static Element DraggedElement = Elem_None;
 static std::array<bool, 2> GroupedButtons { true, true };
 // Generated button positions are not a separate layout until the first split.
 static std::array<bool, 2> HasIndividualLayout {};
+static bool RewindPlaced;
 static bool LayoutLoaded;
 static ImVec2 LastDragMousePos;
 static std::string PendingImagePath;
@@ -340,6 +341,8 @@ static void setUV()
 		if (i >= _VisibleCount)
 			break;
 	}
+	Controls[Rewind].uv0 = { Controls[FastForward].uv1.x, Controls[FastForward].uv0.y };
+	Controls[Rewind].uv1 = { Controls[FastForward].uv0.x, Controls[FastForward].uv1.y };
 	serviceUV0.x = (vjoy_tex[i][0] + 1) / OSD_TEX_W;
 	serviceUV0.y = 1.f - (vjoy_tex[i][1] + 1) / OSD_TEX_H;
 	serviceUV1.x = (vjoy_tex[i][0] + vjoy_tex[i][2] - 1) / OSD_TEX_W;
@@ -381,6 +384,8 @@ ControlId hitTest(float x, float y)
 		if (control.disabled)
 			continue;
 		const ControlId controlId = static_cast<ControlId>(&control - &Controls[0]);
+		if (controlId == Rewind && !RewindPlaced)
+			continue;
 		// Invisible diagonal targets belong to an intact D-pad; separated directions
 		// use their own targets and can still be pressed together with multitouch.
 		if (!GroupedButtons[Elem_DPad] && controlId >= LeftUp && controlId <= RightDown)
@@ -441,6 +446,7 @@ static u32 buttonMap[_Count] {
 	DC_DPAD_RIGHT | DC_DPAD_UP,
 	DC_DPAD_LEFT | DC_DPAD_DOWN,
 	DC_DPAD_RIGHT | DC_DPAD_DOWN,
+	EMU_BTN_REWIND,
 };
 
 void setButtonMap()
@@ -584,6 +590,8 @@ void draw()
 	drawButton(drawList, Controls[Btn5], kcode[0] & buttonMap[Btn5]);
 	drawButton(drawList, Controls[ServiceMode], !serviceMode);
 	drawButton(drawList, Controls[InsertCard], kcode[0] & buttonMap[InsertCard]);
+	if (RewindPlaced)
+		drawButton(drawList, Controls[Rewind], false);
 
 	AlphaTrans += ((float)Visible - AlphaTrans) / 2;
 }
@@ -684,6 +692,7 @@ static LayoutElement Layout[Elem_Count] {
 	{ "button_y",   Tnop("Button Y"),   0.f, 0.f, 64.f, 64.f },
 	{ "button_b",   Tnop("Button B"),   0.f, 0.f, 64.f, 64.f },
 	{ "button_a",   Tnop("Button A"),   0.f, 0.f, 64.f, 64.f },
+	{ "rewind",     Tnop("Rewind (hold)"), -96.f, 24.f, 64.f, 64.f },
 };
 
 struct LayoutState
@@ -700,6 +709,7 @@ struct LayoutEditState
 	std::array<LayoutState, Elem_Count> layout;
 	std::array<bool, 2> groupedButtons;
 	std::array<bool, 2> hasIndividualLayout;
+	bool rewindPlaced;
 	std::string imagePath;
 };
 
@@ -808,6 +818,8 @@ static Element controlToElement(ControlId control)
 		return Elem_ServiceMode;
 	case InsertCard:
 		return Elem_InsertCard;
+	case Rewind:
+		return Elem_Rewind;
 	default:
 		return Elem_None;
 	}
@@ -931,6 +943,11 @@ static void applyLayout()
 	scale = Layout[Elem_InsertCard].scale * uiscale;
 	Controls[InsertCard].pos =  { Layout[Elem_InsertCard].x * dcw - dx, Layout[Elem_InsertCard].y * REFERENCE_HEIGHT };
 	Controls[InsertCard].size = { Layout[Elem_InsertCard].dw * scale, Layout[Elem_InsertCard].dh * scale };
+
+	// Rewind
+	scale = Layout[Elem_Rewind].scale * uiscale;
+	Controls[Rewind].pos = { Layout[Elem_Rewind].x * dcw - dx, Layout[Elem_Rewind].y * REFERENCE_HEIGHT };
+	Controls[Rewind].size = { Layout[Elem_Rewind].dw * scale, Layout[Elem_Rewind].dh * scale };
 }
 
 void applyUiScale() {
@@ -945,14 +962,17 @@ static void loadLayout()
 		Layout[i].reset();
 		Layout[i].load();
 	}
+	Layout[Elem_Rewind].reset();
+	Layout[Elem_Rewind].load();
 	resetIndividualButtons(Elem_DPad);
 	resetIndividualButtons(Elem_Buttons);
 	// Old configurations remain grouped. Each platform layout stores its own choice.
 	GroupedButtons[Elem_DPad] = config::loadBool(section, "dpad_grouped", true);
 	GroupedButtons[Elem_Buttons] = config::loadBool(section, "buttons_grouped", true);
+	RewindPlaced = config::loadBool(section, "rewind_placed", false);
 	// Older saves have no marker, so preserve any stored individual settings.
 	HasIndividualLayout = {};
-	for (int i = Elem_DPadLeft; i < Elem_Count; i++)
+	for (int i = Elem_DPadLeft; i <= Elem_ButtonA; i++)
 	{
 		const Element group = getButtonGroup(static_cast<Element>(i));
 		if (HasIndividualLayout[group])
@@ -967,7 +987,7 @@ static void loadLayout()
 	for (int group = Elem_DPad; group <= Elem_Buttons; group++)
 		HasIndividualLayout[group] = !GroupedButtons[group] || config::loadBool(section,
 				Layout[group].name + "_individual_layout", HasIndividualLayout[group]);
-	for (int i = Elem_DPadLeft; i < Elem_Count; i++)
+	for (int i = Elem_DPadLeft; i <= Elem_ButtonA; i++)
 		if (HasIndividualLayout[getButtonGroup(static_cast<Element>(i))])
 			Layout[i].load();
 	applyLayout();
@@ -981,6 +1001,7 @@ static void saveCustomization(const std::string& imagePath)
 		element.save();
 	config::saveBool(getLayoutCfgSection(), "dpad_grouped", GroupedButtons[Elem_DPad]);
 	config::saveBool(getLayoutCfgSection(), "buttons_grouped", GroupedButtons[Elem_Buttons]);
+	config::saveBool(getLayoutCfgSection(), "rewind_placed", RewindPlaced);
 	// Done also saves generated coordinates; the markers keep first-split behavior.
 	config::saveBool(getLayoutCfgSection(), "dpad_individual_layout", HasIndividualLayout[Elem_DPad]);
 	config::saveBool(getLayoutCfgSection(), "buttons_individual_layout", HasIndividualLayout[Elem_Buttons]);
@@ -1000,6 +1021,8 @@ static void resetLayout()
 {
 	for (int i = 0; i < Elem_DPadLeft; i++)
 		Layout[i].reset();
+	Layout[Elem_Rewind].reset();
+	RewindPlaced = false;
 	GroupedButtons = { true, true };
 	HasIndividualLayout = {};
 	resetIndividualButtons(Elem_DPad);
@@ -1014,7 +1037,7 @@ static void resetElement(Element element)
 {
 	if (!isValidElement(element))
 		return;
-	if (element >= Elem_DPadLeft)
+	if (element >= Elem_DPadLeft && element <= Elem_ButtonA)
 		resetIndividualButtons(element);
 	else
 	{
@@ -1045,6 +1068,7 @@ static void captureLayoutEditState(LayoutEditState& state)
 	}
 	state.groupedButtons = GroupedButtons;
 	state.hasIndividualLayout = HasIndividualLayout;
+	state.rewindPlaced = RewindPlaced;
 	state.imagePath = PendingImagePath;
 }
 
@@ -1062,6 +1086,7 @@ static void restoreLayoutEditState(const LayoutEditState& state)
 	}
 	GroupedButtons = state.groupedButtons;
 	HasIndividualLayout = state.hasIndividualLayout;
+	RewindPlaced = state.rewindPlaced;
 	PendingImagePath = state.imagePath;
 	applyLayout();
 	// Reload even an empty path so switching or Cancel also restores default art.
@@ -1264,6 +1289,13 @@ static void drawCustomizePanel()
 
 	ImGui::Text("%s: %s", i18n::T("Selected"), getElementLabel(SelectedElement));
 	ImGui::TextWrapped("%s", i18n::T("Touch a button to select it. Drag to move it."));
+	bool rewindPlaced = RewindPlaced;
+	if (drawCustomizeCheckbox("VirtualControllerRewind", i18n::T("Place Rewind (hold) button"), rewindPlaced))
+	{
+		RewindPlaced = rewindPlaced;
+		if (!RewindPlaced && SelectedElement == Elem_Rewind)
+			SelectedElement = GroupedButtons[Elem_DPad] ? Elem_DPad : Elem_DPadLeft;
+	}
 
 	const Element group = getButtonGroup(SelectedElement);
 	if (group != Elem_None)
@@ -1453,9 +1485,13 @@ Element layoutHitTest(float x, float y)
 	y *= REFERENCE_HEIGHT;
 	// Select only rendered controls, without invisible units or finger padding
 	// stealing a tap from the button the user can actually see.
-	for (int i = 0; i < _VisibleCount; i++)
+	for (int i = 0; i < _Count; i++)
 	{
 		const Control& control = Controls[i];
+		if (i >= LeftUp && i <= RightDown)
+			continue;
+		if (i == Rewind && !RewindPlaced)
+			continue;
 		if (!control.disabled && x >= control.pos.x && x < control.pos.x + control.size.x
 				&& y >= control.pos.y && y < control.pos.y + control.size.y)
 		{

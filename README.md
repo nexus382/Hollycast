@@ -159,6 +159,7 @@ cmake --build --preset <PRESET>
 | `windows`, `linux`, `darwin` | Optimized build |
 | `windows-debug`, `linux-debug`, `darwin-debug` | Debug build |
 | `windows-unit-tests-debug`, `linux-unit-tests-debug` | Debug build with the unit tests. Running the resulting `Hollycast` executable runs the tests. |
+| `darwin-unit-tests-debug` | macOS Debug unit-test build. Configure with `-DCMAKE_OSX_ARCHITECTURES="$(uname -m)"` to use Homebrew's host-architecture libraries. Run `build-unit-tests-debug/Debug/Hollycast.app/Contents/MacOS/Hollycast`; native Metal GPU checks require `HOLLYCAST_SHADER_METAL_TESTS=1` on a Metal-capable Mac. |
 
 > **Apple Silicon:** the `darwin` preset looks for MoltenVK in `/usr/local/lib`, but Homebrew on Apple Silicon installs it under `/opt/homebrew`. Pass the path when you configure:
 > ```bash
