@@ -636,6 +636,7 @@ extern Option<int, false> VideoRoutingVRes;
 extern Option<bool> SerialConsole;
 extern Option<bool> SerialPTY;
 extern Option<bool> GDB;
+extern Option<bool> GDBRemote;
 extern Option<int> GDBPort;
 extern Option<bool> GDBWaitForConnection;
 extern Option<bool> UseReios;

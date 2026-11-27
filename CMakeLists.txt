@@ -79,6 +79,7 @@ if(NOT APPLE AND (NOT UNIX OR CMAKE_SYSTEM_NAME MATCHES "DragonFly|FreeBSD|OpenB
 endif()
 
 option(ENABLE_CTEST "Enables unit tests" OFF)
+option(HOLLYCAST_PCH "Use precompiled headers for the Hollycast target" OFF)
 option(ENABLE_OPROFILE "Enable OProfile" OFF)
 option(TEST_AUTOMATION "Enable test automation" OFF)
 option(ENABLE_LOG "Enable full logging" OFF)
@@ -173,6 +174,10 @@ endif()
 # Without this, CTest silently keeps any manifest left by an older test build.
 if(USE_HIKARU AND HIKARU_VENDOR_BUILD_SMOKE)
 	enable_testing()
+endif()
+
+if(ENABLE_CTEST AND NOT BUILD_TESTING)
+	message(WARNING "ENABLE_CTEST is ON but BUILD_TESTING is OFF. CTest can still register separate checks, but the Hollycast GoogleTest executable will not be built. Set BUILD_TESTING=ON to build it.")
 endif()
 
 if(IOS AND NOT LIBRETRO)
@@ -1652,6 +1657,19 @@ endif()
 if(BUILD_TESTING)
 	add_subdirectory(core/deps/googletest EXCLUDE_FROM_ALL)
 	add_subdirectory(tests)
+endif()
+
+if(HOLLYCAST_PCH)
+	# Objective-C++ targets can use different ARC settings per source.
+	target_precompile_headers(${PROJECT_NAME} PRIVATE
+		"$<$<COMPILE_LANGUAGE:CXX>:<algorithm$<ANGLE-R>>"
+		"$<$<COMPILE_LANGUAGE:CXX>:<array$<ANGLE-R>>"
+		"$<$<COMPILE_LANGUAGE:CXX>:<filesystem$<ANGLE-R>>"
+		"$<$<COMPILE_LANGUAGE:CXX>:<string$<ANGLE-R>>"
+		"$<$<COMPILE_LANGUAGE:CXX>:<unordered_map$<ANGLE-R>>"
+		"$<$<COMPILE_LANGUAGE:CXX>:<vector$<ANGLE-R>>"
+		"$<$<COMPILE_LANGUAGE:CXX>:<imgui.h$<ANGLE-R>>"
+		"$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_CURRENT_SOURCE_DIR}/core/types.h>")
 endif()
 
 if(NINTENDO_SWITCH)

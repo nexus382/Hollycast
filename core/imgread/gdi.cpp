@@ -80,7 +80,8 @@ static Disc* load_gdi(const char* file, std::vector<u8> *digest)
 			gdi >> track_filename;
 			track_filename = last + track_filename;
 		}
-		gdi >> OFFSET;
+		if (!(gdi >> OFFSET))
+			throw FlycastException(i18n::Ts("Invalid GDI file"));
 
 		if (TRACK < 1 || TRACK > trackCount) {
 			WARN_LOG(GDROM, "Track number out of bounds: %d", TRACK);
@@ -125,20 +126,34 @@ static Disc* load_gdi(const char* file, std::vector<u8> *digest)
 		DEBUG_LOG(GDROM, "file[%d] \"%s\": FAD:%d, CTRL:%d, SSIZE:%d, OFFSET:%d", TRACK, track_filename.c_str(), FADS, CTRL, SSIZE, OFFSET);
 
 		Track t;
-		t.StartFAD = FADS + 150;
 		t.CTRL = CTRL;
 
 		std::string path = hostfs::storage().getSubPath(basepath, track_filename);
 		hostfs::File *file = hostfs::storage().openFile(path, "rb");
 		if (file == nullptr)
 			throw FlycastException(strprintf(i18n::T("GDI file: Cannot open track %s"), path.c_str()));
-		if (digest != nullptr)
-			md5.add(file);
-		t.file = new RawTrackFile(file, OFFSET, t.StartFAD, SSIZE);
+		std::unique_ptr<hostfs::File> fileOwner(file);
 		hostfs::FileInfo fileInfo = hostfs::storage().getFileInfo(path);
-		if ((fileInfo.size - OFFSET) % SSIZE != 0)
+		if (OFFSET < 0 || static_cast<u64>(OFFSET) > static_cast<u64>(fileInfo.size))
+			throw FlycastException(i18n::Ts("Invalid GDI file"));
+		const u64 startFad = static_cast<u64>(FADS) + 150;
+		const u64 dataSize = static_cast<u64>(fileInfo.size) - static_cast<u32>(OFFSET);
+		const u64 sectorCount = dataSize / SSIZE;
+		if ((sectorCount == 0 && fileInfo.size != 0) || startFad > std::numeric_limits<u32>::max())
+			throw FlycastException(i18n::Ts("Invalid GDI file"));
+		const u64 endFad = startFad + sectorCount - 1;
+		if (endFad > std::numeric_limits<u32>::max()
+				|| (!disc->tracks.empty() && startFad <= std::max(disc->tracks.back().StartFAD, disc->tracks.back().EndFAD)))
+			throw FlycastException(i18n::Ts("Invalid GDI file"));
+		if (digest != nullptr)
+			md5.add(fileOwner.get());
+		t.StartFAD = static_cast<u32>(startFad);
+		// Empty files may describe track positions without providing sectors.
+		if (sectorCount != 0)
+			t.file = new RawTrackFile(fileOwner.release(), OFFSET, t.StartFAD, SSIZE);
+		if (dataSize % SSIZE != 0)
 			WARN_LOG(GDROM, "Warning: Size of track %s is not multiple of sector size %d", track_filename.c_str(), SSIZE);
-		t.EndFAD = t.StartFAD + (u32)(fileInfo.size - OFFSET) / SSIZE - 1;
+		t.EndFAD = static_cast<u32>(endFad);
 		disc->tracks.push_back(t);
 	}
 

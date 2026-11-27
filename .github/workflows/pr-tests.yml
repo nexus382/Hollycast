@@ -1,0 +1,77 @@
+# Portions Copyright 2026 The Hollycast Authors
+name: Pull request tests
+
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: unit-tests
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Set up build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install git cmake gcc g++ ninja-build
+          sudo apt-get -y install ccache libao-dev libasound2-dev libevdev-dev libgl1-mesa-dev liblua5.3-dev libminiupnpc-dev libpulse-dev libsdl2-dev libudev-dev libzip-dev libcurl4-openssl-dev libcdio-dev libfuse2 locales xvfb xauth libgl1-mesa-dri
+          sudo apt-get -y install libwayland-dev libdecor-0-dev libaudio-dev libjack-dev libsndio-dev libsamplerate0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxkbcommon-dev libdrm-dev libgbm-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev fcitx-libs-dev
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-pr-unit-tests-${{ github.sha }}
+          restore-keys: ccache-pr-unit-tests-
+
+      - name: Configure
+        # Unit tests use provider fixtures and require no application credentials.
+        run: cmake --preset linux-unit-tests-debug -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF -DHIKARU_VENDOR_BUILD_SMOKE=ON -DHIKARU_NATIVE_GRAPHICS_TESTS=ON
+
+      - name: Build
+        run: cmake --build --preset linux-unit-tests-debug
+
+      - name: Run unit tests
+        run: LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ./build-unit-tests-debug/Hollycast
+
+      - name: Run project CTest checks
+        run: LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ctest --test-dir build-unit-tests-debug --output-on-failure --no-tests=error -R '^(hikaru_|updater_|libretro_storage)' -E '^updater_linux_install$'
+
+  macos-unit-tests:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install macOS dependencies
+        run: brew install cmake molten-vk libomp libpng
+
+      - name: Configure
+        run: |
+          cmake --preset darwin-unit-tests-debug \
+            -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
+            -DMOLTENVK_DYLIB="$(brew --prefix molten-vk)/lib/libMoltenVK.dylib" \
+            -DHOLLYCAST_REQUIRE_SCREENSCRAPER=OFF
+
+      - name: Build
+        run: cmake --build --preset darwin-unit-tests-debug
+
+      - name: Run unit tests
+        # Native Metal pixel tests are covered by the documented Metal-device run.
+        run: ./build-unit-tests-debug/Debug/Hollycast.app/Contents/MacOS/Hollycast
+
+      - name: Run project CTest checks
+        run: ctest --test-dir build-unit-tests-debug -C Debug --output-on-failure --parallel 4 --no-tests=error -R '^(hikaru_|updater_|libretro_storage)'

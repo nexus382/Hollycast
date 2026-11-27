@@ -91,7 +91,8 @@
             },
             "binaryDir": "build-unit-tests-debug",
             "cacheVariables": {
-                "ENABLE_CTEST": "ON"
+                "ENABLE_CTEST": "ON",
+                "BUILD_TESTING": "ON"
             }
         },
         {
@@ -104,7 +105,24 @@
             },
             "binaryDir": "build-unit-tests-debug",
             "cacheVariables": {
-                "ENABLE_CTEST": "ON"
+                "ENABLE_CTEST": "ON",
+                "BUILD_TESTING": "ON"
+            }
+        },
+        {
+            "name": "darwin-unit-tests-debug",
+            "description": "macOS unit tests target macOS 12.0+ for current Xcode toolchains.",
+            "inherits": ["darwin-debug"],
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Darwin"
+            },
+            "binaryDir": "build-unit-tests-debug",
+            "cacheVariables": {
+                "ENABLE_CTEST": "ON",
+                "BUILD_TESTING": "ON",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0"
             }
         }
     ],
@@ -151,6 +169,11 @@
         {
             "name": "linux-unit-tests-debug",
             "configurePreset": "linux-unit-tests-debug",
+            "configuration": "Debug"
+        },
+        {
+            "name": "darwin-unit-tests-debug",
+            "configurePreset": "darwin-unit-tests-debug",
             "configuration": "Debug"
         }
     ]

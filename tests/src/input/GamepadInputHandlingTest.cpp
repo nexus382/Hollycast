@@ -3,6 +3,7 @@
 #include "input/gamepad_device.h"
 #include "input/mapping.h"
 #include "input/virtual_gamepad.h"
+#include "rewind.h"
 
 #include <cmath>
 
@@ -66,6 +67,11 @@ public:
         inputMapping->saturation = 0.50;
 
         return inputMapping;
+    }
+
+    void mapRewindToButton(int button)
+    {
+        input_mapper->set_button(EMU_BTN_REWIND, button);
     }
 };
 
@@ -142,6 +148,19 @@ TEST_F(GamepadeInputHandlingTest, combo_multi_release)
     currentCode |= static_cast<u32>(DreamcastKey::DC_BTN_A);
     currentCode |= static_cast<u32>(DreamcastKey::DC_BTN_C);
     ASSERT_EQ(kcode[0], currentCode);
+}
+
+TEST_F(GamepadeInputHandlingTest, rewind_mappingPreservesHoldAndRelease)
+{
+    rewind_state::setButtonInputAllowed(true);
+    gamepadDevice.mapRewindToButton(100);
+
+    gamepadDevice.gamepad_btn_input(100, true);
+    EXPECT_TRUE(rewind_state::requested(&gamepadDevice));
+
+    gamepadDevice.gamepad_btn_input(100, false);
+    EXPECT_FALSE(rewind_state::requested(&gamepadDevice));
+    rewind_state::setButtonInputAllowed(false);
 }
 
 TEST(VirtualStickCircleTest, inside_circle_unchanged)

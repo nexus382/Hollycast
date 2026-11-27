@@ -138,7 +138,8 @@ public:
 	TcpAcceptor(GdbServer& server, asio::io_context& io_context, u16 port)
 		: server(server), io_context(io_context),
 		  acceptor(asio::ip::tcp::acceptor(io_context,
-				asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port)))
+				asio::ip::tcp::endpoint(config::GDBRemote
+					? asio::ip::address_v4::any() : asio::ip::address_v4::loopback(), port)))
 	{
 		asio::socket_base::reuse_address option(true);
 		acceptor.set_option(option);

@@ -3798,14 +3798,28 @@ static void gui_display_content()
 			const auto& gameList = scanner.get_game_list();
 			gameListEmpty = gameList.empty();
 			const u64 scannerGeneration = scanner.get_generation();
-			std::vector<library::Entry> libraryEntries;
-			libraryEntries.reserve(gameList.size());
-			for (const GameMedia& game : gameList)
-				libraryEntries.push_back({ game.path, game.name,
-						visibleView == library::View::ContinuePlaying && !game.device
-								? librarySavestateCache.peek(game.path).creationDate : 0, game.device });
-			const std::vector<size_t> visibleGames = library::selectGames(libraryEntries, visibleView,
-					config::LibraryFavourites.get());
+			static bool selectionCacheValid = false;
+			static std::tuple<u64, library::View, std::vector<std::string>, u64> previousSelectionKey;
+			static std::vector<library::Entry> libraryEntries;
+			static std::vector<size_t> visibleGames;
+			const auto& favourites = config::LibraryFavourites.get();
+			// Keep this key in sync with selectGames inputs: scanner contents, view,
+			// favourites, and (for Continue Playing) the savestate ordering revision.
+			const u64 stateRevision = visibleView == library::View::ContinuePlaying
+					? librarySavestateCache.getRevision() : 0;
+			const auto selectionKey = std::tie(scannerGeneration, visibleView, favourites, stateRevision);
+			if (!selectionCacheValid || selectionKey != previousSelectionKey)
+			{
+				libraryEntries.clear();
+				libraryEntries.reserve(gameList.size());
+				for (const GameMedia& game : gameList)
+					libraryEntries.push_back({ game.path, game.name,
+							visibleView == library::View::ContinuePlaying && !game.device
+									? librarySavestateCache.peek(game.path).creationDate : 0, game.device });
+				visibleGames = library::selectGames(libraryEntries, visibleView, favourites);
+				previousSelectionKey = selectionKey;
+				selectionCacheValid = true;
+			}
 			libraryViewEmpty = visibleGames.empty();
 			int displayedGameCount = 0;
 			static bool filteredRowsValid = false;
@@ -4046,8 +4060,10 @@ static void gui_display_content()
 			}
 			else
 			{
+				const bool clipCoverGrid = visibleView != library::View::ContinuePlaying && config::BoxartDisplayMode;
 				const int itemsPerLine = std::max<int>(totalWidth / (gridBoxBaseSize + ImGui::GetStyle().ItemSpacing.x), 1);
-				const float responsiveBoxSize = totalWidth / itemsPerLine - ImGui::GetStyle().FramePadding.x * 2;
+				const float scaledBoxSize = totalWidth / itemsPerLine - ImGui::GetStyle().FramePadding.x * 2;
+				const float responsiveBoxSize = clipCoverGrid ? std::max(1.0f, std::floor(scaledBoxSize)) : scaledBoxSize;
 				const ImVec2 responsiveBoxVec2 = ImVec2(responsiveBoxSize, responsiveBoxSize);
 				// Keep the current star size at 200%, then follow the actual cover size as columns change.
 				const float maxGridBoxBaseSize = libraryIconBaseInches * settings.display.dpi * 2.0f;
@@ -4055,12 +4071,77 @@ static void gui_display_content()
 				const float maxScaleBoxSize = std::max(1.0f, totalWidth / maxScaleItemsPerLine - ImGui::GetStyle().FramePadding.x * 2);
 				const float overlayScale = std::max(1.0f, responsiveBoxSize) / maxScaleBoxSize;
 				const float gridTextSize = std::clamp(13.0f * libraryTextScaleFactor, 13.0f, 38.0f);
-
-				for (size_t visibleIndex : visibleGames)
+				const std::vector<size_t>* gridGameIndices = &visibleGames;
+				static bool gridFilterRowsValid = false;
+				static auto previousGridFilterKey = std::make_tuple(filteredRowsKey, config::BoxartDisplayMode.get());
+				static u64 gridFilterArtworkRevision = 0;
+				static std::vector<size_t> filteredGridGames;
+				if (clipCoverGrid && filter.IsActive())
 				{
+					const auto gridFilterKey = std::make_tuple(filteredRowsKey, config::BoxartDisplayMode.get());
+					const Boxart::ArtworkChanges artworkChanges = boxart.artworkChangesSince(gridFilterArtworkRevision);
+					if (!gridFilterRowsValid || gridFilterKey != previousGridFilterKey
+							|| artworkChanges.fullRefresh || !artworkChanges.gamePaths.empty())
+					{
+						filteredGridGames.clear();
+						for (size_t visibleIndex : visibleGames)
+						{
+							const GameMedia& game = gameList[visibleIndex];
+							bool passFilter = filter.PassFilter(game.name.c_str());
+							if (!game.device)
+							{
+								const GameBoxart art = getLibraryDisplayArtwork(game, iconAnimationClock);
+								passFilter = passFilter || filter.PassFilter(art.name.c_str());
+							}
+							if (passFilter)
+								filteredGridGames.push_back(visibleIndex);
+						}
+						previousGridFilterKey = gridFilterKey;
+						gridFilterRowsValid = true;
+						// Capture the prior revision so any publication during this pass is
+						// picked up on the next frame.
+						gridFilterArtworkRevision = artworkChanges.revision;
+					}
+					gridGameIndices = &filteredGridGames;
+				}
+
+				if (clipCoverGrid)
+				{
+					// Preserve one-time local/arcade artwork discovery formerly reached by
+					// visiting every tile each frame. Dreamcast downloads are inventoried
+					// by the library batch.
+					static bool gridArtworkWarm = false;
+					static auto previousGridArtworkWarmKey = std::make_tuple(scannerGeneration, visibleView, config::LibraryFavourites.get(),
+							config::FetchBoxart.get(), config::BoxartSourceMode.get(),
+							config::LibraryCoverMedia.get(), config::ArtworkProvider.get(),
+							config::LibraryImageSource.get(), config::ContentPath.get(), get_writable_data_path(""));
+					const auto gridArtworkWarmKey = std::make_tuple(scannerGeneration, visibleView, config::LibraryFavourites.get(),
+							config::FetchBoxart.get(), config::BoxartSourceMode.get(),
+							config::LibraryCoverMedia.get(), config::ArtworkProvider.get(),
+							config::LibraryImageSource.get(), config::ContentPath.get(), get_writable_data_path(""));
+					if (!gridArtworkWarm || gridArtworkWarmKey != previousGridArtworkWarmKey)
+					{
+						for (size_t visibleIndex : visibleGames)
+						{
+							const GameMedia& game = gameList[visibleIndex];
+							if (!game.device && (game.arcade || !config::FetchBoxart))
+								getLibraryDisplayArtwork(game, iconAnimationClock);
+						}
+						previousGridArtworkWarmKey = gridArtworkWarmKey;
+						gridArtworkWarm = true;
+					}
+				}
+
+				if (clipCoverGrid)
+					// Count filter matches before clipping so off-screen matches do not
+					// produce a false "No games match this filter" state.
+					displayedGameCount = static_cast<int>(gridGameIndices->size());
+
+				auto drawGridGame = [&](size_t visibleIndex) {
 					const GameMedia& game = gameList[visibleIndex];
 					std::string gameName = game.name;
-					bool passFilter = filter.PassFilter(gameName.c_str());
+					// The clipped grid draws from this frame's matching index list.
+					bool passFilter = clipCoverGrid || filter.PassFilter(gameName.c_str());
 					GameBoxart art;
 					if ((config::BoxartDisplayMode || visibleView == library::View::ContinuePlaying) && !game.device)
 					{
@@ -4079,7 +4160,8 @@ static void gui_display_content()
 					}
 					if (passFilter)
 					{
-						displayedGameCount++;
+						if (!clipCoverGrid)
+							displayedGameCount++;
 						ImguiID _(game.path.empty() ? "bios" : game.path);
 						bool pressed = false;
 						bool favouritePressed = false;
@@ -4156,8 +4238,9 @@ static void gui_display_content()
 							ImGui::BeginGroup();
 							if (config::BoxartDisplayMode)
 							{
-								// Put the image inside a child window so we can detect when it's fully clipped and doesn't need to be loaded
-								if (ImGui::BeginChild("img", ImVec2(0, 0), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_NavFlattened))
+								// A fixed child height gives every square cover card the same
+								// row geometry, including cards using the title fallback.
+								if (ImGui::BeginChild("img", ImVec2(0, responsiveBoxSize), ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_NavFlattened))
 								{
 									ImguiFileTexture artTexture(art.boxartPath);
 									pressed = drawLibraryCoverButton(artTexture, game.name, responsiveBoxVec2, gameName, gridTextSize,
@@ -4180,7 +4263,7 @@ static void gui_display_content()
 						if (libraryActionPressed)
 						{
 							startLibraryGame(game, art, resumeRequested);
-							break;
+							return true;
 						}
 						if (pressed && !favouritePressed)
 						{
@@ -4205,10 +4288,35 @@ static void gui_display_content()
 								scanner.get_mutex().unlock();
 								gui_start_game(gamePath);
 								scanner.get_mutex().lock();
-								break;
+								return true;
 							}
 						}
 					}
+					return false;
+				};
+
+				if (clipCoverGrid)
+				{
+					const int rowCount = static_cast<int>((gridGameIndices->size() + itemsPerLine - 1) / itemsPerLine);
+					const float rowHeight = std::floor(responsiveBoxSize + ImGui::GetStyle().ItemSpacing.y);
+					ImGuiListClipper clipper;
+					clipper.Begin(rowCount, rowHeight);
+					bool gameStartedFromGrid = false;
+					while (!gameStartedFromGrid && clipper.Step())
+						for (int row = clipper.DisplayStart; row < clipper.DisplayEnd && !gameStartedFromGrid; ++row)
+							for (size_t item = static_cast<size_t>(row) * itemsPerLine;
+									item < std::min(gridGameIndices->size(), (static_cast<size_t>(row) + 1) * itemsPerLine); ++item)
+								if (drawGridGame((*gridGameIndices)[item]))
+								{
+									gameStartedFromGrid = true;
+									break;
+								}
+				}
+				else
+				{
+					for (size_t visibleIndex : visibleGames)
+						if (drawGridGame(visibleIndex))
+							break;
 				}
 			}
 			noFilteredResults = filter.IsActive() && !visibleGames.empty() && displayedGameCount == 0;

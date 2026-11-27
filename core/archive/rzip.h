@@ -26,6 +26,7 @@
 class RZipFile
 {
 public:
+	static constexpr u64 MaxStateSize = 1ull << 30;
 	~RZipFile() { Close(); }
 
 	bool Open(const std::string& path, bool write);

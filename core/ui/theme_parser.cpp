@@ -320,11 +320,7 @@ Theme parse(const std::string& json, const std::string& directory)
 		if (!layoutIds.insert(layout.id).second) invalid(lp + ".id", "must be unique within the theme");
 		layout.name = stringValue(required(item, "name", lp), lp + ".name", false);
 		layout.mode = stringValue(required(item, "mode", lp), lp + ".mode", false);
-		// Newer catalogues may use a cover carousel, which this build does not
-		// render; degrade those layouts to the cover grid so the theme installs.
-		if (layout.mode == "carousel")
-			layout.mode = "grid";
-		else if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack" && layout.mode != "rail" && layout.mode != "orbit") invalid(lp + ".mode", "must be grid, list, rack, rail, or orbit");
+		if (layout.mode != "grid" && layout.mode != "list" && layout.mode != "rack" && layout.mode != "rail" && layout.mode != "orbit" && layout.mode != "carousel") invalid(lp + ".mode", "must be grid, list, rack, rail, orbit, or carousel");
 		layout.browser = parseRect(required(item, "browser", lp), lp + ".browser", 0.1);
 		if (auto it = item.find("navigation"); it != item.end()) layout.navigation = parseRect(*it, lp + ".navigation", 0.01);
 		if (auto it = item.find("list"); it != item.end())

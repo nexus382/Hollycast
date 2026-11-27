@@ -418,10 +418,11 @@ static StateLoadResult loadState(int index, const std::string& statePath)
 		}
 		else
 		{
-			long pos = f->tell();
-			f->seek(0, SEEK_END);
-			total_size = (u32)f->tell() - pos;
-			f->seek(pos, SEEK_SET);
+			const s64 pos = f->tell();
+			const s64 end = f->size();
+			if (pos < 0 || end < pos || static_cast<u64>(end - pos) > RZipFile::MaxStateSize)
+				throw FlycastException("Invalid uncompressed state size");
+			total_size = static_cast<u32>(end - pos);
 		}
 	} catch (const std::exception& e) {
 		if (zipFile.rawFile() != nullptr)

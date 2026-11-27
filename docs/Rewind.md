@@ -109,8 +109,10 @@ does not run:
 When Rewind does run, it uses shared emulation/rendering instead of threaded
 rendering, which can reduce performance. Your stored multi-threading
 preference is not changed; it applies again to sessions without Rewind. The
-on-screen touch controls have no Rewind button in this version; use Step
-Back or a mapped physical/keyboard button.
+touch controller can add **Rewind (hold)** in its layout editor. Open the
+controller layout editor and enable **Place Rewind (hold) button**, then move
+the button where you want it. Existing touch layouts leave it unplaced until
+you add it.
 
 ## If Rewind is missing or history is short
 

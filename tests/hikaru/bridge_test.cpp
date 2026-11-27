@@ -318,7 +318,7 @@ void resetDuringDmaAndMapping(Checks& checks)
     probe.events.clear();
     checks.equal(bridge.advanceDma(100), 0, "reset cancels DMA");
     checks.equal(static_cast<uint32_t>(probe.events.size()), 0, "reset DMA has no residual callbacks");
-    checks.equal(probe.memory.count(0x204), 0, "reset cancels remaining destination writes");
+    checks.equal(probe.memory.find(0x204) == probe.memory.end(), true, "reset cancels remaining destination writes");
     for (unsigned aperture = 0; aperture < 3; ++aperture) {
         for (unsigned page = 0; page < 4; ++page) {
             probe.events.clear();

@@ -132,6 +132,13 @@ TEST(ThemeParserTest, ParsesLayoutsElementsAndPalette)
 	EXPECT_EQ(theme.layouts[1].mode, "list");
 }
 
+TEST(ThemeParserTest, AcceptsCarouselLayoutMode)
+{
+	const auto theme = parseFixture(R"({"formatVersion":1,"id":"carousel","name":"Carousel","layouts":[{"id":"main","name":"Main","mode":"carousel","browser":[0,0,1,1]}]})");
+	ASSERT_EQ(theme.layouts.size(), 1u);
+	EXPECT_EQ(theme.layouts.front().mode, "carousel");
+}
+
 TEST(ThemeParserTest, AcceptsMiximageArtworkBinding)
 {
 	TempDirectory package;
@@ -175,7 +182,7 @@ TEST(ThemeParserTest, RejectsUnsupportedVersionUnknownFieldsAndInvalidNumbers)
 	expectRejected(replaceOnce(kManifest, "\"Text\": \"112233\"", "\"Text\": \"12xz33\""), "hexadecimal digits");
 }
 
-TEST(ThemeParserTest, AcceptsNewerCatalogueFieldsAndDegradesCarouselToGrid)
+TEST(ThemeParserTest, AcceptsNewerCatalogueFieldsAndPreservesCarouselMode)
 {
 	const std::string json = R"({"formatVersion":1,"id":"newer","name":"Newer","layouts":[
 		{"id":"room","name":"Room","mode":"list","browser":[0.2,0.2,0.6,0.7],"navigation":[0.04,0.25,0.16,0.4],"toolbar":"hidden","list":{"releaseYear":true}},
@@ -189,12 +196,11 @@ TEST(ThemeParserTest, AcceptsNewerCatalogueFieldsAndDegradesCarouselToGrid)
 	EXPECT_FLOAT_EQ(theme.layouts[0].navigation->w, 0.16f);
 	EXPECT_TRUE(theme.layouts[0].list.releaseYear);
 	EXPECT_EQ(theme.layouts[0].toolbar, "hidden");
-	// The carousel layout installs but renders through the grid path.
-	EXPECT_EQ(theme.layouts[1].mode, "grid");
+	EXPECT_EQ(theme.layouts[1].mode, "carousel");
 	EXPECT_EQ(theme.layouts[1].columns, 5);
 
 	// Strict validation still applies elsewhere.
-	expectRejected(replaceOnce(json, "\"mode\":\"carousel\"", "\"mode\":\"hologram\""), "must be grid, list, rack, rail, or orbit");
+	expectRejected(replaceOnce(json, "\"mode\":\"carousel\"", "\"mode\":\"hologram\""), "must be grid, list, rack, rail, orbit, or carousel");
 	expectRejected(replaceOnce(json, "\"toolbar\":\"hidden\"", "\"toolbar\":\"sidebar\""), "must be standard, compact, or hidden");
 	expectRejected(replaceOnce(json, "\"navigation\":[0.04,0.25,0.16,0.4]", "\"mystery\":true"), "unknown field");
 	expectRejected(replaceOnce(json, "[0.04,0.25,0.16,0.4]", "[0.9,0.25,0.16,0.4]"), "normalized bounds");

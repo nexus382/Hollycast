@@ -18,6 +18,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/DcnetStatusTest.cpp
         src/CheatManagerTest.cpp
         src/ConfigFileTest.cpp
+        src/OptionTest.cpp
         src/div32_test.cpp
         src/test_stubs.cpp
         src/serialize_test.cpp
@@ -35,6 +36,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/HttpTest.cpp
         src/IniFileTest.cpp
         src/rend/PostProcessingChainTest.cpp
+        src/rend/TexCacheEvictionTest.cpp
         src/rend/MetalShaderCompilerTest.cpp
         src/rend/ShaderLayerTest.cpp
         src/rend/ReShadeCompilerTest.cpp
@@ -44,11 +46,13 @@ target_sources(${PROJECT_NAME} PRIVATE
         src/hw/modem/v42Test.cpp
         src/hw/modem/v42bisTest.cpp
         src/network/NetworkServiceTest.cpp
+        src/network/DnsParserTest.cpp
         src/hw/sh4/modules/TimerTest.cpp
         src/hw/NaomiRomReadTest.cpp
         src/imgread/ChdTest.cpp
         src/imgread/CueTest.cpp
         src/imgread/GdiTest.cpp
+        src/imgread/IsoFsTest.cpp
         src/input/ButtonComboTest.cpp
         src/input/GamepadInputHandlingTest.cpp
         src/input/HikaruGamepadPresetTest.cpp
@@ -128,6 +132,7 @@ if(NOT LIBRETRO)
         src/ui/CustomThemeTest.cpp
         src/ui/LibrarySavestateTest.cpp
         src/ui/LibraryImageTest.cpp
+        src/ui/PvrParserTest.cpp
         src/ui/GameScannerTest.cpp
         src/ui/ThemeTest.cpp
         src/ui/ThemeLibraryTest.cpp

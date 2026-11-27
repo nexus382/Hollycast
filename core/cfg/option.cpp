@@ -214,6 +214,7 @@ Option<int, false> VideoRoutingVRes("rend.VideoRoutingVRes", 720);
 Option<bool> SerialConsole("Debug.SerialConsoleEnabled");
 Option<bool> SerialPTY("Debug.SerialPTY");
 Option<bool> GDB("Debug.GDBEnabled");
+Option<bool> GDBRemote("Debug.GDBRemote");
 Option<int> GDBPort("Debug.GDBPort", debugger::DEFAULT_PORT);
 Option<bool> GDBWaitForConnection("Debug.GDBWaitForConnection");
 Option<bool> UseReios("UseReios");

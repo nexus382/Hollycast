@@ -43,39 +43,59 @@ enum PvrDataFormat {
 
 static inline bool pvrParse(const u8 *data, u32 len, u32& width, u32& height, std::vector<u8>& out)
 {
-	if (len < 16)
+	if (data == nullptr || len < 16)
 		return false;
 	const u8 *p = data;
 	const u8 *end = data + len;
+	auto remaining = [&]() -> size_t { return static_cast<size_t>(end - p); };
 	if (!memcmp("GBIX", p, 4))
 	{
 		p += 4;
-		u32 idxSize = *(u32 *)p;
-		p += 4 + idxSize;
+		if (remaining() < sizeof(u32))
+			return false;
+		u32 idxSize;
+		memcpy(&idxSize, p, sizeof(idxSize));
+		p += sizeof(idxSize);
+		if (static_cast<size_t>(idxSize) > remaining())
+			return false;
+		p += static_cast<size_t>(idxSize);
 	}
+	if (remaining() < 4)
+		return false;
 	if (memcmp("PVRT", p, 4))
 	{
 		WARN_LOG(COMMON, "Invalid PVR file: header not found");
 		return false;
 	}
-	if (end - p < 16) {
+	if (remaining() < 16) {
 		WARN_LOG(COMMON, "Invalid PVR file: too small");
 		return false;
 	}
 	p += 4;
-	u32 size = *(u32 *)p;
+	u32 size;
+	memcpy(&size, p, sizeof(size));
 	p += 4;
 	PixelFormat pixelFormat = (PixelFormat)*p++;
 	PvrDataFormat imgType = (PvrDataFormat)*p++;
 	p += 2;
-	width = *(u16 *)p;
+	u16 dimension;
+	memcpy(&dimension, p, sizeof(dimension));
+	width = dimension;
 	p += 2;
-	height = *(u16 *)p;
+	memcpy(&dimension, p, sizeof(dimension));
+	height = dimension;
 	p += 2;
-	if (width > 1024 || height > 1024) {
+	if (width == 0 || height == 0 || width > 1024 || height > 1024) {
 		WARN_LOG(COMMON, "Invalid PVR file: wrong texture dimensions: %d x %d", width, height);
 		return false;
 	}
+	const bool planar = imgType == PvrRectangle || imgType == PvrStride;
+	if (planar ? width % 4 != 0
+			: width < 2 || height < 2 || (width & (width - 1)) != 0 || (height & (height - 1)) != 0)
+		return false;
+	// The converters read 16-bit texels from the payload or VQ codebook.
+	if (reinterpret_cast<uintptr_t>(p) % alignof(u16) != 0)
+		return false;
 
 	const u8 *vqCodebook = p;
 	TexConvFP32 texConv;
@@ -134,25 +154,31 @@ static inline bool pvrParse(const u8 *data, u32 len, u32& width, u32& height, st
 	u32 texU = 3;
 	while (1u << texU < width)
 		texU++;
+	if (texU >= 11)
+		return false;
+	size_t skip = 0;
 	if (imgType == PvrSquareTwiddledMipmapsAlt)
 		// Hardcoding pixel size. Not correct for palette texs
-		p += OtherMipPoint[texU] * 2;
+		skip = static_cast<size_t>(OtherMipPoint[texU]) * 2;
 	else if (imgType == PvrSquareTwiddledMipmaps)
 		// Hardcoding pixel size. Not correct for palette texs
-		p += (OtherMipPoint[texU] - 2) * 2;
+		skip = static_cast<size_t>(OtherMipPoint[texU] - 2) * 2;
 	else if (imgType == PvrVQMipmaps)
-		p += VQMipPoint[texU];
+		skip = VQMipPoint[texU];
 	else if (imgType == PvrVQ)
-		p += VQ_CODEBOOK_SIZE;
+		skip = VQ_CODEBOOK_SIZE;
+	if (skip > remaining())
+		return false;
+	p += skip;
 
-	u32 expectedSize = width * height;
+	u64 expectedSize = static_cast<u64>(width) * height;
 	if (imgType == PvrVQ || imgType == PvrVQMipmaps)
 		expectedSize /= 4;	// 4 pixels per byte
 	else
 		expectedSize *= 2;	// 2 bytes per pixel
-	if (end - p < expectedSize)
+	if (expectedSize > remaining())
 	{
-		WARN_LOG(COMMON, "Invalid texture: expected %d bytes, %d remaining", expectedSize, (int)(end - p));
+		WARN_LOG(COMMON, "Invalid texture: expected %llu bytes, %zu remaining", static_cast<unsigned long long>(expectedSize), remaining());
 		return false;
 	}
 

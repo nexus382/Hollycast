@@ -5,7 +5,13 @@
 ScreenScraper is the default online source for Dreamcast library covers.
 The basic list and icon views automatically fetch missing front covers when
 content is added or browsed, following the existing artwork-source rules.
-Choosing extra media or switching themes never silently starts a full scrape.
+Automatic fetching requests baseline covers, miximages, title logos and metadata, plus the active
+theme's missing media requirements for eligible games across the scanned library, including games
+outside the current view. Switching themes can queue additional media; progress appears in the
+library and theme picker. Requests use the selected provider, so its quotas and availability rules
+apply; see [Automatic media requirements](Themes.md#automatic-media-requirements). **Images to
+Download** selects types only for the separate **Download Selected Media** action. To prepare media
+used by all installed themes, choose **Download All Media for All Themes**.
 Existing ES-DE media folders, cached artwork and disc-art fallbacks remain usable.
 The separate arcade cover source is retained. [TheGamesDB](thegamesdb.md) uses the same media slots and download controls for its supported image categories; it does not require ScreenScraper credentials.
 
@@ -140,6 +146,9 @@ successful matches and downloaded files remain valid.
 It does not submit a CHD container hash as a disc hash or guess between ambiguous
 matches. Unmatched games keep their previous artwork. Serial/hash matching and
 an interactive match picker are not implemented here.
+
+See the [interactive scraper matching design](design/scraper-matching.md) for
+the proposed candidate storage and user picker.
 
 The guest session or signed-in account supplies its thread count, download-speed allowance,
 per-minute and daily request caps, and daily unmatched-game cap. The shared
