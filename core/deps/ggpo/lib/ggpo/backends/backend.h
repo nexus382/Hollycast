@@ -28,9 +28,6 @@ struct GGPOSession {
    virtual GGPOErrorCode SetDisconnectNotifyStart(int timeout) { return GGPO_ERRORCODE_UNSUPPORTED; }
    virtual GGPOErrorCode SendMessage(const void *msg, int len, bool spectators) { return GGPO_ERRORCODE_UNSUPPORTED; }
    virtual int GetLastConfirmedFrame() const { return -1; }
-   virtual GGPOErrorCode SyncInputWithPrediction(void *values, int size, int *) {
-      return SyncInput(values, size, nullptr);
-   }
 };
 
 typedef struct GGPOSession Quark, IQuarkBackend; /* XXX: nuke this */

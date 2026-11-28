@@ -31,6 +31,7 @@
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
 #include "network/net_handshake.h"
+#include "network/ggpo.h"
 #include "network/ice.h"
 #include "input/gamepad_device.h"
 #include "test_harness.h"
@@ -4633,6 +4634,14 @@ static void gui_network_start()
 		else
 		{
 			ImGui::Text("%s", T("Starting Network..."));
+#ifdef USE_GGPO
+			if (config::GGPOEnable)
+			{
+				const std::string portStatus = ggpo::startupPortStatus();
+				if (!portStatus.empty())
+					ImGui::TextWrapped("%s", portStatus.c_str());
+			}
+#endif
 			if (NetworkHandshake::instance->canStartNow())
 				ImGui::TextWrapped("%s", T("Press Start to start the game now."));
 		}

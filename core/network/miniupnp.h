@@ -39,9 +39,11 @@ public:
 	}
 	bool Init();
 	void Term();
-	bool AddPortMapping(int port, bool tcp);
+	bool AddPortMapping(int port, bool tcp, bool preserveExisting = false);
+	void RemovePortMapping(int port, bool tcp);
 	bool isInitialized() const { return initialized; }
 	static std::string GetExternalIPv4Address();
+	std::string externalIPv4Address() const;
 
 private:
 	UPNPUrls urls;
@@ -59,9 +61,11 @@ class MiniUPnP
 public:
 	bool Init() { return true; }
 	void Term() {}
-	bool AddPortMapping(int port, bool tcp) { return true; }
+	bool AddPortMapping(int port, bool tcp, bool preserveExisting = false) { return true; }
+	void RemovePortMapping(int port, bool tcp) {}
 	bool isInitialized() const { return false; }
 	static std::string GetExternalIPv4Address() { return {}; }
+	std::string externalIPv4Address() const { return {}; }
 };
 
 #endif

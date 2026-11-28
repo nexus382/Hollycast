@@ -105,10 +105,9 @@ Sync::GetConfirmedInputs(void *values, int size, int frame)
 }
 
 int
-Sync::SynchronizeInputs(void *values, int size, int *predicted_flags)
+Sync::SynchronizeInputs(void *values, int size)
 {
    int disconnect_flags = 0;
-   int predictions = 0;
    char *output = (char *)values;
 
    ASSERT(size >= _config.num_players * _config.input_size);
@@ -119,13 +118,11 @@ Sync::SynchronizeInputs(void *values, int size, int *predicted_flags)
       if (_local_connect_status[i].disconnected && _framecount > _local_connect_status[i].last_frame) {
          disconnect_flags |= (1 << i);
          input.erase();
-      } else if (!_input_queues[i].GetInput(_framecount, &input)) {
-         predictions |= 1 << i;
+      } else {
+         _input_queues[i].GetInput(_framecount, &input);
       }
       memcpy(output + (i * _config.input_size), input.bits, _config.input_size);
    }
-   if (predicted_flags)
-      *predicted_flags = predictions;
    return disconnect_flags;
 }
 

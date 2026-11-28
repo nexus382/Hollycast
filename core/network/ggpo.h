@@ -31,6 +31,7 @@ inline constexpr int SERVER_PORT = 19713;
 
 std::vector<std::string> localIPv4Addresses();
 std::string routerPublicIPv4Address();
+std::string startupPortStatus();
 std::future<bool> startNetwork();
 void startSession(int localPort, int localPlayerNum);
 void stopSession();

@@ -1,5 +1,6 @@
 /* -----------------------------------------------------------------------
  * GGPO.net (http://ggpo.net)  -  Copyright 2009 GroundStorm Studios, LLC.
+ * Portions Copyright 2026 The Hollycast Authors
  *
  * Use of this software is governed by the MIT license that can be found
  * in the LICENSE file.
@@ -33,7 +34,7 @@ public:
 
    Udp();
 
-   void Init(uint16 port, Poll *p, Callbacks *callbacks);
+   void Init(uint16 port, Poll *p, Callbacks *callbacks, uintptr_t *bound_socket = nullptr);
    
    void SendTo(char *buffer, int len, int flags, struct sockaddr *dst, int destlen);
 

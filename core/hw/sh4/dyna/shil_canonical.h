@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 /*
 
 	This is a header file that can create 
@@ -21,6 +22,7 @@
 	#define shil_canonical(rv,name,args,code)
 	#define shil_compile(code)
 #elif  SHIL_MODE==1
+#include "hw/sh4/sh4_fmac.h"
 #include "hw/sh4/sh4_interrupts.h"
 	//generate structs ...
 	#define SHIL_START
@@ -949,7 +951,7 @@ shil_opc(fmac)
 shil_canonical
 (
 f32,f1,(float fn, float f0,float fm),
-	return fixNaN(std::fma(f0, fm, fn));
+	return sh4Fmac(f0, fm, fn, Sh4cntx.fpscr.RM);
 )
 shil_compile
 (

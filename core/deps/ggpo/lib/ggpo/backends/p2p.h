@@ -19,7 +19,7 @@
 class Peer2PeerBackend : public IQuarkBackend, IPollSink, Udp::Callbacks {
 public:
    Peer2PeerBackend(GGPOSessionCallbacks *cb, const char *gamename, uint16 localport, int num_players, int input_size,
-		   const void *verification, int verification_size);
+		   const void *verification, int verification_size, uintptr_t *bound_socket);
    virtual ~Peer2PeerBackend();
 
 
@@ -28,7 +28,6 @@ public:
    GGPOErrorCode AddPlayer(GGPOPlayer *player, GGPOPlayerHandle *handle) override;
    GGPOErrorCode AddLocalInput(GGPOPlayerHandle player, void *values, int size) override;
    GGPOErrorCode SyncInput(void *values, int size, int *disconnect_flags) override;
-   GGPOErrorCode SyncInputWithPrediction(void *values, int size, int *predicted_flags) override;
    int GetLastConfirmedFrame() const override { return _sync.GetLastConfirmedFrame(); }
    GGPOErrorCode IncrementFrame(void) override;
    GGPOErrorCode DisconnectPlayer(GGPOPlayerHandle handle) override;
@@ -43,7 +42,6 @@ public:
    void OnMsg(sockaddr_in &from, UdpMsg *msg, int len) override;
 
 protected:
-   GGPOErrorCode SyncInput(void *values, int size, int *disconnect_flags, int *predicted_flags);
    GGPOErrorCode PlayerHandleToQueue(GGPOPlayerHandle player, int *queue);
    GGPOPlayerHandle QueueToPlayerHandle(int queue) { return (GGPOPlayerHandle)(queue + 1); }
    GGPOPlayerHandle QueueToSpectatorHandle(int queue) { return (GGPOPlayerHandle)(queue + 1000); } /* out of range of the player array, basically */

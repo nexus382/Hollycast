@@ -53,7 +53,7 @@ public:
       return _input_queues[queue].GetConfirmedInput(frame, input);
    }
    int GetConfirmedInputs(void *values, int size, int frame);
-   int SynchronizeInputs(void *values, int size, int *predicted_flags);
+   int SynchronizeInputs(void *values, int size);
    int GetLastConfirmedFrame() const { return _last_confirmed_frame; }
 
    void CheckSimulation(int timeout);

@@ -108,11 +108,6 @@ static void getLocalInput(MapleInputState inputState[4])
 #include "miniupnp.h"
 #include "hw/naomi/naomi_cart.h"
 
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-#include "hw/sh4/sh4_sched.h"
-#include "nowide/cstdio.hpp"
-#endif
-
 //#define SYNC_TEST 1
 
 #include <xxhash.h>
@@ -191,9 +186,8 @@ std::vector<std::string> localIPv4Addresses()
 	return addresses;
 }
 
-std::string routerPublicIPv4Address()
+static std::string publicIPv4Address(const std::string& address)
 {
-	const std::string address = MiniUPnP::GetExternalIPv4Address();
 	in_addr parsed{};
 	if (inet_pton(AF_INET, address.c_str(), &parsed) != 1)
 		return {};
@@ -213,11 +207,17 @@ std::string routerPublicIPv4Address()
 	return address;
 }
 
+std::string routerPublicIPv4Address()
+{
+	return publicIPv4Address(MiniUPnP::GetExternalIPv4Address());
+}
+
 constexpr u32 BTN_TRIGGER_LEFT	= DC_BTN_BITMAPPED_LAST << 1;
 constexpr u32 BTN_TRIGGER_RIGHT	= DC_BTN_BITMAPPED_LAST << 2;
 
 // Protocol 8 coordinates return to play after a GGPO interruption.
 static constexpr u32 GGPO_PROTOCOL_VERSION = 8;
+static constexpr u32 DREAMCAST_SESSION_PROTOCOL_VERSION = 9;
 static constexpr int INTERRUPT_NOTICE_MS = 1000;
 static constexpr int RECONNECT_GRACE_MS = 60000;
 
@@ -267,6 +267,20 @@ static time_point<steady_clock> lastFrameTime;
 static int msPerFrameAvg;
 static bool _endOfFrame;
 static MiniUPnP miniupnp;
+static std::mutex startupPortStatusMutex;
+static std::string portStatus;
+
+std::string startupPortStatus()
+{
+	std::lock_guard<std::mutex> lock(startupPortStatusMutex);
+	return portStatus;
+}
+
+static void setStartupPortStatus(std::string status)
+{
+	std::lock_guard<std::mutex> lock(startupPortStatusMutex);
+	portStatus = std::move(status);
+}
 static int analogAxes;
 static bool absPointerPos;
 static bool keyboardGame;
@@ -418,134 +432,6 @@ static struct
 	bool hasPreviousInput = false;
 	bool interrupted = false;
 } adaptiveDelay;
-
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-// Diagnostic builds use isolated profiles. An empty ggpo-trace.enable file
-// records a session. Copy ggpo-replay.out to ggpo-replay.in to run it offline.
-using WireInputs = std::array<u8, sizeof(Inputs) * MAX_PLAYERS>;
-struct AppliedInputs
-{
-	WireInputs bytes{};
-	int polls = 0;
-};
-
-static std::unique_ptr<FILE, decltype(&fclose)> frameTrace(nullptr, fclose);
-static std::unique_ptr<FILE, decltype(&fclose)> replayOutput(nullptr, fclose);
-static std::unique_ptr<FILE, decltype(&fclose)> replayInput(nullptr, fclose);
-static std::unordered_map<int, AppliedInputs> finalInputs;
-static AppliedInputs replayInputs;
-static int traceFrame;
-static int nextConfirmedInput;
-static int replayPolls;
-static bool replayFinished;
-
-static void openFrameTrace()
-{
-	replayInput.reset(nowide::fopen(get_writable_data_path("ggpo-replay.in").c_str(), "rb"));
-	auto *enable = nowide::fopen(get_writable_data_path("ggpo-trace.enable").c_str(), "rb");
-	if (enable == nullptr && !replayInput)
-		return;
-	if (enable != nullptr)
-		fclose(enable);
-	frameTrace.reset(nowide::fopen(get_writable_data_path("ggpo-frames.log").c_str(), "w"));
-	if (!replayInput)
-		replayOutput.reset(nowide::fopen(get_writable_data_path("ggpo-replay.out").c_str(), "wb"));
-	if (!frameTrace || (!replayInput && !replayOutput))
-		throw FlycastException("Cannot open GGPO frame trace");
-	traceFrame = nextConfirmedInput = replayPolls = 0;
-	replayFinished = false;
-}
-
-static std::array<u64, 4> traceGuestState(u64 ram)
-{
-	// Hash named guest registers, including raw FPU bits, without context
-	// padding, host callbacks or dynarec temporaries.
-	const auto& ctx = Sh4cntx;
-	const u32 regs[] = {ctx.pc, ctx.sr.getFull(), ctx.gbr, ctx.ssr, ctx.spc, ctx.sgr,
-		ctx.dbr, ctx.vbr, ctx.pr, ctx.mac.l, ctx.mac.h, ctx.interrupt_pend};
-	const u32 fpu[] = {ctx.fpscr.full, ctx.fpul};
-	return { ram,
-		XXH3_64bits(regs, sizeof(regs)) ^ XXH3_64bits(ctx.r, sizeof(ctx.r))
-			^ XXH3_64bits_withSeed(ctx.r_bank, sizeof(ctx.r_bank), 1),
-		XXH3_64bits(fpu, sizeof(fpu)) ^ XXH3_64bits(ctx.fr, sizeof(ctx.fr))
-			^ XXH3_64bits_withSeed(ctx.xf, sizeof(ctx.xf), 1),
-		sh4_sched_now64() };
-}
-
-static void traceBoundary(int frame, u64 ram)
-{
-	const auto guest = traceGuestState(ram);
-	fprintf(frameTrace.get(), "S %d %d %016llx %016llx %016llx %llu\n",
-			frame, (int)inRollback, guest[0], guest[1], guest[2], guest[3]);
-}
-
-static bool readReplayFrame()
-{
-	u8 polled;
-	if (fread(&polled, 1, 1, replayInput.get()) != 1)
-	{
-		if (ferror(replayInput.get()))
-			throw FlycastException("Could not read GGPO replay");
-		return false;
-	}
-	if (polled > 1 || fread(replayInputs.bytes.data(), inputSize * MAX_PLAYERS, 1, replayInput.get()) != 1)
-		throw FlycastException("Truncated GGPO replay frame");
-	replayInputs.polls = polled;
-	replayPolls = 0;
-	return true;
-}
-
-static void startFrameTrace(const VerificationData& verification)
-{
-	const u32 timing[] = { (u32)config::Cable.get(), (u32)config::Broadcast.get(),
-		(u32)config::Region.get(), (u32)config::Language.get(), (u32)config::Sh4Clock.get(),
-		(u32)config::UseReios.get(), settings.platform.ram_size };
-	const auto start = traceGuestState(guestRamChecksum());
-	const u64 header[] = { 0x3145434152545047ULL, XXH3_64bits(&verification, sizeof(verification)),
-		XXH3_64bits(timing, sizeof(timing)), start[0], start[1], start[2], start[3] };
-	fprintf(frameTrace.get(), "H %s port=%d wire=%d axes=%d dynarec=%d game_bios_flash_vmu=%016llx timing=%016llx\n",
-			settings.content.gameId.c_str(), localPlayerNum, inputSize, analogAxes, (int)config::DynarecEnabled.get(),
-			header[1], header[2]);
-	traceBoundary(0, start[0]);
-	if (replayInput)
-	{
-		u64 savedHeader[std::size(header)];
-		if (fread(savedHeader, sizeof(savedHeader), 1, replayInput.get()) != 1
-				|| memcmp(header, savedHeader, sizeof(header)) != 0)
-			throw FlycastException("GGPO replay starting state or settings differ");
-		if (!readReplayFrame())
-			throw FlycastException("GGPO replay has no confirmed inputs");
-	}
-	else if (fwrite(header, sizeof(header), 1, replayOutput.get()) != 1)
-		throw FlycastException("Could not write GGPO replay header");
-}
-
-static void confirmTracedFrames(int snapshot)
-{
-	// Boundary N closes input N-1. Earlier forward attempts have already
-	// been superseded by any rollback driven by this poll.
-	for (; nextConfirmedInput < snapshot; ++nextConfirmedInput)
-	{
-		AppliedInputs applied;
-		const auto it = finalInputs.find(nextConfirmedInput);
-		if (it != finalInputs.end())
-		{
-			applied = it->second;
-			finalInputs.erase(it);
-		}
-		const u8 polled = applied.polls != 0;
-		if (fwrite(&polled, 1, 1, replayOutput.get()) != 1
-				|| fwrite(applied.bytes.data(), inputSize * MAX_PLAYERS, 1, replayOutput.get()) != 1)
-			throw FlycastException("Could not write GGPO replay frames");
-		fprintf(frameTrace.get(), "C %d %d\n", nextConfirmedInput, applied.polls);
-	}
-	if (snapshot % 60 == 0)
-	{
-		fflush(frameTrace.get());
-		fflush(replayOutput.get());
-	}
-}
-#endif
 
 /*
  * begin_game callback - This callback has been deprecated.  You must
@@ -721,15 +607,6 @@ static bool load_game_state(unsigned char *buffer, int len)
 	Deserializer deser(buffer, len, true);
 	int frame;
 	deser >> frame;
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	if (frameTrace)
-	{
-		fprintf(frameTrace.get(), "R %d %d\n", lastSavedFrame, frame);
-		for (int f = frame; f < lastSavedFrame; ++f)
-			finalInputs.erase(f);
-		traceFrame = frame;
-	}
-#endif
 	memwatch::unprotect();
 	for (int f = lastSavedFrame - 1; f >= frame; f--)
 	{
@@ -793,20 +670,8 @@ static bool save_game_state(unsigned char **buffer, int *len, int *checksum, int
 	const u64 fullChecksum = exchangeChecksum ? XXH3_64bits(*buffer, *len) : 0;
 #endif
 	*checksum = (int)fullChecksum;
-	bool hashRam = exchangeChecksum;
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	hashRam = hashRam || frameTrace != nullptr;
-#endif
-	const u64 ramChecksum = hashRam ? guestRamChecksum() : 0;
 	if (exchangeChecksum)
-		localChecksums[frame] = { fullChecksum, ramChecksum };
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	if (frameTrace)
-	{
-		traceFrame = frame;
-		traceBoundary(frame, ramChecksum);
-	}
-#endif
+		localChecksums[frame] = { fullChecksum, guestRamChecksum() };
 	{
 		for (auto it = localChecksums.begin(); it != localChecksums.end();)
 		{
@@ -1012,113 +877,57 @@ static std::vector<sessionstate::Item> collectSessionState()
 	return items;
 }
 
-static std::atomic<bool> sessionStateServeStop{ true };
-static std::thread sessionStateThread;
-
-static void serveSessionState(int statePort, in_addr guestAddress, const std::vector<sessionstate::Item>& items)
+static void configureStartupSocket(sock_t sock, [[maybe_unused]] int type)
 {
-	sock_t listener = socket(AF_INET, SOCK_STREAM, 0);
-	if (!VALID(listener))
+	// Use the same bind policy for port selection and the sockets that keep those ports.
+#ifdef _WIN32
+	const int exclusive = 1;
+	setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&exclusive, sizeof(exclusive));
+#else
+	if (type == SOCK_STREAM)
 	{
-		WARN_LOG(NETWORK, "Session state server: socket failed");
-		return;
+		const int reuse = 1;
+		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
 	}
-	int reuse = 1;
-	setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
+#endif
+}
+
+static u16 serveSessionState(int statePort, sock_t udp, in_addr guestAddress)
+{
+	// Capture the same initial state for every guest attempt while emulation is stopped.
+	const auto items = collectSessionState();
+	const sessionstate::Socket listener(socket(AF_INET, SOCK_STREAM, 0));
+	if (!VALID(listener.get()))
+		throw FlycastException(i18n::T("Could not open the GGPO starting save data socket."));
+	configureStartupSocket(listener.get(), SOCK_STREAM);
 	sockaddr_in addr{};
 	addr.sin_family = AF_INET;
-	addr.sin_addr.s_addr = INADDR_ANY;
-	addr.sin_port = htons((u_short)statePort);
-	if (bind(listener, (sockaddr*)&addr, sizeof(addr)) != 0 || listen(listener, 1) != 0)
+	addr.sin_port = htons(static_cast<u16>(statePort));
+	if (bind(listener.get(), (sockaddr *)&addr, sizeof(addr)) != 0 || listen(listener.get(), 1) != 0)
+		throw FlycastException(strprintf(i18n::T("Could not listen for GGPO starting save requests on TCP port %d."), statePort));
+	set_non_blocking(listener.get());
+
+	while (!sessionStopRequested)
 	{
-		WARN_LOG(NETWORK, "Session state server: bind/listen on port %d failed", statePort);
-		closesocket(listener);
-		return;
-	}
-	// Allow the configured guest to retry while the GGPO handshake is pending.
-	while (!sessionStateServeStop)
-	{
-		fd_set readFds;
-		FD_ZERO(&readFds);
-		FD_SET(listener, &readFds);
-		timeval timeout{ 0, 500000 };
-		if (select((int)listener + 1, &readFds, nullptr, nullptr, &timeout) <= 0)
+		if (!sessionstate::waitForReadable(listener.get(), 100))
 			continue;
 		sockaddr_in peer{};
 		socklen_t peerSize = sizeof(peer);
-		sock_t conn = accept(listener, (sockaddr*)&peer, &peerSize);
-		if (!VALID(conn))
+		const sessionstate::Socket conn(accept(listener.get(), (sockaddr*)&peer, &peerSize));
+		if (!VALID(conn.get()) || peer.sin_addr.s_addr != guestAddress.s_addr)
 			continue;
-		if (sessionStateServeStop || peer.sin_addr.s_addr != guestAddress.s_addr)
+		const auto result = sessionstate::serveGuest(conn.get(), udp, peer, DREAMCAST_SESSION_PROTOCOL_VERSION,
+				items, sessionStopRequested);
+		if (result == sessionstate::ServeResult::IncompatibleVersion)
+			throw FlycastException(i18n::T("Player 2 is using an incompatible GGPO version. Both players need the same Hollycast version."));
+		if (result == sessionstate::ServeResult::Complete)
 		{
-			closesocket(conn);
-			continue;
+			const u16 port = ntohs(peer.sin_port);
+			NOTICE_LOG(NETWORK, "Verified GGPO guest UDP port %u and served session state (%d items)", port, (int)items.size());
+			return port;
 		}
-		set_recv_timeout(conn, 10000);
-		set_send_timeout(conn, 10000);
-		u32 protocol = 0;
-		if (sessionstate::receiveRequest(conn, protocol) && protocol == GGPO_PROTOCOL_VERSION && !sessionStateServeStop)
-		{
-			if (sessionstate::sendItems(conn, items))
-				NOTICE_LOG(NETWORK, "Served session state to guest (%d items)", (int)items.size());
-			else
-				WARN_LOG(NETWORK, "Session state server: sending to guest failed");
-		}
-		else
-			WARN_LOG(NETWORK, "Session state server: bad request (protocol %d)", protocol);
-		closesocket(conn);
 	}
-	closesocket(listener);
-}
-
-static void stopSessionStateServer()
-{
-	sessionStateServeStop = true;
-	if (sessionStateThread.joinable())
-		sessionStateThread.join();
-}
-
-static void startSessionStateServer(int statePort, in_addr guestAddress)
-{
-	stopSessionStateServer();
-	// Capture the same initial state for every guest attempt while emulation is stopped.
-	auto items = collectSessionState();
-	sessionStateServeStop = false;
-	sessionStateThread = std::thread(serveSessionState, statePort, guestAddress, std::move(items));
-}
-
-static std::vector<sessionstate::Item> fetchSessionState(const std::string& hostIp, int statePort)
-{
-	NOTICE_LOG(NETWORK, "Fetching host session state from %s:%d", hostIp.c_str(), statePort);
-	const char* stage = "connect";
-	const auto deadline = steady_clock::now() + std::chrono::seconds(60);
-	while (steady_clock::now() < deadline)
-	{
-		stage = "connect";
-		sock_t sock = sessionstate::connectWithTimeout(hostIp, statePort, 1000);
-		if (VALID(sock))
-		{
-			set_recv_timeout(sock, 10000);
-			set_send_timeout(sock, 10000);
-			std::vector<sessionstate::Item> items;
-			stage = "send-request";
-			bool ok = sessionstate::sendRequest(sock, GGPO_PROTOCOL_VERSION);
-			if (ok)
-			{
-				stage = "receive-items";
-				ok = sessionstate::receiveItems(sock, items);
-			}
-			closesocket(sock);
-			if (ok)
-			{
-				NOTICE_LOG(NETWORK, "Received host session state (%d items)", (int)items.size());
-				return items;
-			}
-		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(250));
-	}
-	WARN_LOG(NETWORK, "Fetching host session state failed at stage %s", stage);
-	throw FlycastException("Could not receive the host's memory card and console settings. Make sure the host uses the same HollyCast version and is reachable.");
+	return 0;
 }
 
 static maple_sega_vmu* getSessionVmu(int bus, int port)
@@ -1182,18 +991,36 @@ static void restoreSessionState()
 	}
 	guestAdoptedVmus.clear();
 	guestVmuBackups.clear();
+	mcfg_UpdateVmuDigest();
 }
 
-static void syncSessionState(int localPort, int playerNum, const std::string& peerIp, u32 peerPort, in_addr peerAddress)
+static void fetchSessionState(sock_t udp, const std::string& hostIp, const sockaddr_in& host)
 {
-	if (playerNum == 0)
+	const int statePort = ntohs(host.sin_port) + 1;
+	NOTICE_LOG(NETWORK, "Fetching host session state from %s:%d", hostIp.c_str(), statePort);
+	sockaddr_in tcp = host;
+	tcp.sin_port = htons(static_cast<u16>(statePort));
+	const auto deadline = steady_clock::now() + seconds(60);
+	while (!sessionStopRequested && steady_clock::now() < deadline)
 	{
-		startSessionStateServer(localPort + 1, peerAddress);
+		const sessionstate::Socket sock(sessionstate::connectWithTimeout(tcp, 1000, sessionStopRequested));
+		std::vector<sessionstate::Item> items;
+		if (VALID(sock.get())
+				&& sessionstate::fetchFromHost(sock.get(), udp, host, DREAMCAST_SESSION_PROTOCOL_VERSION, items, sessionStopRequested)
+				&& !sessionStopRequested)
+		{
+			NOTICE_LOG(NETWORK, "Received host session state (%d items)", (int)items.size());
+			// A guest with a mismatched VMU layout can retry while the host stays open.
+			applySessionState(items);
+			if (sessionstate::acknowledgeHost(sock.get(), sessionStopRequested))
+				return;
+			restoreSessionState();
+		}
+		if (!sessionStopRequested)
+			std::this_thread::sleep_for(milliseconds(250));
 	}
-	else
-	{
-		applySessionState(fetchSessionState(peerIp, (int)peerPort + 1));
-	}
+	if (!sessionStopRequested)
+		throw FlycastException(i18n::T("Could not receive the host's memory card and console settings. Make sure the host uses the same HollyCast version and is reachable."));
 }
 
 static void resetReconnectState()
@@ -1213,7 +1040,6 @@ void startSession(int localPort, int localPlayerNum)
 {
 	sessionFrameDelay = config::GGPODelay.get();
 	resetReconnectState();
-	sessionStopRequested = false;
 	startupProbeActive = false;
 	adaptiveDelay = {};
 	resetChecksumState();
@@ -1283,10 +1109,6 @@ void startSession(int localPort, int localPlayerNum)
 		throw FlycastException("GGPO input layout exceeds the wire buffer");
 	inputSize = static_cast<int>(sessionInputSize);
 
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	openFrameTrace();
-#endif
-
 	size_t colon = config::NetworkServer.get().find(':');
 	std::string peerIp = config::NetworkServer.get().substr(0, colon);
 	if (peerIp.empty())
@@ -1295,7 +1117,7 @@ void startSession(int localPort, int localPlayerNum)
 	if (colon == std::string::npos)
 	{
 		if (peerIp == "127.0.0.1")
-			peerPort = localPort ^ 1;
+			peerPort = localPlayerNum == 0 ? SERVER_PORT - 1 : SERVER_PORT;
 		else
 			peerPort = SERVER_PORT;
 	}
@@ -1324,14 +1146,40 @@ void startSession(int localPort, int localPlayerNum)
 
 	// The guest adopts the host's memory card and console flash before
 	// verification, so both sides start from the same saved state.
-	if (settings.platform.isConsole()
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-			&& !replayInput
-#endif
-		)
-		syncSessionState(localPort, localPlayerNum, peerIp, peerPort, peerAddr);
+	const bool exchangeSessionState = settings.platform.isConsole();
+	sessionstate::Socket startupSocket;
+	if (exchangeSessionState)
+	{
+		if (localPlayerNum != 0 && (peerPort == 0 || peerPort >= 65535))
+			throw FlycastException("Invalid GGPO host port. Enter a port between 1 and 65534.");
+		startupSocket.handle = static_cast<uintptr_t>(socket(AF_INET, SOCK_DGRAM, 0));
+		if (!VALID(startupSocket.get()))
+			throw FlycastException("Could not open the GGPO gameplay socket");
+		configureStartupSocket(startupSocket.get(), SOCK_DGRAM);
+		sockaddr_in local{};
+		local.sin_family = AF_INET;
+		local.sin_port = htons(static_cast<u16>(localPort));
+		if (bind(startupSocket.get(), (const sockaddr*)&local, sizeof(local)) != 0)
+			throw FlycastException(strprintf("Could not bind GGPO UDP port %d", localPort));
+		set_non_blocking(startupSocket.get());
+
+		if (localPlayerNum == 0)
+			peerPort = serveSessionState(localPort + 1, startupSocket.get(), peerAddr);
+		else
+		{
+			sockaddr_in host{};
+			host.sin_family = AF_INET;
+			host.sin_addr = peerAddr;
+			host.sin_port = htons(static_cast<u16>(peerPort));
+			fetchSessionState(startupSocket.get(), peerIp, host);
+		}
+		if (sessionStopRequested)
+			return;
+	}
 
 	VerificationData verif;
+	if (exchangeSessionState)
+		verif.protocol = DREAMCAST_SESSION_PROTOCOL_VERSION;
 	verif.inputSize = static_cast<u16>(inputSize);
 	verif.analogAxes = static_cast<u8>(analogAxes);
 	verif.inputFlags = static_cast<u8>((absPointerPos ? 1 : 0) | (keyboardGame ? 2 : 0) | (mouseGame ? 4 : 0));
@@ -1353,22 +1201,8 @@ void startSession(int localPort, int localPlayerNum)
 				.getDigest(verif.stateMD5);
 	}
 
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	if (frameTrace)
-	{
-		ggpo::localPlayerNum = localPlayerNum;
-		startFrameTrace(verif);
-		if (replayInput)
-		{
-			begin_game(nullptr);
-			synchronized = true;
-			return;
-		}
-	}
-#endif
-
-	GGPOErrorCode result = ggpo_start_session(&ggpoSession, &cb, settings.content.gameId.c_str(), MAX_PLAYERS, inputSize, localPort,
-			&verif, sizeof(verif));
+	GGPOErrorCode result = ggpo_start_session_with_socket(&ggpoSession, &cb, settings.content.gameId.c_str(), MAX_PLAYERS,
+			inputSize, localPort, &verif, sizeof(verif), exchangeSessionState ? &startupSocket.handle : nullptr);
 	if (result != GGPO_OK)
 	{
 		WARN_LOG(NETWORK, "GGPO start session failed: %d", result);
@@ -1418,26 +1252,18 @@ void stopSession()
 {
 	sessionStopRequested = true;
 	canHoldSession = false;
-	stopSessionStateServer();
 	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
+	setStartupPortStatus({});
 	resetReconnectState();
 	resetChecksumState();
 	lastSavedFrame = -1;
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	if (replayInput)
-		emu.setNetworkState(false);
-	replayInput.reset();
-	replayOutput.reset();
-	frameTrace.reset();
-	finalInputs.clear();
-#endif
 	if (sessionStateAdopted)
 		restoreSessionState();
+	miniupnp.Term();
 	if (ggpoSession == nullptr)
 		return;
 	ggpo_close_session(ggpoSession);
 	ggpoSession = nullptr;
-	miniupnp.Term();
 	emu.setNetworkState(false);
 	memwatch::unprotect();
 	memwatch::reset();
@@ -1456,21 +1282,8 @@ void getInput(MapleInputState inputState[4])
 
 	std::array<u8, sizeof(Inputs) * MAX_PLAYERS> inputData{};
 	const int wireSize = inputSize * MAX_PLAYERS;
-	GGPOErrorCode error;
 	// should not call any callback
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	int predicted = 0;
-	if (replayInput)
-	{
-		inputData = replayInputs.bytes;
-		++replayPolls;
-		error = GGPO_OK;
-	}
-	else if (frameTrace)
-		error = ggpo_synchronize_input_with_prediction(ggpoSession, inputData.data(), wireSize, &predicted);
-	else
-#endif
-		error = ggpo_synchronize_input(ggpoSession, inputData.data(), wireSize, nullptr);
+	const GGPOErrorCode error = ggpo_synchronize_input(ggpoSession, inputData.data(), wireSize, nullptr);
 	if (error != GGPO_OK)
 	{
 		stopSession();
@@ -1508,29 +1321,6 @@ void getInput(MapleInputState inputState[4])
 		state.halfAxes[PJTI_R] = (state.kcode & BTN_TRIGGER_RIGHT) == 0 ? 0xffff : 0;
 		state.halfAxes[PJTI_L] = (state.kcode & BTN_TRIGGER_LEFT) == 0 ? 0xffff : 0;
 	}
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	if (frameTrace)
-	{
-		if (!replayInput)
-		{
-			auto& applied = finalInputs[traceFrame];
-			applied.bytes = inputData;
-			++applied.polls;
-		}
-		fprintf(frameTrace.get(), "I %d %d %x %llu ", traceFrame, (int)inRollback,
-				(unsigned)predicted, sh4_sched_now64());
-		for (int i = 0; i < wireSize; ++i)
-			fprintf(frameTrace.get(), "%02x", (unsigned)inputData[i]);
-		for (int port = 0; port < MAX_PLAYERS; ++port)
-		{
-			const auto& state = inputState[port];
-			fprintf(frameTrace.get(), " port=%d/buttons=%08x/x=%d/y=%d/l=%u/r=%u", port, (unsigned)state.kcode,
-					(int)state.fullAxes[PJAI_X1], (int)state.fullAxes[PJAI_Y1],
-					(unsigned)state.halfAxes[PJTI_L], (unsigned)state.halfAxes[PJTI_R]);
-		}
-		fputc('\n', frameTrace.get());
-	}
-#endif
 }
 
 static void sampleAdaptiveDelay(time_point<steady_clock> now, int predicted, steady_clock::duration waited, bool newStall)
@@ -1647,27 +1437,6 @@ bool nextFrame()
 	lastFrameTime = now;
 
 	std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	if (replayInput)
-	{
-		if (replayFinished)
-			return false;
-		++traceFrame;
-		traceBoundary(traceFrame, guestRamChecksum());
-		if ((replayPolls != 0) != (replayInputs.polls != 0))
-			fprintf(frameTrace.get(), "P %d expected_poll=%d actual=%d\n",
-					traceFrame - 1, replayInputs.polls, replayPolls);
-		if (!readReplayFrame())
-		{
-			replayFinished = true;
-			fflush(frameTrace.get());
-			NOTICE_LOG(NETWORK, "GGPO offline replay completed %d frames", traceFrame);
-			return false;
-		}
-		emu.getSh4Executor()->Start();
-		return true;
-	}
-#endif
 	if (ggpoSession == nullptr)
 		return false;
 	// will call save_game_state
@@ -1690,10 +1459,6 @@ bool nextFrame()
 	// Snapshot N is the state before input N. Poll has completed any replay
 	// before publishing the latest confirmed input frame.
 	const int confirmedSnapshot = std::min(lastSavedFrame, ggpo_get_last_confirmed_frame(ggpoSession) + 1);
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	if (replayOutput)
-		confirmTracedFrames(confirmedSnapshot);
-#endif
 	for (auto remote = remoteChecksums.begin(); remote != remoteChecksums.end();)
 	{
 		if (remote->first > confirmedSnapshot)
@@ -1855,16 +1620,86 @@ bool nextFrame()
 
 bool active()
 {
-#ifdef HOLLYCAST_GGPO_FRAME_TRACE
-	if (replayInput)
-		return !replayFinished;
-#endif
 	return ggpoSession != nullptr;
 }
+
+#ifndef SYNC_TEST
+static constexpr int FALLBACK_PORT = 19716;
+
+static bool canBindPort(int port, int type)
+{
+	const sessionstate::Socket sock(socket(AF_INET, type, 0));
+	if (!VALID(sock.get()))
+		return false;
+	configureStartupSocket(sock.get(), type);
+	sockaddr_in address{};
+	address.sin_family = AF_INET;
+	address.sin_port = htons(static_cast<u16>(port));
+	return bind(sock.get(), (const sockaddr *)&address, sizeof(address)) == 0
+			&& (type != SOCK_STREAM || listen(sock.get(), 1) == 0);
+}
+
+static bool mapStartupPorts(int port, bool serveState)
+{
+	if (!miniupnp.AddPortMapping(port, false, true))
+		return false;
+	if (!serveState || miniupnp.AddPortMapping(port + 1, true, true))
+		return true;
+	miniupnp.RemovePortMapping(port, false);
+	return false;
+}
+
+static int selectStartupPort(bool host)
+{
+	const bool dreamcast = settings.platform.isConsole();
+	const bool serveState = dreamcast && host;
+	// The Dreamcast host learns the guest's source port, including a port chosen by NAT.
+	const bool advertisePort = !dreamcast || host;
+	const bool primaryAvailable = canBindPort(SERVER_PORT, SOCK_DGRAM)
+			&& (!serveState || canBindPort(SERVER_PORT + 1, SOCK_STREAM));
+	const bool routerAvailable = advertisePort && config::EnableUPnP && miniupnp.Init() && miniupnp.isInitialized();
+	if (primaryAvailable && (!routerAvailable || mapStartupPorts(SERVER_PORT, serveState)))
+		return SERVER_PORT;
+
+	const bool fallbackAvailable = canBindPort(FALLBACK_PORT, SOCK_DGRAM)
+			&& (!serveState || canBindPort(FALLBACK_PORT + 1, SOCK_STREAM));
+	if (!primaryAvailable && !fallbackAvailable)
+		throw FlycastException(i18n::T("GGPO could not bind its default or alternate ports."));
+	const bool fallbackMapped = fallbackAvailable && routerAvailable && mapStartupPorts(FALLBACK_PORT, serveState);
+	const int port = fallbackMapped || !primaryAvailable ? FALLBACK_PORT : SERVER_PORT;
+
+	std::string status;
+	if (advertisePort && !fallbackMapped && (routerAvailable || port == FALLBACK_PORT))
+		status = serveState
+				? strprintf(i18n::T("For internet play, forward UDP %d and TCP %d on the host's router."), port, port + 1)
+				: strprintf(i18n::T("For internet play, forward UDP %d on your router."), port);
+	if (port == FALLBACK_PORT && advertisePort)
+	{
+		NOTICE_LOG(NETWORK, "GGPO: selected alternate UDP port %d (automatic forwarding %s)",
+				port, fallbackMapped ? "succeeded" : "unavailable");
+		if (!status.empty())
+			status += "\n";
+		status += strprintf(i18n::T("Using alternate GGPO port %d. Keep this screen open while the other player enters your address with this port and starts again."), port);
+		auto addresses = localIPv4Addresses();
+		if (fallbackMapped)
+		{
+			std::string publicAddress = publicIPv4Address(miniupnp.externalIPv4Address());
+			if (!publicAddress.empty())
+				addresses.insert(addresses.begin(), std::move(publicAddress));
+		}
+		for (const std::string& address : addresses)
+			status += "\n" + address + ":" + std::to_string(port);
+	}
+	setStartupPortStatus(std::move(status));
+	return port;
+}
+#endif
 
 std::future<bool> startNetwork()
 {
 	synchronized = false;
+	sessionStopRequested = false;
+	setStartupPortStatus({});
 	return std::async(std::launch::async, []{
 		{
 			ThreadName _("GGPO-start");
@@ -1872,22 +1707,22 @@ std::future<bool> startNetwork()
 #ifdef SYNC_TEST
 			startSession(0, 0);
 #else
-			if (config::EnableUPnP)
-			{
-				miniupnp.Init();
-				miniupnp.AddPortMapping(SERVER_PORT, false);
-			}
-
+			// The Dreamcast role must match the save ownership chosen at load.
+			const bool host = settings.platform.isConsole() ? !emu.isGgpoGuestGame() : config::ActAsServer.get();
 			try {
-				// The Dreamcast role must match the save ownership chosen at load.
-				const bool host = settings.platform.isConsole() ? !emu.isGgpoGuestGame() : config::ActAsServer.get();
-				if (host)
-					startSession(SERVER_PORT, 0);
-				else
-					// Use SERVER_PORT-1 as local port if connecting to ourselves
-					startSession(config::NetworkServer.get().empty() || config::NetworkServer.get() == "127.0.0.1" ? SERVER_PORT - 1 : SERVER_PORT, 1);
+				const std::string& peer = config::NetworkServer.get();
+				const std::string peerAddress = peer.substr(0, peer.find(':'));
+				const bool loopback = peerAddress.empty() || peerAddress == "127.0.0.1";
+				// The loopback guest must use a different local port from its host.
+				const int port = loopback ? (host ? SERVER_PORT : SERVER_PORT - 1) : selectStartupPort(host);
+				if (sessionStopRequested)
+				{
+					miniupnp.Term();
+					return false;
+				}
+				startSession(port, host ? 0 : 1);
 			} catch (...) {
-				miniupnp.Term();
+				stopSession();
 				throw;
 			}
 #endif
@@ -1913,8 +1748,6 @@ std::future<bool> startNetwork()
 			if (!synchronized)
 				std::this_thread::sleep_for(std::chrono::milliseconds(startupProbeActive ? 2 : 20));
 		}
-		// Rejoins reuse the live session and never fetch another starting image.
-		sessionStateServeStop = true;
 #ifndef SYNC_TEST
 		{
 			std::lock_guard<std::recursive_mutex> lock(ggpoMutex);
@@ -2097,6 +1930,10 @@ void returnToHeldSession() {
 
 std::future<bool> startNetwork() {
 	return std::async(std::launch::deferred, []{ return false; });
+}
+
+std::string startupPortStatus() {
+	return {};
 }
 
 void displayStats() {

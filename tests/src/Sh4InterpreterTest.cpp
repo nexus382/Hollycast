@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -19,6 +20,11 @@
 #include "sh4_ops.h"
 #include "emulator.h"
 #include "hw/sh4/sh4_mem.h"
+
+#include <cfenv>
+#if defined(__MINGW32__) && HOST_CPU == CPU_X64
+#include <xmmintrin.h>
+#endif
 
 class Sh4InterpreterTest : public Sh4OpTest {
 protected:
@@ -97,6 +103,42 @@ TEST_F(Sh4InterpreterTest, StatusRegTest)
 TEST_F(Sh4InterpreterTest, FloatingPointTest)
 {
 	Sh4OpTest::FloatingPointTest();
+}
+TEST_F(Sh4InterpreterTest, FmacRoundsTowardZero)
+{
+	std::fenv_t savedEnv;
+	ASSERT_EQ(std::fegetenv(&savedEnv), 0);
+#if defined(__MINGW32__) && HOST_CPU == CPU_X64
+	const unsigned savedMxcsr = _mm_getcsr();
+#endif
+	const Sh4Context savedContext = *ctx;
+	const u16 savedOpcode = addrspace::read16(START_PC);
+
+	ctx->fpscr.PR = 0;
+	ctx->fpscr.RM = 1;
+	ctx->fr_hex(0) = 0x3f19999a;
+	ctx->fr_hex(3) = 0x41880000;
+	ctx->fr_hex(2) = 0x43fde65b;
+	PrepareOp(0xf23e); // Toy Racer: FMAC FR0, FR3, FR2.
+	RunOp();
+	const u32 capturedResult = ctx->fr_hex(2);
+
+	// Round-to-nearest would give 0x43a7cccd for these operands.
+	ctx->fr_hex(3) = 0x3f800000;
+	ctx->fr_hex(2) = 0x43a78000;
+	RunOp();
+	const u32 roundingResult = ctx->fr_hex(2);
+
+	addrspace::write16(START_PC, savedOpcode);
+	*ctx = savedContext;
+	ctx->restoreHostRoundingMode();
+	const int restoreStatus = std::fesetenv(&savedEnv);
+#if defined(__MINGW32__) && HOST_CPU == CPU_X64
+	_mm_setcsr(savedMxcsr);
+#endif
+	ASSERT_EQ(restoreStatus, 0);
+	ASSERT_EQ(capturedResult, 0x44017ffau);
+	ASSERT_EQ(roundingResult, 0x43a7ccccu);
 }
 TEST_F(Sh4InterpreterTest, DoubleFloatingPointTest)
 {
