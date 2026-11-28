@@ -102,6 +102,9 @@
 #if defined(WINAPI_FAMILY) && (WINAPI_FAMILY == WINAPI_FAMILY_APP)
 #define TARGET_UWP 1
 #endif
+#if !defined(TARGET_UWP) && !defined(LIBRETRO) && !defined(USE_LIBCDIO)
+#define USE_WINDOWS_CDROM
+#endif
 #ifdef HAVE_D3D11
 #define USE_DX11
 #endif

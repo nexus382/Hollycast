@@ -2964,8 +2964,11 @@ static void drawThemedLibrary(const themes::Theme& theme, const themes::Layout& 
 		{
 			std::lock_guard<std::mutex> lock(scanner.get_mutex());
 			games = scanner.get_game_list();
-			// Firmware/device entries must not hide the game-folder prompt.
-			if (config::ContentPath.get().empty()) games.clear();
+			// A physical disc can be played before any game folder has been added.
+			if (config::ContentPath.get().empty())
+				games.erase(std::remove_if(games.begin(), games.end(), [](const GameMedia& game) {
+					return !game.device;
+				}), games.end());
 
 			libraryEntries.reserve(games.size());
 			gameIndicesByPath.clear();
@@ -3697,18 +3700,27 @@ static void gui_display_content()
 
     boxart.refreshCustomBoxartIndex(false);
 	// Themes draw this inside their own browser viewport; stock views share the
-	// full library area. Firmware/device entries must not hide the folder action.
+	// full library area. An optical drive can also supply the first game.
 	if (customLayout == nullptr && gui_state != GuiState::SelectDisk && config::ContentPath.get().empty())
 	{
-		ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
-				ImGuiWindowFlags_DragScrolling);
-		scrollWindowFromTouch();
-		const bool addFolder = drawEmptyLibraryPrompt(!config::ContentPath.get().empty(), scanner.is_scanning());
-		ImGui::EndChild();
-		addContentPath(addFolder);
-		ImGui::End();
-		contentpath_warning_popup();
-		return;
+		bool hasOpticalDrive;
+		{
+			std::lock_guard<std::mutex> lock(scanner.get_mutex());
+			const auto& games = scanner.get_game_list();
+			hasOpticalDrive = std::any_of(games.begin(), games.end(), [](const GameMedia& game) { return game.device; });
+		}
+		if (!hasOpticalDrive)
+		{
+			ImGui::BeginChild(ImGui::GetID("library"), ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
+					ImGuiWindowFlags_DragScrolling);
+			scrollWindowFromTouch();
+			const bool addFolder = drawEmptyLibraryPrompt(false, scanner.is_scanning());
+			ImGui::EndChild();
+			addContentPath(addFolder);
+			ImGui::End();
+			contentpath_warning_popup();
+			return;
+		}
 	}
 	if (customLayout != nullptr)
 	{

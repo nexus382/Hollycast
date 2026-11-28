@@ -6,6 +6,9 @@
 #include "hw/sh4/sh4_sched.h"
 #include "serialize.h"
 #include "oslib/i18n.h"
+#ifdef USE_WINDOWS_CDROM
+#include "windows_cdrom.h"
+#endif
 
 Disc* chd_parse(const char* file, std::vector<u8> *digest);
 Disc* gdi_parse(const char* file, std::vector<u8> *digest);
@@ -101,6 +104,15 @@ static bool convertSector(u8* in_buff, u8* out_buff, int from, int to, int secto
 
 Disc* OpenDisc(const std::string& path, std::vector<u8> *digest)
 {
+#ifdef USE_WINDOWS_CDROM
+	if (const auto devicePath = windowsCdromDevicePath(path); !devicePath.empty())
+	{
+		// Rollback netplay requires a digest of the full game, including every track.
+		if (digest != nullptr)
+			throw FlycastException(i18n::Ts("Use a disc image to play this game with rollback netplay."));
+		return windows_cdrom_parse(devicePath);
+	}
+#endif
 	for (auto driver : drivers)
 	{
 		Disc *disc = driver(path.c_str(), digest);

@@ -1,3 +1,4 @@
+# Portions Copyright 2026 The Hollycast Authors
 target_sources(${PROJECT_NAME} PRIVATE
         cdi.cpp
         cdio.cpp
@@ -10,4 +11,6 @@ target_sources(${PROJECT_NAME} PRIVATE
         ImgReader.cpp
         iso9660.h
         isofs.cpp
-        isofs.h)
+        isofs.h
+        windows_cdrom.cpp
+        windows_cdrom.h)
