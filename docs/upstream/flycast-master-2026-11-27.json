@@ -49,8 +49,8 @@
     {
       "sha": "222c9530da7552fc1a95f33acfb4848856fafa28",
       "subject": "bba: don't [de]serialize bba if not available on the current platform",
-      "disposition": "already_present",
-      "reason": "Hollycast writes and skips a fixed RTL8139 placeholder for an absent device. Preserve the existing save-state layout."
+      "disposition": "adapted",
+      "reason": "Use V65 to omit the BBA block when the adapter is absent. Older states and rollback snapshots keep their existing layout."
     },
     {
       "sha": "1b7c7d63b73ea6987fb23f9334a7d597401a50f8",

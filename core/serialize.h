@@ -55,8 +55,9 @@ public:
 		V61,
 		V62,
 		V63,
-		V64, // Platform-tagged Hikaru state headers; other platforms write V63.
-		Current = V64,
+		V64, // Platform-tagged Hikaru state headers.
+		V65, // Platform-tagged state with BBA configured but no adapter payload.
+		Current = V65,
 
 		Next = Current + 1,
 	};
@@ -162,6 +163,7 @@ public:
 		this->_size += size;
 	}
 	bool dryrun() const { return data == nullptr; }
+	Version version() const { return _version; }
 
 private:
 	void doSerialize(const void *src, size_t size)
@@ -180,6 +182,7 @@ private:
 	}
 
 	u8 *data;
+	Version _version;
 };
 
 template<typename T>
