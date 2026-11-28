@@ -1,3 +1,4 @@
+// Portions Copyright 2026 The Hollycast Authors
 #pragma once
 
 #include "gui_util.h"
@@ -10,6 +11,13 @@
 
 #ifdef HOLLYCAST_TEST_HARNESS
 #include "test_harness_ui.h"
+#endif
+
+extern ImFont* largeFont;
+
+namespace SettingsNew {
+
+#ifdef HOLLYCAST_TEST_HARNESS
 void annotateTestToggle(const char* prefix, const char* id, const char* label, bool value);
 void annotateTestFloat(const char* prefix, const char* id, const char* label,
 		float value, float minimum, float maximum);
@@ -21,10 +29,6 @@ void annotateTestColor(const char* prefix, const char* id, const char* label,
 		const char* widgetId, const float* value);
 void annotateTestText(const char* prefix, const char* id, const char* label);
 #endif
-
-extern ImFont* largeFont;
-
-namespace SettingsNew {
 
 extern std::atomic<bool> g_textureFilterLiveTune;
 extern float g_twoLineRowExtraHeightPx;
