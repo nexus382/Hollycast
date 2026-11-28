@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <locale>
 #include <sstream>
 
 namespace {
@@ -351,6 +352,7 @@ TEST_F(LaunchBoxMediaTest, BulkMatchWriteWorkload)
   const auto workloadRoot = root / ("inventory-" + std::to_string(count));
   std::filesystem::create_directories(workloadRoot);
   std::ostringstream xml;
+  xml.imbue(std::locale::classic());
   xml << "<LaunchBox>";
   for (int i = 0; i < count; ++i)
   {

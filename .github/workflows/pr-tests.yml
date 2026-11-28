@@ -28,6 +28,8 @@ jobs:
           sudo apt-get -y install git cmake gcc g++ ninja-build
           sudo apt-get -y install ccache libao-dev libasound2-dev libevdev-dev libgl1-mesa-dev liblua5.3-dev libminiupnpc-dev libpulse-dev libsdl2-dev libudev-dev libzip-dev libcurl4-openssl-dev libcdio-dev libfuse2 locales xvfb xauth libgl1-mesa-dri
           sudo apt-get -y install libwayland-dev libdecor-0-dev libaudio-dev libjack-dev libsndio-dev libsamplerate0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxkbcommon-dev libdrm-dev libgbm-dev libgles2-mesa-dev libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev fcitx-libs-dev
+          sudo sed -i 's/# fr_FR.UTF-8 UTF-8/fr_FR.UTF-8 UTF-8/g' /etc/locale.gen
+          sudo locale-gen
 
       - uses: actions/cache@v6
         with:

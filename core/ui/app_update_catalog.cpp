@@ -103,6 +103,7 @@ Check check(const std::string& channel, const std::string& current, bool switchT
     std::set<std::string> seen;
     size_t expected = 0;
     std::vector<std::string> notes;
+    std::string currentTree;
     for (size_t page = 1; ; ++page) {
         const auto history = fetch(compare + "?per_page=100&page=" + std::to_string(page));
         if (page == 1) {
@@ -110,6 +111,8 @@ Check check(const std::string& channel, const std::string& current, bool switchT
             if (relation == "identical") return result;
             result.olderTrack = relation == "behind" || relation == "diverged";
             if (relation == "behind" && !switchTrack) return result;
+            if (!switchTrack && relation == "diverged")
+                currentTree = history.at("base_commit").at("commit").at("tree").at("sha").get<std::string>();
             expected = history.at("total_commits").get<size_t>();
             require(expected <= 10000, "The missed history is too large for an in-app update check.");
         }
@@ -118,6 +121,11 @@ Check check(const std::string& channel, const std::string& current, bool switchT
         for (const auto& commit : commits) {
             if (!seen.insert(commit.at("sha").get<std::string>()).second) continue;
             const auto& data = commit.at("commit");
+            // A promoted PR build embeds the candidate SHA, while the catalog lists
+            // the final merge SHA. An identical source tree needs no reinstall.
+            if (!currentTree.empty() && commit.at("sha") == result.package.commit
+                    && data.at("tree").at("sha") == currentTree)
+                return result;
             const auto message = data.at("message").get<std::string>();
             notes.push_back(data.at("committer").value("date", "") + "\n" + message + "\n\n");
         }

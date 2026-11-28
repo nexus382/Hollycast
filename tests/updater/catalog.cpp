@@ -27,10 +27,11 @@ const std::string assetName = "Hollycast-portable.zip";
 const std::string url = "https://github.com/nexus382/Hollycast/releases/download/ci-dev-123/";
 Json catalogue, release;
 std::string relation;
+std::string targetTree;
 int total;
 bool incomplete;
 void reset() {
-    relation = "ahead"; total = 1; incomplete = false;
+    relation = "ahead"; total = 1; incomplete = false; targetTree = newSha;
     Json files = Json::array();
     for (const auto* platform : {"Windows", "Android", "Linux", "macOS", "Switch", "UWP"})
         files.push_back({{"platform", platform}, {"url", url + assetName}});
@@ -47,9 +48,11 @@ std::string fetch(const std::string& address) {
     const int page = address.find("page=2") == std::string::npos ? 1 : 2;
     Json commits = Json::array();
     if (!incomplete) for (int i = (page - 1) * 100; i < total && i < page * 100; ++i)
-        commits.push_back({{"sha", std::to_string(i)}, {"commit", {{"message", "change-" + std::to_string(i)},
+        commits.push_back({{"sha", i == total - 1 ? newSha : std::to_string(i)},
+            {"commit", {{"message", "change-" + std::to_string(i)}, {"tree", {{"sha", targetTree}}},
             {"committer", {{"date", "2026-11-11"}}}}}});
-    return Json{{"status", relation}, {"total_commits", total}, {"commits", commits}}.dump();
+    return Json{{"status", relation}, {"total_commits", total}, {"commits", commits},
+        {"base_commit", {{"commit", {{"tree", {{"sha", oldSha}}}}}}}}.dump();
 }
 void fails(const std::function<void()>& action, const char* message) {
     try { action(); } catch (const std::exception&) { ++count; return; }
@@ -90,6 +93,11 @@ int main() {
         expect(result.changelog.find("change-0\n") != std::string::npos, "Oldest missed change missing");
         reset(); relation = "behind"; total = 0;
         expect(!run().available, "Automatic downgrade offered"); expect(run(true).available, "Explicit track switch blocked");
+        reset(); relation = "diverged"; total = 101; targetTree = oldSha;
+        expect(!run().available, "Promoted build with the same source offered again");
+        expect(run(true).available, "Explicit switch to equivalent source blocked");
+        targetTree = newSha;
+        expect(run().available, "New source after a promoted build was hidden");
         reset(); catalogue["builds"][0]["files"].erase(5); fails([&] { run(); }, "Incomplete platform set accepted");
         reset(); release["assets"][0]["digest"] = nullptr; fails([&] { run(); }, "Missing checksum accepted");
         reset(); release["assets"][0]["browser_download_url"] = "https://example.com/file.zip"; fails([&] { run(); }, "Foreign asset accepted");
