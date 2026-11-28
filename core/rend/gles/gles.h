@@ -484,11 +484,14 @@ public:
 	}
 	TextureCacheData(TextureCacheData&& other) : BaseTextureCacheData(std::move(other)) {
 		std::swap(texID, other.texID);
+		std::swap(immutableStorage, other.immutableStorage);
 		std::swap(uploadedWidth, other.uploadedWidth);
 		std::swap(customTextureObject, other.customTextureObject);
 	}
 
 	GLuint texID = 0;   //gl texture
+	// Width, height, mip levels and format of storage created by UploadToGPUGl4.
+	std::array<int, 4> immutableStorage {};
 	// Level-zero width, including upscaling, custom textures and render targets.
 	u32 uploadedWidth = 0;
 	bool customTextureObject = false;

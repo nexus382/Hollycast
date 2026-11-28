@@ -2,6 +2,7 @@
     Created on: Nov 7, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -86,7 +87,7 @@ void QuadPipeline::CreatePipeline()
 		vk::BlendFactor::eSrcAlpha,			// srcColorBlendFactor
 		vk::BlendFactor::eOneMinusSrcAlpha, // dstColorBlendFactor
 		vk::BlendOp::eAdd,					// colorBlendOp
-		vk::BlendFactor::eSrcAlpha,			// srcAlphaBlendFactor
+		vk::BlendFactor::eOne,				// srcAlphaBlendFactor: keeps an opaque target opaque, for video routing
 		vk::BlendFactor::eOneMinusSrcAlpha, // dstAlphaBlendFactor
 		vk::BlendOp::eAdd,					// alphaBlendOp
 		vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG

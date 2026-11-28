@@ -939,13 +939,13 @@ void VulkanContext::CreateSwapChain()
 	    			view.get(), width, height, 1)));
 	    	drawFences.push_back(device->createFenceUnique(vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled)));
 	    }
-	    renderCompleteSemaphores.reserve(imageViews.size() + 1);
+	    // Reacquiring an image proves presentation has consumed its semaphore.
+	    renderCompleteSemaphores.reserve(imageViews.size());
+	    for (unsigned i = 0; i < imageViews.size(); i++)
+		renderCompleteSemaphores.push_back(device->createSemaphoreUnique(vk::SemaphoreCreateInfo()));
 	    imageAcquiredSemaphores.reserve(imageViews.size() + 1);
 	    for (unsigned i = 0; i < imageViews.size() + 1; i++)
-	    {
-	    	renderCompleteSemaphores.push_back(device->createSemaphoreUnique(vk::SemaphoreCreateInfo()));
 	    	imageAcquiredSemaphores.push_back(device->createSemaphoreUnique(vk::SemaphoreCreateInfo()));
-	    }
 	    inFlightObjects.resize(imageViews.size());
 	    currentSemaphore = 0;
 	    quadPipeline->Init(shaderManager.get(), *renderPass, 0);
@@ -1090,9 +1090,10 @@ void VulkanContext::EndFrame(vk::CommandBuffer overlayCmdBuffer)
 	if (overlayCmdBuffer)
 		allCmdBuffers.push_back(overlayCmdBuffer);
 	allCmdBuffers.push_back(commandBuffer);
-	vk::SubmitInfo submitInfo(*imageAcquiredSemaphores[currentSemaphore], wait_stage, allCmdBuffers, *renderCompleteSemaphores[currentSemaphore]);
+	vk::SubmitInfo submitInfo(*imageAcquiredSemaphores[currentSemaphore], wait_stage, allCmdBuffers, *renderCompleteSemaphores[currentImage]);
 	device->resetFences(*drawFences[currentImage]);
 	graphicsQueue.submit(submitInfo, *drawFences[currentImage]);
+	currentSemaphore = (currentSemaphore + 1) % imageAcquiredSemaphores.size();
 	// Both timestamps were written by earlier renderer submissions on this
 	// queue. This later fence proves those writes completed without extending
 	// the measured interval through presentation or unrelated RTT work.
@@ -1206,7 +1207,7 @@ void VulkanContext::Present() noexcept
 	{
 		try {
 			DoSwapAutomation();
-			vk::Result res = swappyvk::present(presentQueue, vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentSemaphore]), 1, &(*swapChain), &currentImage));
+			vk::Result res = swappyvk::present(presentQueue, vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentImage]), 1, &(*swapChain), &currentImage));
 			if (res == vk::Result::eSuccess || res == vk::Result::eSuboptimalKHR)
 				performance_overlay::recordPresentedFrame();
 #if defined(VK_USE_PLATFORM_METAL_EXT) || defined(__APPLE__)
@@ -1221,19 +1222,21 @@ void VulkanContext::Present() noexcept
 			if (res == vk::Result::eSuboptimalKHR)
 				resized = true;
 #endif
-			currentSemaphore = (currentSemaphore + 1) % renderCompleteSemaphores.size();
 #ifndef SWAPPY
 			if (lastFrameView && IsValid() && !gui_is_open()
 					&& swapOnVSync && config::DupeFrames)
 			{
 				const int interval = swapInterval * gameSwapInterval;
-				for (int i = 1; i < interval; i++)
+				for (int i = 1; i < interval && !resized; i++)
 				{
+					renderDone = false;
 					PresentFrame(vk::Image(), lastFrameView, lastFrameSourceExtent, lastFrameSourceAR);
-					res = presentQueue.presentKHR(vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentSemaphore]), 1, &(*swapChain), &currentImage));
+					// Acquisition can fail during resize, leaving no completion semaphore to wait on.
+					if (!renderDone)
+						break;
+					res = presentQueue.presentKHR(vk::PresentInfoKHR(1, &(*renderCompleteSemaphores[currentImage]), 1, &(*swapChain), &currentImage));
 					if (res == vk::Result::eSuccess || res == vk::Result::eSuboptimalKHR)
 						performance_overlay::recordPresentedFrame();
-					currentSemaphore = (currentSemaphore + 1) % renderCompleteSemaphores.size();
 					if (res == vk::Result::eSuboptimalKHR)
 					{
 						// Stop queuing additional dupe presents into a swap

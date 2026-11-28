@@ -1,0 +1,152 @@
+{
+  "snapshot_date": "2026-11-27",
+  "flycast_repository": "https://github.com/flyinghead/flycast",
+  "branch": "master",
+  "range": {
+    "base": "53efedbbe70d8066cbbe597bd1992422ba7edfe2",
+    "head": "12a7f18b81c0c7dc2e52c29b6615c7fe0d496ee5",
+    "commits": 23
+  },
+  "hollycast_base": "ce6672619892e4662a6c806317b19041ed92008e",
+  "previous_ledger": "docs/upstream/flycast-2026-10-27.json",
+  "commits": [
+    {
+      "sha": "6d81b998169b916ad7d7d6f403f7dc2c18e2aea5",
+      "subject": "add pull request template. Fix issue templates.",
+      "disposition": "not_applicable",
+      "reason": "Hollycast already has its own issue and PR templates. The PR template filename would collide on Windows."
+    },
+    {
+      "sha": "e88b0ced2243de137bcccac0072f0c1dd00d41bd",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "disposition": "applied",
+      "reason": "Refresh Spanish and Swedish Libretro option text."
+    },
+    {
+      "sha": "11ba75f843bb573e43dfe26ba7befede223ddbf2",
+      "subject": "libretro: add a Vblank Pacing option (#2562)",
+      "disposition": "adapted",
+      "reason": "Add opt-in Libretro Vblank Pacing for non-threaded rendering."
+    },
+    {
+      "sha": "1b63c8a3677cc8eb1292863c4fe8fc8f94674fc8",
+      "subject": "dreamcast: Default broadcast follows the region",
+      "disposition": "applied",
+      "reason": "Default the broadcast standard to PAL for Europe and NTSC elsewhere."
+    },
+    {
+      "sha": "7adbf3caef251b153e348df3f469a0f35878339d",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "disposition": "deferred",
+      "reason": "The bulk generated refresh needs regeneration against Hollycast's option definitions. The upstream Vblank Pacing localization strings are all empty."
+    },
+    {
+      "sha": "eb7f4418f1c9aed9b26359e817c8072502c70e2a",
+      "subject": "ci: enable macOS build",
+      "disposition": "already_present",
+      "reason": "Hollycast already builds macOS in CI. The upstream zstd uninstall is specific to Flycast's dependency setup."
+    },
+    {
+      "sha": "222c9530da7552fc1a95f33acfb4848856fafa28",
+      "subject": "bba: don't [de]serialize bba if not available on the current platform",
+      "disposition": "adapted",
+      "reason": "Use V65 to omit the BBA block when the adapter is absent. Older states and rollback snapshots keep their existing layout."
+    },
+    {
+      "sha": "1b7c7d63b73ea6987fb23f9334a7d597401a50f8",
+      "subject": "reios: pass correct data size to GetMemPtr when reading sectors",
+      "disposition": "adapted",
+      "reason": "Validate the whole GD-ROM sector read against the available RAM span, and bound the sector count before converting it to bytes."
+    },
+    {
+      "sha": "72b8e67141d85ca5c9259f04563b49f7f92f928b",
+      "subject": "vk: fix some validation errors",
+      "disposition": "adapted",
+      "reason": "Transition the Vulkan RTT depth attachment and synchronize presentation per swapchain image while retaining Hollycast's timing and resize handling."
+    },
+    {
+      "sha": "6e7173d0b20e9362b269bd3e7e21dd2cbab9fbb3",
+      "subject": "oboe: add 200 ms timeout to push() to avoid ANR when pausing game",
+      "disposition": "applied",
+      "reason": "Bound Oboe's producer wait to avoid hanging Android while pausing a game."
+    },
+    {
+      "sha": "c9c9daa3cccf5196eb852d60b6a621ed025201ba",
+      "subject": "make sure settings.display.width/height is never null",
+      "disposition": "applied",
+      "reason": "Keep display dimensions positive on DX11, DX9, SDL, EGL and Android resize paths."
+    },
+    {
+      "sha": "2848bbb3b2cea3c7e735cadd8ca2c815f3b85ac7",
+      "subject": "gl, dx9: recreate textures when an update changes their size or format (#2604)",
+      "disposition": "adapted",
+      "reason": "Recreate OpenGL and DX9 textures when storage changes. Preserve Hollycast's texture preloading, filtering and RTT metadata."
+    },
+    {
+      "sha": "c363e58ca926d627d1bb09871d5130b0333ab91f",
+      "subject": "gl, dx11: make video routing output opaque",
+      "disposition": "adapted",
+      "reason": "Keep routed frames opaque in OpenGL and DX11 while retaining Hollycast's display shader chain."
+    },
+    {
+      "sha": "3a5267a5e32438026e1c5b97d5de6cd77236f72c",
+      "subject": "vk, dx11: keep video routing output opaque under overlays",
+      "disposition": "applied",
+      "reason": "Keep routed output opaque under DX11 crosshairs and Vulkan overlays."
+    },
+    {
+      "sha": "460a821ef30bb12c0cd477ef2927eedd0d1e8d6f",
+      "subject": "dcnet: frame gride support",
+      "disposition": "adapted",
+      "reason": "Route Frame Gride through the DCNet Power Smash PPP protocol using Hollycast's endpoint resolver."
+    },
+    {
+      "sha": "bb4768a61d9700bb5fe2380609342fd520a90f5f",
+      "subject": "naomi: reset multiboard flag for decryted roms",
+      "disposition": "adapted",
+      "reason": "Clear stale multiboard state for decrypted Naomi carts while retaining Hollycast's cart and Hikaru classification."
+    },
+    {
+      "sha": "6ab783f3be291894b9962523f381dd22b82f52d0",
+      "subject": "ci: continue-on-error since macOS is failing once again",
+      "disposition": "deferred",
+      "reason": "Keep existing Hollycast CI failure reporting for the build matrix."
+    },
+    {
+      "sha": "027b1054a457008ed5317732f456f9fbbb400df4",
+      "subject": "Fetch translations & Recreate libretro_core_options_intl.h",
+      "disposition": "applied",
+      "reason": "Refresh Asturian and Hebrew Libretro option text."
+    },
+    {
+      "sha": "074a27b4edbff87bdc36111470cc15777b32f45c",
+      "subject": "ci: mingw tentative fix",
+      "disposition": "already_present",
+      "reason": "Hollycast's MinGW job already requests the MinGW make package through make:p."
+    },
+    {
+      "sha": "834f092362a8751d9d7d611cf00204315de1c1d8",
+      "subject": "ui: missing tooltips for bottom row of game list",
+      "disposition": "not_applicable",
+      "reason": "Hollycast's library cards use their own item-hover details instead of Flycast's cover tooltip."
+    },
+    {
+      "sha": "96ac9aa8bb6c08b3f39e6518e4c6c564d8437c1d",
+      "subject": "dx11: fix partial rendering for OIT",
+      "disposition": "adapted",
+      "reason": "Preserve the previous DX11 OIT frame for partial draws. Copy into the larger OIT target when a larger RTT prevents swapping matching resources."
+    },
+    {
+      "sha": "105342d53fc181493cd372c8f1ebf5c49621ed1a",
+      "subject": "Force RTT Copy to VRAM for Pia Carrott 2 and Shinki Sekai Evolution",
+      "disposition": "applied",
+      "reason": "Force RTT Copy to VRAM for Pia Carrot 2 and Shinki Sekai Evolution."
+    },
+    {
+      "sha": "12a7f18b81c0c7dc2e52c29b6615c7fe0d496ee5",
+      "subject": "CI macOS: install the universal dependency formulae from a local tap",
+      "disposition": "already_present",
+      "reason": "Hollycast already installs and verifies universal macOS dependencies from its own local Homebrew tap."
+    }
+  ]
+}

@@ -390,8 +390,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_hollycast_emulator_emu_JNIdc_rendinit
 		}
 		else
 		{
-			settings.display.width = width;
-			settings.display.height = height;
+			settings.display.width = std::max(width, 1);
+			settings.display.height = std::max(height, 1);
 		    mainui_reinit();
 		}
 	}

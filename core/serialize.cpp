@@ -175,12 +175,16 @@ Deserializer::Deserializer(const void *data, size_t limit, bool rollback, bool r
 Serializer::Serializer(void *data, size_t limit, bool rollback)
 	: SerializeBase(limit, rollback), data((u8 *)data)
 {
-	// Only Hikaru states use the platform-tagged V64 header; every other
-	// platform keeps the V63 header byte-for-byte.
-	const bool tagged = settings.platform.isHikaru();
-	Version v = tagged ? V64 : V63;
-	serialize(v);
-	if (tagged)
+	// Keep the existing format for rollback and whenever there is no BBA
+	// placeholder to omit. The version identifies the layout on restore.
+	if (settings.platform.isHikaru())
+		_version = V64;
+	else if (!rollback && config::EmulateBBA && !bba_HasDevice())
+		_version = V65;
+	else
+		_version = V63;
+	serialize(_version);
+	if (_version >= V64)
 		serialize(u32(settings.platform.system));
 	if (settings.platform.isConsole())
 		serialize(settings.platform.ram_size);

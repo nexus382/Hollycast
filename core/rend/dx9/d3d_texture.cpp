@@ -1,5 +1,6 @@
 /*
 	Copyright 2021 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of Flycast.
 
@@ -56,6 +57,14 @@ void D3DTexture::UploadToGPU(int width, int height, const u8* temp_tex_buffer, b
 		}
 	}
 
+	// Auto-generated mipmaps report one accessible level.
+	if (texture != nullptr)
+	{
+		D3DSURFACE_DESC desc;
+		if (FAILED(texture->GetLevelDesc(0, &desc)) || desc.Width != (UINT)width || desc.Height != (UINT)height
+				|| desc.Format != d3dFormat || texture->GetLevelCount() != (DWORD)mipmapLevels)
+			texture.reset();
+	}
 	D3DLOCKED_RECT rect;
 	while (true)
 	{

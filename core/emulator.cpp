@@ -204,7 +204,11 @@ static void loadSpecialSettings()
 				// Pro Pinball - Trilogy (EU)
 				|| prod_id == "T30701D 50"
 				// Jikkyo Powerful Pro Yakyu
-				|| prod_id == "T9507M")
+				|| prod_id == "T9507M"
+				// Pia Carrott 2
+				|| prod_id == "T20109M"
+				// Shinki Sekai Evolution
+				|| prod_id == "T38701M")
 		{
 			INFO_LOG(BOOT, "Enabling RTT Copy to VRAM for game %s", prod_id.c_str());
 			config::RenderToTextureBuffer.override(true);
@@ -288,6 +292,13 @@ static void loadSpecialSettings()
 		}
 		else
 			WARN_LOG(BOOT, "No region specified in IP.BIN");
+		// Broadcast left on Default follows the region, the way Region's own
+		// Default follows IP.BIN above: PAL for Europe, NTSC otherwise.
+		// fixUpDCFlash() skips the out-of-range Default value, which left the
+		// flash byte at the factory setting (NTSC) or at whatever the last
+		// explicit choice wrote.
+		if (config::Broadcast == 4)
+			config::Broadcast.override(config::Region == 2 ? 1 : 0);
 		if (config::Cable <= 1 && (!ip_meta.supportsVGA()
 				|| prod_id == "T-12504N"	// Caesar's Palace (NTSC)
 				|| prod_id == "12502D-50"))	// Caesar's Palace (PAL)
@@ -626,12 +637,14 @@ void Emulator::runAt(u64 sh4TimePoint, const std::function<void()>& func)
 	runner.runOnThread(sh4TimePoint, func);
 }
 
-int getGamePlatform(const std::string& filename)
+int getGamePlatform(const std::string& filename, bool *multiboard)
 {
 	if (settings.naomi.slave)
 		// Multiboard slave
 		return DC_PLATFORM_NAOMI;
 
+	if (multiboard != nullptr)
+		*multiboard = false;
 	if (filename.empty())
 		// Dreamcast BIOS
 		return DC_PLATFORM_DREAMCAST;
@@ -647,7 +660,7 @@ int getGamePlatform(const std::string& filename)
 		if (hikaru::findGame(basename) != nullptr)
 			return DC_PLATFORM_HIKARU;
 #endif
-		return naomi_cart_GetPlatform(filename.c_str());
+		return naomi_cart_GetPlatform(filename.c_str(), multiboard);
 	}
 	if (extension == "bin" || extension == "dat" || extension == "lst")
 		return DC_PLATFORM_NAOMI;
@@ -685,7 +698,8 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
 			settings.content.fileName.clear();
 		}
 
-		const int platform = getGamePlatform(settings.content.fileName);
+		// Only loading a game may change board mode. Artwork lookups also classify files.
+		const int platform = getGamePlatform(settings.content.fileName, &settings.naomi.multiboard);
 #ifdef USE_HIKARU
 		if (platform == DC_PLATFORM_HIKARU)
 		{
@@ -1491,7 +1505,7 @@ void Emulator::vblank()
 	}
 #endif
 	// Time out if a frame hasn't been rendered for 50 ms
-	if (sh4_sched_now64() - startTime <= 50_sh4ms)
+	if (!config::VblankPacing && sh4_sched_now64() - startTime <= 50_sh4ms)
 		return;
 	if (ggpo::active())
 		ggpo::endOfFrame();

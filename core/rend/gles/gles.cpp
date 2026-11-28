@@ -1888,7 +1888,11 @@ void OpenGLRenderer::initVideoRoutingFrameBuffer()
 			&& (gl.videorouting.framebuffer->getWidth() != targetWidth || gl.videorouting.framebuffer->getHeight() != targetHeight))
 			gl.videorouting.framebuffer.reset();
 		if (gl.videorouting.framebuffer == nullptr)
-			gl.videorouting.framebuffer = std::make_unique<GlFramebuffer>(targetWidth, targetHeight, true, true);
+		{
+			// No alpha channel: receivers that blend with alpha must get an opaque frame
+			gl.videorouting.framebuffer = std::make_unique<GlFramebuffer>(targetWidth, targetHeight, true, 0,
+					GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE);
+		}
 	}
 #endif
 }

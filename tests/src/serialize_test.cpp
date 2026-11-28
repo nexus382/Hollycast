@@ -439,7 +439,7 @@ TEST(SerializerBufferTest, ExactBufferSizeSucceeds)
 	ASSERT_EQ(ser.size(), buffer.size());
 }
 
-TEST_F(SerializeTest, BbaStateSkipsDevicePayloadWhenRuntimeDeviceIsMissing)
+TEST_F(SerializeTest, BbaStatePreservesLegacyAndCompactLayouts)
 {
 	if (!settings.platform.isConsole() && !settings.platform.isAtomiswave())
 		GTEST_SKIP() << "BBA device is unavailable on this platform";
@@ -456,21 +456,66 @@ TEST_F(SerializeTest, BbaStateSkipsDevicePayloadWhenRuntimeDeviceIsMissing)
 
 	config::EmulateBBA = true;
 	bba_Reset(true);
+	constexpr u32 marker = 0x12345678;
+	const u32 platform = settings.platform.system;
 	std::vector<char> data(100000);
 	Serializer ser(data.data(), data.size());
+	ASSERT_EQ(Serializer::V63, ser.version());
+	const size_t legacyHeaderSize = ser.size();
 	bba_Serialize(ser);
+	EXPECT_GT(ser.size(), legacyHeaderSize);
+	ser << marker;
 	data.resize(ser.size());
 
-	// Simulate loading a BBA-enabled V63 state where this runtime has no BBA.
+	Deserializer active(data.data(), data.size());
+	bba_Deserialize(active);
+	u32 restored = 0;
+	active >> restored;
+	EXPECT_EQ(marker, restored);
+	EXPECT_EQ(0u, active.remaining());
+
 	bba_Term();
-	std::vector<char> noDeviceData(100000);
-	Serializer noDeviceSer(noDeviceData.data(), noDeviceData.size());
-	bba_Serialize(noDeviceSer);
-	EXPECT_EQ(ser.size(), noDeviceSer.size());
-	noDeviceData.resize(noDeviceSer.size());
-	Deserializer deser(data.data(), data.size());
-	EXPECT_NO_THROW(bba_Deserialize(deser));
-	EXPECT_EQ(ser.size(), deser.size());
+	for (const auto version : { Deserializer::V63, Deserializer::V64 })
+	{
+		std::vector<char> legacy = data;
+		if (version == Deserializer::V64)
+		{
+			legacy.insert(legacy.begin() + sizeof(version), sizeof(platform), 0);
+			std::memcpy(legacy.data() + sizeof(version), &platform, sizeof(platform));
+			std::memcpy(legacy.data(), &version, sizeof(version));
+		}
+		Deserializer deser(legacy.data(), legacy.size());
+		bba_Deserialize(deser);
+		restored = 0;
+		deser >> restored;
+		EXPECT_EQ(marker, restored);
+		EXPECT_EQ(0u, deser.remaining());
+	}
+
+	Serializer rollback(nullptr, data.size(), true);
+	ASSERT_EQ(Serializer::V63, rollback.version());
+	bba_Serialize(rollback);
+	rollback << marker;
+	EXPECT_EQ(data.size(), rollback.size());
+
+	std::array<char, 64> compact{};
+	Serializer compactSer(compact.data(), compact.size());
+	ASSERT_EQ(Serializer::V65, compactSer.version());
+	const size_t headerSize = compactSer.size();
+	bba_Serialize(compactSer);
+	EXPECT_EQ(headerSize, compactSer.size());
+	compactSer << marker;
+
+	// A load can create the adapter during reset. Its presence must not
+	// change how much data the reader consumes from this state.
+	bba_Reset(true);
+	Deserializer compactDeser(compact.data(), compactSer.size());
+	ASSERT_EQ(Deserializer::V65, compactDeser.version());
+	bba_Deserialize(compactDeser);
+	restored = 0;
+	compactDeser >> restored;
+	EXPECT_EQ(marker, restored);
+	EXPECT_EQ(0u, compactDeser.remaining());
 }
 
 TEST(NetworkFrameQueueTest, TryPopDrainsFramesInFifoOrder)

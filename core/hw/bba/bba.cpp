@@ -259,8 +259,15 @@ void pci_dma_write(PCIDevice *dev, dma_addr_t addr, const void *buf, dma_addr_t 
 	memcpy(&GAPS_ram[addr & GAPSPCI_RAM_MASK], buf, len);
 }
 
+bool bba_HasDevice()
+{
+	return rtl8139device != nullptr;
+}
+
 void bba_Serialize(Serializer& ser)
 {
+	if (ser.version() == Serializer::V65)
+		return;
 	ser << GAPS_regs;
 	ser << GAPS_ram;
 	ser << dmaOffset;
@@ -270,6 +277,10 @@ void bba_Serialize(Serializer& ser)
 
 void bba_Deserialize(Deserializer& deser)
 {
+	// A V65 state omitted the entire BBA block. Older states still carry
+	// the bridge fields and RTL8139 data or a placeholder.
+	if (deser.version() == Deserializer::V65)
+		return;
 	deser >> GAPS_regs;
 	deser >> GAPS_ram;
 	deser >> dmaOffset;

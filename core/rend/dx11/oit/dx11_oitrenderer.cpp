@@ -568,12 +568,27 @@ struct DX11OITRenderer : public DX11Renderer
 		buffers.bind();
 		deviceContext->ClearDepthStencilView(depthTexView, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 0.f, 0);
 		deviceContext->ClearDepthStencilView(depthStencilView2, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 0.f, 0);
-		if (rendContext->clearFramebuffer && !rendContext->isRTT)
+		if (!rendContext->isRTT)
 		{
-			float colors[4];
-			VO_BORDER_COL.getRGBColor(colors);
-			colors[3] = 1.f;
-			deviceContext->ClearRenderTargetView(opaqueRenderTarget, colors);
+			if (rendContext->clearFramebuffer)
+			{
+				float colors[4];
+				VO_BORDER_COL.getRGBColor(colors);
+				colors[3] = 1.f;
+				deviceContext->ClearRenderTargetView(opaqueRenderTarget, colors);
+			}
+			else if (width == maxWidth && height == maxHeight)
+			{
+				// Draw on the last rendered frame
+				std::swap(opaqueTex, fbTex);
+				std::swap(opaqueRenderTarget, fbRenderTarget);
+				std::swap(opaqueTextureView, fbTextureView);
+			}
+			else
+			{
+				// OIT buffers can outgrow the framebuffer when a larger RTT is drawn.
+				deviceContext->CopySubresourceRegion(opaqueTex, 0, 0, 0, 0, fbTex, 0, nullptr);
+			}
 		}
 
 		RenderPass previous_pass {};
@@ -656,7 +671,8 @@ struct DX11OITRenderer : public DX11Renderer
 				//
 				if (!multipassTex)
 				{
-					createTexAndRenderTarget(multipassTex, multipassRenderTarget, width, height);
+					// These resources swap with the opaque targets after each pass.
+					createTexAndRenderTarget(multipassTex, multipassRenderTarget, maxWidth, maxHeight);
 					multipassTextureView.reset();
 					D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
 					viewDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;

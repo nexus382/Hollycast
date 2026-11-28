@@ -185,11 +185,12 @@ static void GDROM_HLE_ReadTOC()
 static void readSectors(u32 addr, u32 sector, u32 count, bool virtualAddr)
 {
 	gd_hle_state.cur_sector = sector + count - 1;
-	if (!virtualAddr || !mmu_enabled())
+	// Bound the bulk read before converting the sector count to bytes.
+	if ((!virtualAddr || !mmu_enabled()) && count <= RAM_SIZE / 2048)
 	{
-		u8 * pDst = GetMemPtr(addr, 0);
+		u8 *pDst = GetMemPtr(addr, count * 2048);
 
-		if (pDst != NULL)
+		if (pDst != nullptr)
 		{
 			libGDR_ReadSector(pDst, sector, count, 2048);
 			return;
