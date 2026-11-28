@@ -4316,12 +4316,13 @@ static void renderSettingsContentTab(SettingsTab tab)
 			"discord_presence",
 			ICON_FA_COMMENT,
 			T("Discord Presence"),
-			T("Show which game you are playing on Discord"),
+			T("Basic info for everyone; richer status with RetroAchievements"),
 			static_cast<bool>(config::DiscordPresence),
 			[](bool enabled) { config::DiscordPresence = enabled; },
 			T(
 				"Discord Presence\n"
-				"Shows which game you are playing on Discord.\n"
+				"Everyone gets basic game info on Discord.\n"
+				"Sign in to RetroAchievements for richer status details in most games.\n"
 				"Disable if you prefer not to share activity status."
 			)
 		);
