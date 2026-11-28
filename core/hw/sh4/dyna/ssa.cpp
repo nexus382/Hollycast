@@ -2,6 +2,7 @@
     Created on: Jun 5, 2019
 
 	Copyright 2019 flyinghead
+	Portions Copyright 2026 The Hollycast Authors
 
 	This file is part of reicast.
 
@@ -24,6 +25,7 @@
 #include "ssa.h"
 #include "decoder.h"
 #include "hw/sh4/modules/mmu.h"
+#include "hw/sh4/sh4_fmac.h"
 #include "hw/sh4/sh4_mem.h"
 
 #define SHIL_MODE 2
@@ -392,7 +394,8 @@ bool SSAOptimizer::ExecuteConstOp(shil_opcode* op)
 			break;
 		case shop_fmac:
 			{
-				f32 frd = shil_opcl_fmac::f1::impl(reinterpret_cast<f32&>(rs1), reinterpret_cast<f32&>(rs2), reinterpret_cast<f32&>(rs3));
+				f32 frd = sh4Fmac(reinterpret_cast<f32&>(rs2), reinterpret_cast<f32&>(rs3),
+						reinterpret_cast<f32&>(rs1), block->fpu_cfg.RM);
 				rd = reinterpret_cast<u32&>(frd);
 			}
 			break;

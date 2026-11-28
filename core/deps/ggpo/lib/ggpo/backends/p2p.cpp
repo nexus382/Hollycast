@@ -20,7 +20,7 @@ Peer2PeerBackend::Peer2PeerBackend(GGPOSessionCallbacks *cb,
                                    int num_players,
                                    int input_size,
 								   const void *verification,
-								   int verification_size) :
+								   int verification_size, uintptr_t *bound_socket) :
     _sync(_local_connect_status),
 	_endpoints(nullptr),
     _num_spectators(0),
@@ -47,7 +47,7 @@ Peer2PeerBackend::Peer2PeerBackend(GGPOSessionCallbacks *cb,
    /*
     * Initialize the UDP port
     */
-   _udp.Init(localport, &_poll, this);
+   _udp.Init(localport, &_poll, this, bound_socket);
 
    _endpoints = new UdpProtocol[_num_players];
    for (int i = 0; i < _num_players; i++)
@@ -339,28 +339,14 @@ Peer2PeerBackend::SyncInput(void *values,
                             int size,
                             int *disconnect_flags)
 {
-   return SyncInput(values, size, disconnect_flags, nullptr);
-}
-
-GGPOErrorCode
-Peer2PeerBackend::SyncInputWithPrediction(void *values, int size, int *predicted_flags)
-{
-   return SyncInput(values, size, nullptr, predicted_flags);
-}
-
-GGPOErrorCode
-Peer2PeerBackend::SyncInput(void *values, int size, int *disconnect_flags, int *predicted_flags)
-{
    // Wait until we've started to return inputs.
    if (_synchronizing) {
       return GGPO_ERRORCODE_NOT_SYNCHRONIZED;
    }
-   int flags = _sync.SynchronizeInputs(values, size, predicted_flags);
+   int flags = _sync.SynchronizeInputs(values, size);
    if (disconnect_flags) {
       *disconnect_flags = flags;
    }
-   if (predicted_flags)
-      *predicted_flags &= _registered_players;
    return GGPO_OK;
 }
 

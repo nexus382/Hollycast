@@ -332,7 +332,7 @@ UdpProtocol::HandlesMsg(sockaddr_in &from,
 void
 UdpProtocol::OnMsg(UdpMsg *msg, int len)
 {
-   if (len < (int)sizeof(msg->hdr)) {
+   if (len < (int)sizeof(msg->hdr) || msg->hdr.type < UdpMsg::SyncRequest || msg->hdr.type > UdpMsg::AppData) {
       return;
    }
    if (msg->hdr.type == UdpMsg::SyncReply) {

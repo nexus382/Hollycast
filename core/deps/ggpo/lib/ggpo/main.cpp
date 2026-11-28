@@ -34,6 +34,15 @@ ggpo_start_session(GGPOSession **session,
 				   const void *verification,
 				   int verification_size)
 {
+   return ggpo_start_session_with_socket(session, cb, game, num_players, input_size,
+                                         localport, verification, verification_size, nullptr);
+}
+
+GGPOErrorCode
+ggpo_start_session_with_socket(GGPOSession **session, GGPOSessionCallbacks *cb,
+                    const char *game, int num_players, int input_size, unsigned short localport,
+                    const void *verification, int verification_size, uintptr_t *bound_socket)
+{
 	try {
 	   *session= (GGPOSession *)new Peer2PeerBackend(cb,
 													 game,
@@ -41,7 +50,8 @@ ggpo_start_session(GGPOSession **session,
 													 num_players,
 													 input_size,
 													 verification,
-													 verification_size);
+												 verification_size,
+												 bound_socket);
 	   return GGPO_OK;
 	} catch (const GGPOException& e) {
 	   ERROR_LOG(NETWORK, "GGPOException in ggpo_start_session: %s", e.what());
@@ -135,34 +145,17 @@ ggpo_add_local_input(GGPOSession *ggpo,
    }
 }
 
-static GGPOErrorCode
-synchronize_input(GGPOSession *ggpo, void *values, int size,
-                  int *disconnect_flags, int *predicted_flags)
+GGPOErrorCode
+ggpo_synchronize_input(GGPOSession *ggpo, void *values, int size, int *disconnect_flags)
 {
-   if (predicted_flags)
-      *predicted_flags = 0;
    if (!ggpo)
       return GGPO_ERRORCODE_INVALID_SESSION;
    try {
-      if (predicted_flags)
-         return ggpo->SyncInputWithPrediction(values, size, predicted_flags);
       return ggpo->SyncInput(values, size, disconnect_flags);
    } catch (const GGPOException& e) {
 	  ERROR_LOG(NETWORK, "GGPOException in ggpo_synchronize_input: %s", e.what());
       return e.ggpoError;
    }
-}
-
-GGPOErrorCode
-ggpo_synchronize_input(GGPOSession *ggpo, void *values, int size, int *disconnect_flags)
-{
-   return synchronize_input(ggpo, values, size, disconnect_flags, nullptr);
-}
-
-GGPOErrorCode
-ggpo_synchronize_input_with_prediction(GGPOSession *ggpo, void *values, int size, int *predicted_flags)
-{
-   return synchronize_input(ggpo, values, size, nullptr, predicted_flags);
 }
 
 int ggpo_get_last_confirmed_frame(GGPOSession *ggpo)

@@ -1,8 +1,10 @@
+// Portions Copyright 2026 The Hollycast Authors
 #include "types.h"
 #include <cmath>
 
 #include "sh4_opcodes.h"
 #include "hw/sh4/sh4_core.h"
+#include "hw/sh4/sh4_fmac.h"
 #include "hw/sh4/sh4_rom.h"
 #include "hw/sh4/sh4_mem.h"
 
@@ -556,8 +558,7 @@ sh4op(i1111_nnnn_mmmm_1110)
 		u32 n = GetN(op);
 		u32 m = GetM(op);
 
-		ctx->fr[n] = std::fma(ctx->fr[0], ctx->fr[m], ctx->fr[n]);
-		CHECK_FPU_32(ctx->fr[n]);
+		ctx->fr[n] = sh4Fmac(ctx->fr[0], ctx->fr[m], ctx->fr[n], ctx->fpscr.RM);
 	}
 	else
 	{

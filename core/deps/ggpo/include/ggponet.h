@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 #include <stdarg.h>
+#include <stdint.h>
 
 // On windows, export at build time and import at runtime.
 // ELF systems don't need an explicit export/import.
@@ -530,12 +531,6 @@ GGPO_API GGPOErrorCode __cdecl ggpo_synchronize_input(GGPOSession *,
                                                       int size,
                                                       int *disconnect_flags);
 
-/* Synchronizes input and reports a bit for each player whose input was predicted. */
-GGPO_API GGPOErrorCode __cdecl ggpo_synchronize_input_with_prediction(GGPOSession *,
-                                                                      void *values,
-                                                                      int size,
-                                                                      int *predicted_flags);
-
 /* Returns the last confirmed peer-to-peer frame, or -1 if unavailable. */
 GGPO_API int __cdecl ggpo_get_last_confirmed_frame(GGPOSession *);
 
@@ -613,6 +608,11 @@ GGPO_API GGPOErrorCode __cdecl ggpo_send_message(GGPOSession *,
 
 #ifdef __cplusplus
 };
+
+// Transfers a prebound gameplay socket to GGPO, invalidating the caller's handle.
+GGPOErrorCode ggpo_start_session_with_socket(GGPOSession **session, GGPOSessionCallbacks *cb,
+                  const char *game, int num_players, int input_size, unsigned short localport,
+                  const void *verification, int verification_size, uintptr_t *bound_socket);
 #endif
 
 #endif
