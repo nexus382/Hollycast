@@ -21,11 +21,18 @@
 #include "emulator.h"
 #include "cfg/option.h"
 #include "gui.h"
+#include "achievements/achievements.h"
 #include "discord_rpc.h"
-#include <cstring>
 #include <ctime>
+#include <mutex>
 
-#define FLYCAST_APPID "1212789289851559946"
+namespace
+{
+constexpr char HollyCastDiscordApplicationId[] = "1575720391937097859";
+// Use the HollyCast Discord application's icon for both artwork layouts.
+constexpr char HollyCastDiscordIcon[] =
+		"https://cdn.discordapp.com/app-icons/1575720391937097859/75e969a31f243abdd21b4fcc82090fa9.png";
+}
 
 class DiscordPresence
 {
@@ -36,6 +43,7 @@ public:
 		EventManager::listen(Event::Terminate, handleEmuEvent, this);
 		EventManager::listen(Event::Resume, handleEmuEvent, this);
 		EventManager::listen(Event::Network, handleEmuEvent, this);
+		EventManager::listen(Event::RichPresence, handleEmuEvent, this);
 	}
 
 	~DiscordPresence()
@@ -45,14 +53,15 @@ public:
 		EventManager::unlisten(Event::Terminate, handleEmuEvent, this);
 		EventManager::unlisten(Event::Resume, handleEmuEvent, this);
 		EventManager::unlisten(Event::Network, handleEmuEvent, this);
+		EventManager::unlisten(Event::RichPresence, handleEmuEvent, this);
 	}
 
 private:
 	void initialize()
 	{
 		if (!initialized)
-			Discord_Initialize(FLYCAST_APPID, nullptr, 0, nullptr);
-	    initialized = true;
+			Discord_Initialize(HollyCastDiscordApplicationId, nullptr, 0, nullptr);
+		initialized = true;
 	}
 
 	void shutdown()
@@ -65,25 +74,27 @@ private:
 	void sendPresence()
 	{
 		initialize();
-        DiscordRichPresence discordPresence{};
-        discordPresence.state = settings.content.title.c_str();
-       	discordPresence.startTimestamp = startTimestamp;
-        std::string imageUrl = gui_getCurGameBoxartUrl();
-        if (!imageUrl.empty())
-        {
-        	discordPresence.largeImageKey = imageUrl.c_str();
-        	discordPresence.largeImageText = settings.content.title.c_str();
-        	discordPresence.smallImageKey = "icon-512";
-		discordPresence.smallImageText = "Hollycast is a Dreamcast, Naomi and Atomiswave emulator";
-        }
-        else
-        {
-        	discordPresence.largeImageKey = "icon-512";
-		discordPresence.largeImageText = "Hollycast is a Dreamcast, Naomi and Atomiswave emulator";
-        }
-        if (settings.network.online)
-        	discordPresence.details = "Online";
-        Discord_UpdatePresence(&discordPresence);
+		DiscordRichPresence presence{};
+		presence.state = settings.content.title.c_str();
+		presence.startTimestamp = startTimestamp;
+
+		const std::string imageUrl = gui_getCurGameBoxartUrl();
+		presence.largeImageKey = HollyCastDiscordIcon;
+		presence.largeImageText = "HollyCast";
+		if (!imageUrl.empty())
+		{
+			presence.largeImageKey = imageUrl.c_str();
+			presence.largeImageText = settings.content.title.c_str();
+			presence.smallImageKey = HollyCastDiscordIcon;
+			presence.smallImageText = "HollyCast";
+		}
+
+		std::string details = achievements::getRichPresence();
+		if (settings.network.online)
+			details = details.empty() ? "Online" : "Online - " + details;
+		if (!details.empty())
+			presence.details = details.c_str();
+		Discord_UpdatePresence(&presence);
 	}
 
 	static void handleEmuEvent(Event event, void *p)
@@ -91,17 +102,19 @@ private:
 		if (settings.naomi.slave || settings.naomi.drivingSimSlave != 0)
 			return;
 		DiscordPresence *inst = (DiscordPresence *)p;
+		std::lock_guard<std::mutex> lock(inst->presenceMutex);
 		switch (event)
 		{
 		case Event::Start:
 			inst->startTimestamp = time(nullptr);
 			[[fallthrough]];
 		case Event::Network:
-			if (config::DiscordPresence)
+		case Event::RichPresence:
+			if (config::DiscordPresence && inst->startTimestamp != 0)
 				inst->sendPresence();
 			break;
 		case Event::Resume:
-			if (config::DiscordPresence && !inst->initialized)
+			if (config::DiscordPresence && !inst->initialized && inst->startTimestamp != 0)
 				// Discord presence enabled
 				inst->sendPresence();
 			else if (!config::DiscordPresence && inst->initialized)
@@ -121,6 +134,7 @@ private:
 		}
 	}
 
+	std::mutex presenceMutex;
 	bool initialized = false;
 	int64_t startTimestamp = 0;
 };
